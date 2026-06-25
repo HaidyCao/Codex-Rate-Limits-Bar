@@ -1,0 +1,22 @@
+{
+  "name": "codex-usage-monitor",
+  "version": "0.3.0",
+  "description": "Read local Codex usage, rate-limit snapshots, and reset credits.",
+  "author": {
+    "name": "Local developer"
+  },
+  "interface": {
+    "displayName": "Codex Usage Monitor",
+    "shortDescription": "Read Codex usage and quota snapshots.",
+    "longDescription": "Codex Usage Monitor exposes local read-only MCP tools that query Codex rate limits, reset credits, account usage, and machine-local token usage.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Check my Codex quota and local token usage."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

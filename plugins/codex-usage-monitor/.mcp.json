@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex-usage-monitor": {
+      "command": "/usr/bin/env",
+      "args": [
+        "node",
+        "./scripts/codex_usage_mcp.js"
+      ],
+      "cwd": "."
+    }
+  }
+}
