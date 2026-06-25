@@ -11,10 +11,13 @@ need_cmd() {
   fi
 }
 
-need_cmd node
-need_cmd codex
 need_cmd swift
 need_cmd make
+
+if ! command -v codex >/dev/null 2>&1 && [[ ! -x /Applications/Codex.app/Contents/Resources/codex ]]; then
+  echo "Missing required command: codex. Install Codex CLI or Codex.app first." >&2
+  exit 1
+fi
 
 if ! xcode-select -p >/dev/null 2>&1; then
   echo "Xcode Command Line Tools are required. Run: xcode-select --install" >&2
@@ -26,7 +29,7 @@ make -C "$ROOT" stop >/dev/null 2>&1 || true
 make -C "$ROOT" install-user
 
 echo "Installing Codex plugin..."
-node "$ROOT/scripts/install_plugin.js"
+"$HOME/Applications/${APP_NAME}.app/Contents/MacOS/CodexRateLimitsBar" install-plugin --source "$ROOT/plugins/codex-usage-monitor"
 
 echo
 echo "Done."

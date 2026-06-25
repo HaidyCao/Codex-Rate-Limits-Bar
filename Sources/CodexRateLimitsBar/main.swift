@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 
-struct RateLimitWindow: Decodable {
+struct RateLimitWindow: Codable {
     let usedPercent: Int
     let remainingPercent: Int
     let windowDurationMins: Int?
@@ -10,13 +10,13 @@ struct RateLimitWindow: Decodable {
     let resetsAtIso: String?
 }
 
-struct CreditsSnapshot: Decodable {
+struct CreditsSnapshot: Codable {
     let hasCredits: Bool
     let unlimited: Bool
     let balance: String?
 }
 
-struct RateLimitSnapshot: Decodable {
+struct RateLimitSnapshot: Codable {
     let limitId: String?
     let limitName: String?
     let planType: String?
@@ -24,16 +24,30 @@ struct RateLimitSnapshot: Decodable {
     let primary: RateLimitWindow?
     let secondary: RateLimitWindow?
     let credits: CreditsSnapshot?
+    let individualLimit: JSONValue?
 }
 
-struct RateLimitPayload: Decodable {
+struct RateLimitDisplay: Codable {
+    let primaryLabel: String?
+    let secondaryLabel: String?
+    let primaryRemainingPercent: Int?
+    let secondaryRemainingPercent: Int?
+}
+
+struct RateLimitPayload: Codable {
     let fetchedAtIso: String
     let rateLimits: RateLimitSnapshot?
+    let rateLimitsByLimitId: [String: RateLimitSnapshot]?
+    let display: RateLimitDisplay?
     let resetCredits: ResetCreditsSnapshot?
     let localUsage: LocalUsageSnapshot?
+    let rateLimitError: String?
+    let localUsageError: String?
+    let usage: JSONValue?
 }
 
-struct ResetCreditItem: Decodable {
+struct ResetCreditItem: Codable {
+    let id: String?
     let resetType: String?
     let typeLabel: String?
     let status: String?
@@ -46,13 +60,13 @@ struct ResetCreditItem: Decodable {
     let expiresAtShortLabel: String?
 }
 
-struct ResetCreditsDisplay: Decodable {
+struct ResetCreditsDisplay: Codable {
     let summaryLabel: String?
     let categoryLabel: String?
     let detailLabels: [String]?
 }
 
-struct ResetCreditsSnapshot: Decodable {
+struct ResetCreditsSnapshot: Codable {
     let fetchedAtIso: String
     let availableCount: Int?
     let credits: [ResetCreditItem]
@@ -60,13 +74,25 @@ struct ResetCreditsSnapshot: Decodable {
     let display: ResetCreditsDisplay?
 }
 
-struct LocalUsageDisplay: Decodable {
+struct LocalUsageDisplay: Codable {
     let consumptionLabel: String?
     let cacheHitLabel: String?
 }
 
-struct LocalUsageSnapshot: Decodable {
+struct LocalUsageTopFile: Codable {
+    let file: String
+    let eventCount: Int
+    let duplicateEventCount: Int
+    let importedEventCount: Int
+    let regressionEventCount: Int
+    let primarySessionId: String?
+    let totalTokens: Int64
+    let lastEventAtIso: String?
+}
+
+struct LocalUsageSnapshot: Codable {
     let fetchedAtIso: String
+    let source: String?
     let timezone: String?
     let localDate: String
     let inputTokens: Int64
@@ -77,9 +103,13 @@ struct LocalUsageSnapshot: Decodable {
     let cacheHitPercent: Double?
     let eventCount: Int
     let duplicateEventCount: Int
+    let importedEventCount: Int
+    let regressionEventCount: Int
     let filesScanned: Int
     let filesWithEvents: Int
     let parseErrorCount: Int
+    let error: String?
+    let topFiles: [LocalUsageTopFile]?
     let display: LocalUsageDisplay?
 }
 
@@ -126,8 +156,6 @@ struct AutoLaunchManager {
 
     private static func enable() throws {
         try writePlist()
-        try runLaunchctl(["bootout", userDomain, plistURL.path], allowFailure: true)
-        try runLaunchctl(["bootstrap", userDomain, plistURL.path])
     }
 
     private static func disable() throws {
@@ -524,15 +552,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshItem.target = self
         menu.addItem(refreshItem)
 
-        let openPluginItem = NSMenuItem(title: "Open Usage Plugin", action: #selector(openUsagePlugin), keyEquivalent: "")
-        openPluginItem.target = self
-        menu.addItem(openPluginItem)
-
-        let openProjectItem = NSMenuItem(title: "Open Project Folder", action: #selector(openProjectFolder), keyEquivalent: "")
-        openProjectItem.target = self
-        menu.addItem(openProjectItem)
-
-        menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -548,14 +567,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleAutoLaunch() {
         setAutoLaunch(enabled: autoLaunchView.isChecked)
-    }
-
-    @objc private func openUsagePlugin() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/Users/caohaidi/plugins/codex-usage-monitor"))
-    }
-
-    @objc private func openProjectFolder() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/Users/caohaidi/Projects/codex-rate_limits-bar"))
     }
 
     @objc private func quit() {
@@ -625,9 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         fiveHourItem.title = formatUsageLine(label: "5 小时", remaining: primaryRemaining, window: primary, includeDate: false)
         weeklyItem.title = formatUsageLine(label: "1 周", remaining: secondaryRemaining, window: secondary, includeDate: true)
-        errorItem.title = ""
-        errorItem.toolTip = nil
-        errorItem.isHidden = true
+        updatePayloadError(payload)
         let resetSuffix = payload.resetCredits?.availableCount.map { ", resets \($0)" } ?? ""
         statusItem.button?.toolTip = "Codex 5h \(primaryRemaining.map { "\($0)%" } ?? "--"), week \(secondaryRemaining.map { "\($0)%" } ?? "--")\(resetSuffix)"
         resetCreditsView.update(payload.resetCredits)
@@ -650,12 +659,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         localUsagePanelView.update(localUsage)
     }
 
+    private func updatePayloadError(_ payload: RateLimitPayload) {
+        var details: [String] = []
+        if let rateLimitError = payload.rateLimitError, !rateLimitError.isEmpty {
+            details.append("限额：\(rateLimitError)")
+        }
+        if let resetCreditsError = payload.resetCredits?.error, !resetCreditsError.isEmpty {
+            details.append("重置券：\(resetCreditsError)")
+        }
+        if let localUsageError = payload.localUsageError, !localUsageError.isEmpty {
+            details.append("本机用量：\(localUsageError)")
+        }
+
+        guard !details.isEmpty else {
+            errorItem.title = ""
+            errorItem.toolTip = nil
+            errorItem.isHidden = true
+            return
+        }
+
+        errorItem.title = "部分刷新失败：请查看提示"
+        errorItem.toolTip = details.joined(separator: "\n")
+        errorItem.isHidden = false
+        Self.appendLog("partial refresh failure: \(details.joined(separator: " | "))")
+    }
+
     private func apply(_ error: Error) {
         errorItem.title = Self.refreshErrorTitle(error)
         errorItem.toolTip = Self.errorToolTip(error)
         errorItem.isHidden = false
         statusItem.button?.toolTip = "Codex rate limit refresh failed; showing last value"
         tokenStatusItem.button?.toolTip = "Codex local usage refresh failed; showing last value"
+        Self.appendLog("refresh failed: \(Self.normalizedErrorText(error))")
     }
 
     private static func refreshErrorTitle(_ error: Error) -> String {
@@ -665,12 +700,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if detail.contains("account/usage/read failed") {
             return "刷新失败：Codex 用量接口暂不可用"
-        }
-        if detail.contains("codex_rate_limits.js not found") {
-            return "刷新失败：找不到 helper"
-        }
-        if detail.contains("node executable not found") {
-            return "刷新失败：找不到 Node"
         }
         if detail.localizedCaseInsensitiveContains("timed out") || detail.localizedCaseInsensitiveContains("timeout") {
             return "刷新失败：Codex 接口超时"
@@ -699,66 +728,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     nonisolated private static func fetchRateLimits() -> Result<RateLimitPayload, Error> {
+        .success(CodexBackend.readStatus())
+    }
+
+    nonisolated private static func appendLog(_ message: String) {
+        let logURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library")
+            .appendingPathComponent("Logs")
+            .appendingPathComponent("Codex Rate Limits Bar.log")
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
+
         do {
-            let helper = try helperPath()
-            let node = try nodePath()
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: node)
-            process.arguments = [helper, "status"]
-            process.environment = mergedEnvironment()
-
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-            try process.run()
-            process.waitUntilExit()
-
-            let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-            let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-            if process.terminationStatus != 0 {
-                let errorText = String(data: stderrData, encoding: .utf8) ?? "unknown error"
-                throw RuntimeError(errorText.trimmingCharacters(in: .whitespacesAndNewlines))
+            try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: logURL.path) {
+                let handle = try FileHandle(forWritingTo: logURL)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.close()
+            } else {
+                try data.write(to: logURL, options: .atomic)
             }
-            let decoder = JSONDecoder()
-            return .success(try decoder.decode(RateLimitPayload.self, from: stdoutData))
         } catch {
-            return .failure(error)
+            // Logging must never break refresh.
         }
-    }
-
-    nonisolated private static func helperPath() throws -> String {
-        let candidates = [
-            ProcessInfo.processInfo.environment["CODEX_RATE_LIMITS_HELPER"],
-            Bundle.main.resourcePath.map { "\($0)/Scripts/codex_rate_limits.js" },
-            "/Users/caohaidi/Projects/codex-rate_limits-bar/scripts/codex_rate_limits.js",
-        ]
-        for candidate in candidates.compactMap({ $0 }) {
-            if FileManager.default.isExecutableFile(atPath: candidate) || FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        throw RuntimeError("codex_rate_limits.js not found")
-    }
-
-    nonisolated private static func nodePath() throws -> String {
-        let candidates = [
-            ProcessInfo.processInfo.environment["CODEX_RATE_LIMITS_NODE"],
-            "/opt/homebrew/bin/node",
-            "/usr/local/bin/node",
-            "/usr/bin/node",
-        ]
-        for candidate in candidates.compactMap({ $0 }) where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        throw RuntimeError("node executable not found")
-    }
-
-    nonisolated private static func mergedEnvironment() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        let extraPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        env["PATH"] = [extraPath, env["PATH"]].compactMap { $0 }.joined(separator: ":")
-        return env
     }
 
     private func formatUsageLine(label: String, remaining: Int?, window: RateLimitWindow?, includeDate: Bool) -> String {
@@ -908,6 +901,11 @@ struct RuntimeError: Error, LocalizedError {
     var errorDescription: String? {
         message
     }
+}
+
+let commandLineArguments = Array(CommandLine.arguments.dropFirst())
+if CodexCommandLine.isCLIInvocation(commandLineArguments) {
+    exit(CodexCommandLine.run(arguments: commandLineArguments))
 }
 
 let app = NSApplication.shared

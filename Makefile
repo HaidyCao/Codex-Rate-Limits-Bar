@@ -9,16 +9,15 @@ CONTENTS := $(APP_DIR)/Contents
 USER_APPS := $(HOME)/Applications
 INSTALLED_APP := $(USER_APPS)/$(APP_NAME).app
 
-.PHONY: build run open stop install-user uninstall-user clean verify
+.PHONY: build run open stop install-user uninstall-user install-plugin clean verify
 
 build:
 	swift build -c $(CONFIG)
 	rm -rf "$(APP_DIR)"
-	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources/Scripts"
+	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	cp "$(BUILD_DIR)/$(PRODUCT)" "$(CONTENTS)/MacOS/$(PRODUCT)"
 	cp Resources/Info.plist "$(CONTENTS)/Info.plist"
-	cp scripts/codex_rate_limits.js "$(CONTENTS)/Resources/Scripts/codex_rate_limits.js"
-	chmod +x "$(CONTENTS)/MacOS/$(PRODUCT)" "$(CONTENTS)/Resources/Scripts/codex_rate_limits.js"
+	chmod +x "$(CONTENTS)/MacOS/$(PRODUCT)"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(PRODUCT)" "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	-xattr -cr "$(APP_DIR)"
@@ -46,8 +45,11 @@ uninstall-user:
 	-pkill -f "$(INSTALLED_APP)/Contents/MacOS/$(PRODUCT)"
 	rm -rf "$(INSTALLED_APP)"
 
-verify:
-	@node scripts/codex_rate_limits.js rate-limits
+install-plugin: install-user
+	"$(INSTALLED_APP)/Contents/MacOS/$(PRODUCT)" install-plugin --source "$(CURDIR)/plugins/codex-usage-monitor"
+
+verify: build
+	@"$(CONTENTS)/MacOS/$(PRODUCT)" rate-limits
 
 clean:
 	rm -rf .build "$(DIST_DIR)"

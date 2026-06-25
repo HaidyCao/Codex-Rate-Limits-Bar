@@ -9,6 +9,10 @@ Tiny macOS menu bar app for Codex rate limits.
   - Top line: consumed tokens, scaled to 亿 / 万 / raw count.
   - Bottom line: cache hit rate, calculated as cached input tokens divided by input tokens.
   - Data source: `~/.codex/sessions/**/*.jsonl` token_count events.
+- The app, command-line data reader, and bundled MCP server are implemented in
+  one Swift executable. Node.js is not required.
+- If Codex was installed via npm, the app looks for the native Codex vendor
+  binary and does not launch the Node wrapper.
 
 ## Build and Run
 
@@ -19,7 +23,7 @@ open "dist/Codex Rate Limits Bar.app"
 
 ## One-Command Install
 
-On another Mac, install Codex CLI first and log in, then run from this repo:
+On another Mac, install Codex first and log in, then run from this repo:
 
 ```sh
 ./install.sh
@@ -36,8 +40,7 @@ The installer:
 Requirements:
 
 - macOS with Xcode Command Line Tools (`xcode-select --install` if missing);
-- Node.js on `PATH`;
-- Codex CLI on `PATH`;
+- Codex CLI on `PATH`, or Codex.app installed in `/Applications`;
 - `codex login` completed on the target machine.
 
 Useful commands:
@@ -47,18 +50,35 @@ make run          # build and open from dist/
 make open         # open the existing dist app
 make stop         # stop the dist app
 make install-user # copy to ~/Applications and open it
+make install-plugin
 ```
+
+`make install-plugin` also installs the app before refreshing the bundled Codex
+plugin.
 
 For a quick data-source check:
 
 ```sh
 make verify
-node scripts/codex_rate_limits.js local-usage
+dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar local-usage
+dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar status
 ```
 
-## Shared Helper
+## Shared Swift Binary
 
-The app uses `scripts/codex_rate_limits.js`. The local `codex-usage-monitor`
-plugin is bundled under `plugins/codex-usage-monitor` and prefers the helper
-inside `~/Applications/Codex Rate Limits Bar.app`, so the status bar and Codex
-plugin share the same rate-limit and local-usage reading path after install.
+The executable supports several command-line modes in addition to the menu bar
+app:
+
+```sh
+CodexRateLimitsBar status
+CodexRateLimitsBar rate-limits
+CodexRateLimitsBar local-usage
+CodexRateLimitsBar reset-credits
+CodexRateLimitsBar usage
+CodexRateLimitsBar mcp
+```
+
+The local `codex-usage-monitor` plugin is bundled under
+`plugins/codex-usage-monitor` and launches the installed app binary with `mcp`,
+so the status bar and Codex plugin share the same Swift data path after install.
+No JavaScript helper is copied into the app or plugin.
