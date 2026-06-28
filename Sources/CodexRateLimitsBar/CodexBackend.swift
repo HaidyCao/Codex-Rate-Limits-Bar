@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum JSONValue: Codable {
@@ -173,6 +174,29 @@ private func writeJSON<T: Encodable>(_ value: T) throws {
     print(try prettyJSON(value))
 }
 
+private func appendSharedLog(_ message: String) {
+    let logURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library")
+        .appendingPathComponent("Logs")
+        .appendingPathComponent("Codex Rate Limits Bar.log")
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    guard let data = "\(timestamp) \(message)\n".data(using: .utf8) else { return }
+
+    do {
+        try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            let handle = try FileHandle(forWritingTo: logURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } else {
+            try data.write(to: logURL, options: .atomic)
+        }
+    } catch {
+        // Logging must never break refresh or CLI output.
+    }
+}
+
 private func nativeCodexCandidates() -> [String] {
     let home = FileManager.default.homeDirectoryForCurrentUser
     let packageVariants: [(package: String, triple: String)] = [
@@ -345,7 +369,7 @@ enum CodexBackend {
     private static let clientTitle = "Codex Rate Limits Bar"
     private static let clientVersion = "0.1.0"
     private static let resetCreditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
-    private static let beijingTimeZone = TimeZone(identifier: "Asia/Shanghai")!
+    private static let localUsageScanner = LocalUsageScanner()
 
     static func readRateLimits() throws -> RateLimitPayload {
         let results = try callCodexAppServer(methods: ["account/rateLimits/read"])
@@ -439,155 +463,287 @@ enum CodexBackend {
     }
 
     static func readLocalTokenUsage() throws -> LocalUsageSnapshot {
-        let now = Date()
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: now)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
-        let sessionsRoot = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex")
-                .appendingPathComponent("sessions")
-                .path
-        let files = walkJsonlFiles(root: URL(fileURLWithPath: sessionsRoot), dayStart: dayStart)
+        try localUsageScanner.snapshot()
+    }
 
+    private final class LocalUsageScanner: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cache: LocalUsageScanCache?
+
+        func snapshot() throws -> LocalUsageSnapshot {
+            lock.lock()
+            defer { lock.unlock() }
+            return try scanLocked()
+        }
+
+        private func scanLocked() throws -> LocalUsageSnapshot {
+            let startedAt = Date()
+            let now = Date()
+            let calendar = Calendar.current
+            let dayStart = calendar.startOfDay(for: now)
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
+            let localDate = CodexBackend.localDateString(now)
+            let sessionsRoot = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]
+                ?? FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".codex")
+                    .appendingPathComponent("sessions")
+                    .path
+
+            let isColdScan = cache?.source != sessionsRoot || cache?.localDate != localDate
+            if isColdScan {
+                cache = LocalUsageScanCache(source: sessionsRoot, localDate: localDate, dayStart: dayStart, dayEnd: dayEnd)
+            } else {
+                cache?.dayStart = dayStart
+                cache?.dayEnd = dayEnd
+            }
+
+            guard var cache else {
+                throw RuntimeError("local usage cache unavailable")
+            }
+
+            let rootURL = URL(fileURLWithPath: sessionsRoot)
+            let files = CodexBackend.walkJsonlFileInfos(root: rootURL, dayStart: dayStart)
+            var stats = LocalUsageScanStats()
+            stats.filesScanned = files.count
+            stats.fullRescanFiles = isColdScan ? files.count : 0
+
+            let livePaths = Set(files.map(\.url.path))
+            cache.files = cache.files.filter { livePaths.contains($0.key) }
+
+            for file in files {
+                scan(file, cache: &cache, stats: &stats)
+            }
+
+            self.cache = cache
+            let snapshot = makeSnapshot(cache: cache, filesScanned: files.count, now: now)
+            stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+            log(stats: stats, coldScan: isColdScan)
+            return snapshot
+        }
+
+        private func scan(_ file: JsonlFileInfo, cache: inout LocalUsageScanCache, stats: inout LocalUsageScanStats) {
+            let path = file.url.path
+            var state = cache.files[path] ?? LocalUsageFileState()
+            if file.size < state.offset {
+                state = LocalUsageFileState()
+                stats.fullRescanFiles += 1
+            }
+
+            defer {
+                state.size = max(file.size, state.offset)
+                state.modifiedAt = file.modifiedAt
+                cache.files[path] = state
+            }
+
+            guard file.size > state.offset else {
+                return
+            }
+
+            do {
+                let handle = try FileHandle(forReadingFrom: file.url)
+                defer { try? handle.close() }
+                let previousOffset = state.offset
+                try handle.seek(toOffset: previousOffset)
+                let data = try handle.readToEnd() ?? Data()
+                state.offset = previousOffset + UInt64(data.count)
+                stats.filesRead += 1
+                stats.bytesRead += UInt64(data.count)
+                process(data: data, state: &state, dayStart: cache.dayStart, dayEnd: cache.dayEnd)
+            } catch {
+                stats.readFailureCount += 1
+                appendSharedLog("local usage scan read failure: \(path): \(errorMessage(error))")
+            }
+        }
+
+        private func process(data: Data, state: inout LocalUsageFileState, dayStart: Date, dayEnd: Date) {
+            guard !data.isEmpty else { return }
+            state.pendingData.append(data)
+
+            var lineStart = state.pendingData.startIndex
+            var consumedThrough = state.pendingData.startIndex
+            while let newlineIndex = state.pendingData[lineStart...].firstIndex(of: 0x0A) {
+                let lineData = Data(state.pendingData[lineStart..<newlineIndex])
+                processLine(trimmedLineData(lineData), state: &state, dayStart: dayStart, dayEnd: dayEnd)
+                let nextIndex = state.pendingData.index(after: newlineIndex)
+                lineStart = nextIndex
+                consumedThrough = nextIndex
+            }
+
+            if consumedThrough > state.pendingData.startIndex {
+                state.pendingData.removeSubrange(state.pendingData.startIndex..<consumedThrough)
+            }
+        }
+
+        private func trimmedLineData(_ data: Data) -> Data {
+            guard data.last == 0x0D else { return data }
+            return data.dropLast()
+        }
+
+        private func processLine(_ lineData: Data, state: inout LocalUsageFileState, dayStart: Date, dayEnd: Date) {
+            guard !lineData.isEmpty else { return }
+            let object: [String: Any]
+            do {
+                object = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] ?? [:]
+            } catch {
+                state.parseErrorCount += 1
+                return
+            }
+
+            if let sessionId = CodexBackend.sessionIdFromMeta(object) {
+                if state.primarySessionId == nil {
+                    state.primarySessionId = sessionId
+                }
+                state.activeSessionId = sessionId
+                return
+            }
+
+            guard stringValue(object["type"]) == "event_msg",
+                  let payload = dictionaryValue(object["payload"]),
+                  stringValue(payload["type"]) == "token_count",
+                  let info = dictionaryValue(payload["info"]),
+                  let currentTotalUsage = TokenUsage.from(info["total_token_usage"])
+            else {
+                return
+            }
+
+            let timestamp = parseIsoDate(stringValue(object["timestamp"]))
+            let isToday = timestamp.map { $0 >= dayStart && $0 < dayEnd } ?? false
+            if isToday {
+                let isImportedForkEvent = state.primarySessionId != nil
+                    && state.activeSessionId != nil
+                    && state.activeSessionId != state.primarySessionId
+                if isImportedForkEvent {
+                    state.importedEventCount += 1
+                } else {
+                    let sameSession = state.previousUsageSessionId == state.activeSessionId
+                    let regressed = sameSession && CodexBackend.usageRegressed(state.previousTotalUsage, currentTotalUsage)
+                    if let delta = CodexBackend.positiveDelta(state.previousTotalUsage, currentTotalUsage, sameSession: sameSession) {
+                        state.totals.add(delta)
+                    } else {
+                        state.duplicateEventCount += 1
+                        if regressed {
+                            state.regressionEventCount += 1
+                        }
+                    }
+                    state.eventCount += 1
+                    state.lastEventAtIso = stringValue(object["timestamp"])
+                }
+            }
+
+            let sameSession = state.previousUsageSessionId == state.activeSessionId
+            if sameSession || !CodexBackend.usageRegressed(state.previousTotalUsage, currentTotalUsage) {
+                state.previousTotalUsage = CodexBackend.maxTokenUsage(state.previousTotalUsage, currentTotalUsage)
+            } else {
+                state.previousTotalUsage = currentTotalUsage
+            }
+            state.previousUsageSessionId = state.activeSessionId
+        }
+
+        private func makeSnapshot(cache: LocalUsageScanCache, filesScanned: Int, now: Date) -> LocalUsageSnapshot {
+            var totals = TokenUsage()
+            var topFiles: [LocalUsageTopFile] = []
+            var eventCount = 0
+            var duplicateEventCount = 0
+            var importedEventCount = 0
+            var regressionEventCount = 0
+            var filesWithEvents = 0
+            var parseErrorCount = 0
+
+            for (path, state) in cache.files {
+                totals.add(state.totals)
+                eventCount += state.eventCount
+                duplicateEventCount += state.duplicateEventCount
+                importedEventCount += state.importedEventCount
+                regressionEventCount += state.regressionEventCount
+                parseErrorCount += state.parseErrorCount
+
+                guard state.eventCount > 0 else { continue }
+                filesWithEvents += 1
+                topFiles.append(LocalUsageTopFile(
+                    file: path,
+                    eventCount: state.eventCount,
+                    duplicateEventCount: state.duplicateEventCount,
+                    importedEventCount: state.importedEventCount,
+                    regressionEventCount: state.regressionEventCount,
+                    primarySessionId: state.primarySessionId,
+                    totalTokens: state.totals.totalTokens,
+                    lastEventAtIso: state.lastEventAtIso
+                ))
+            }
+
+            let cacheHitPercent = totals.inputTokens > 0
+                ? max(0, min(100, (Double(totals.cachedInputTokens) / Double(totals.inputTokens)) * 100))
+                : nil
+            topFiles.sort { $0.totalTokens > $1.totalTokens }
+
+            return LocalUsageSnapshot(
+                fetchedAtIso: ISO8601DateFormatter().string(from: now),
+                source: cache.source,
+                timezone: TimeZone.current.identifier,
+                localDate: cache.localDate,
+                inputTokens: totals.inputTokens,
+                cachedInputTokens: totals.cachedInputTokens,
+                outputTokens: totals.outputTokens,
+                reasoningOutputTokens: totals.reasoningOutputTokens,
+                totalTokens: totals.totalTokens,
+                cacheHitPercent: cacheHitPercent,
+                eventCount: eventCount,
+                duplicateEventCount: duplicateEventCount,
+                importedEventCount: importedEventCount,
+                regressionEventCount: regressionEventCount,
+                filesScanned: filesScanned,
+                filesWithEvents: filesWithEvents,
+                parseErrorCount: parseErrorCount,
+                error: nil,
+                topFiles: Array(topFiles.prefix(8)),
+                display: LocalUsageDisplay(
+                    consumptionLabel: AppText.consumption(TokenAmountFormatter.compact(totals.totalTokens)),
+                    cacheHitLabel: AppText.cacheHit(CodexBackend.formatCacheHitPercent(cacheHitPercent))
+                )
+            )
+        }
+
+        private func log(stats: LocalUsageScanStats, coldScan: Bool) {
+            guard stats.bytesRead > 0 || stats.fullRescanFiles > 0 || stats.readFailureCount > 0 || stats.durationMs > 1000 else {
+                return
+            }
+            appendSharedLog("local usage scan files=\(stats.filesScanned) readFiles=\(stats.filesRead) bytes=\(stats.bytesRead) durationMs=\(stats.durationMs) fullRescanFiles=\(stats.fullRescanFiles) cold=\(coldScan) readFailures=\(stats.readFailureCount)")
+        }
+    }
+
+    private struct LocalUsageScanCache {
+        let source: String
+        let localDate: String
+        var dayStart: Date
+        var dayEnd: Date
+        var files: [String: LocalUsageFileState] = [:]
+    }
+
+    private struct LocalUsageFileState {
+        var offset: UInt64 = 0
+        var size: UInt64 = 0
+        var modifiedAt: Date?
+        var pendingData = Data()
+        var previousTotalUsage: TokenUsage?
+        var previousUsageSessionId: String?
+        var primarySessionId: String?
+        var activeSessionId: String?
         var totals = TokenUsage()
-        var topFiles: [LocalUsageTopFile] = []
         var eventCount = 0
         var duplicateEventCount = 0
         var importedEventCount = 0
         var regressionEventCount = 0
-        var filesWithEvents = 0
         var parseErrorCount = 0
+        var lastEventAtIso: String?
+    }
 
-        for file in files {
-            let text: String
-            do {
-                text = try String(contentsOf: file, encoding: .utf8)
-            } catch {
-                continue
-            }
-
-            var previousTotalUsage: TokenUsage?
-            var previousUsageSessionId: String?
-            var primarySessionId: String?
-            var activeSessionId: String?
-            var fileEventCount = 0
-            var fileDuplicateEventCount = 0
-            var fileImportedEventCount = 0
-            var fileRegressionEventCount = 0
-            var fileTotals = TokenUsage()
-            var lastEventAtIso: String?
-
-            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-                let data = Data(line.utf8)
-                let object: [String: Any]
-                do {
-                    object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-                } catch {
-                    parseErrorCount += 1
-                    continue
-                }
-
-                if let sessionId = sessionIdFromMeta(object) {
-                    if primarySessionId == nil {
-                        primarySessionId = sessionId
-                    }
-                    activeSessionId = sessionId
-                    continue
-                }
-
-                guard stringValue(object["type"]) == "event_msg",
-                      let payload = dictionaryValue(object["payload"]),
-                      stringValue(payload["type"]) == "token_count",
-                      let info = dictionaryValue(payload["info"]),
-                      let currentTotalUsage = TokenUsage.from(info["total_token_usage"])
-                else {
-                    continue
-                }
-
-                let timestamp = parseIsoDate(stringValue(object["timestamp"]))
-                let isToday = timestamp.map { $0 >= dayStart && $0 < dayEnd } ?? false
-                if isToday {
-                    let isImportedForkEvent = primarySessionId != nil
-                        && activeSessionId != nil
-                        && activeSessionId != primarySessionId
-                    if isImportedForkEvent {
-                        importedEventCount += 1
-                        fileImportedEventCount += 1
-                    } else {
-                        let sameSession = previousUsageSessionId == activeSessionId
-                        let regressed = sameSession && usageRegressed(previousTotalUsage, currentTotalUsage)
-                        if let delta = positiveDelta(previousTotalUsage, currentTotalUsage, sameSession: sameSession) {
-                            totals.add(delta)
-                            fileTotals.add(delta)
-                        } else {
-                            duplicateEventCount += 1
-                            fileDuplicateEventCount += 1
-                            if regressed {
-                                regressionEventCount += 1
-                                fileRegressionEventCount += 1
-                            }
-                        }
-                        eventCount += 1
-                        fileEventCount += 1
-                        lastEventAtIso = stringValue(object["timestamp"])
-                    }
-                }
-
-                let sameSession = previousUsageSessionId == activeSessionId
-                if sameSession || !usageRegressed(previousTotalUsage, currentTotalUsage) {
-                    previousTotalUsage = maxTokenUsage(previousTotalUsage, currentTotalUsage)
-                } else {
-                    previousTotalUsage = currentTotalUsage
-                }
-                previousUsageSessionId = activeSessionId
-            }
-
-            if fileEventCount > 0 {
-                filesWithEvents += 1
-                topFiles.append(LocalUsageTopFile(
-                    file: file.path,
-                    eventCount: fileEventCount,
-                    duplicateEventCount: fileDuplicateEventCount,
-                    importedEventCount: fileImportedEventCount,
-                    regressionEventCount: fileRegressionEventCount,
-                    primarySessionId: primarySessionId,
-                    totalTokens: fileTotals.totalTokens,
-                    lastEventAtIso: lastEventAtIso
-                ))
-            }
-        }
-
-        let cacheHitPercent = totals.inputTokens > 0
-            ? max(0, min(100, (Double(totals.cachedInputTokens) / Double(totals.inputTokens)) * 100))
-            : nil
-        topFiles.sort { $0.totalTokens > $1.totalTokens }
-
-        return LocalUsageSnapshot(
-            fetchedAtIso: ISO8601DateFormatter().string(from: now),
-            source: sessionsRoot,
-            timezone: TimeZone.current.identifier,
-            localDate: localDateString(now),
-            inputTokens: totals.inputTokens,
-            cachedInputTokens: totals.cachedInputTokens,
-            outputTokens: totals.outputTokens,
-            reasoningOutputTokens: totals.reasoningOutputTokens,
-            totalTokens: totals.totalTokens,
-            cacheHitPercent: cacheHitPercent,
-            eventCount: eventCount,
-            duplicateEventCount: duplicateEventCount,
-            importedEventCount: importedEventCount,
-            regressionEventCount: regressionEventCount,
-            filesScanned: files.count,
-            filesWithEvents: filesWithEvents,
-            parseErrorCount: parseErrorCount,
-            error: nil,
-            topFiles: Array(topFiles.prefix(8)),
-            display: LocalUsageDisplay(
-                consumptionLabel: "消耗 \(formatScaledTokenAmount(totals.totalTokens))",
-                cacheHitLabel: "命中 \(formatCacheHitPercent(cacheHitPercent))"
-            )
-        )
+    private struct LocalUsageScanStats {
+        var filesScanned = 0
+        var filesRead = 0
+        var bytesRead: UInt64 = 0
+        var fullRescanFiles = 0
+        var readFailureCount = 0
+        var durationMs = 0
     }
 
     private static func normalizeRateLimitResponse(_ response: [String: Any]) -> RateLimitPayload {
@@ -658,15 +814,17 @@ enum CodexBackend {
 
         let fallbackAvailableCount = credits.filter { $0.status == "available" }.count
         let availableCount = intValue(response["available_count"]) ?? fallbackAvailableCount
-        let firstTypeLabel = credits.first?.typeLabel ?? "Codex 速率限制重置"
+        let firstTypeLabel = credits.first?.typeLabel ?? AppText.resetCreditsCategory
         let visibleSource = credits.contains { $0.status == "available" }
             ? credits.filter { $0.status == "available" }
             : credits
-        var detailLabels = Array(visibleSource.prefix(3)).enumerated().map { index, credit in
-            "\(index + 1). \(credit.statusLabel ?? "未知") · \(credit.createdAtShortLabel ?? "未设置") -> \(credit.expiresAtShortLabel ?? "未设置")"
-        }
-        if credits.count > detailLabels.count {
-            detailLabels.append("另有 \(credits.count - detailLabels.count) 个未显示")
+        let detailLabels = Array(visibleSource.prefix(3)).enumerated().map { index, credit in
+            AppText.resetCreditDetail(
+                index: index + 1,
+                status: credit.statusLabel,
+                createdAt: credit.createdAtShortLabel,
+                expiresAt: credit.expiresAtShortLabel
+            )
         }
 
         return ResetCreditsSnapshot(
@@ -675,8 +833,8 @@ enum CodexBackend {
             credits: credits,
             error: nil,
             display: ResetCreditsDisplay(
-                summaryLabel: "可用次数：\(availableCount)",
-                categoryLabel: "\(firstTypeLabel) · \(credits.count) 个",
+                summaryLabel: AppText.availableCount(availableCount),
+                categoryLabel: firstTypeLabel,
                 detailLabels: detailLabels
             )
         )
@@ -696,10 +854,10 @@ enum CodexBackend {
             statusLabel: resetCreditStatusLabel(status),
             createdAtIso: createdAtIso,
             expiresAtIso: expiresAtIso,
-            createdAtLabel: formatBeijingDateTime(createdAtIso),
-            expiresAtLabel: formatBeijingDateTime(expiresAtIso),
-            createdAtShortLabel: formatShortBeijingDateTime(createdAtIso),
-            expiresAtShortLabel: formatShortBeijingDateTime(expiresAtIso)
+            createdAtLabel: AppText.resetDateTime(createdAtIso, short: false),
+            expiresAtLabel: AppText.resetDateTime(expiresAtIso, short: false),
+            createdAtShortLabel: AppText.resetDateTime(createdAtIso, short: true),
+            expiresAtShortLabel: AppText.resetDateTime(expiresAtIso, short: true)
         )
     }
 
@@ -729,9 +887,9 @@ enum CodexBackend {
             credits: [],
             error: errorMessage(error),
             display: ResetCreditsDisplay(
-                summaryLabel: "可用次数：--",
-                categoryLabel: "Codex 速率限制重置",
-                detailLabels: ["暂时无法读取重置券"]
+                summaryLabel: AppText.availableCount(nil),
+                categoryLabel: AppText.resetCreditsCategory,
+                detailLabels: [AppText.resetCreditsUnavailable]
             )
         )
     }
@@ -763,7 +921,7 @@ enum CodexBackend {
             parseErrorCount: 0,
             error: errorMessage(error),
             topFiles: [],
-            display: LocalUsageDisplay(consumptionLabel: "消耗 --", cacheHitLabel: "命中 --")
+            display: LocalUsageDisplay(consumptionLabel: AppText.consumption(nil), cacheHitLabel: AppText.cacheHit(nil))
         )
     }
 
@@ -920,24 +1078,30 @@ enum CodexBackend {
         return data
     }
 
-    private static func walkJsonlFiles(root: URL, dayStart: Date) -> [URL] {
+    private struct JsonlFileInfo {
+        let url: URL
+        let modifiedAt: Date
+        let size: UInt64
+    }
+
+    private static func walkJsonlFileInfos(root: URL, dayStart: Date) -> [JsonlFileInfo] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
             return []
         }
-        var files: [URL] = []
+        var files: [JsonlFileInfo] = []
         for case let file as URL in enumerator where file.pathExtension == "jsonl" {
-            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey]),
+            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
                   values.isRegularFile == true,
                   let modifiedAt = values.contentModificationDate,
                   modifiedAt >= dayStart
             else {
                 continue
             }
-            files.append(file)
+            files.append(JsonlFileInfo(url: file, modifiedAt: modifiedAt, size: UInt64(values.fileSize ?? 0)))
         }
         return files
     }
@@ -993,22 +1157,6 @@ enum CodexBackend {
         return formatter.string(from: date)
     }
 
-    private static func formatScaledTokenAmount(_ tokens: Int64) -> String {
-        let value = Double(tokens)
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "zh_Hans_CN")
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = 2
-        formatter.numberStyle = .decimal
-        if tokens >= 10_000_000 {
-            return "\(formatter.string(from: NSNumber(value: value / 100_000_000)) ?? "0")亿"
-        }
-        if tokens >= 10_000 {
-            return "\(formatter.string(from: NSNumber(value: value / 10_000)) ?? "0")万"
-        }
-        return formatter.string(from: NSNumber(value: tokens)) ?? "\(tokens)"
-    }
-
     private static func formatCacheHitPercent(_ percent: Double?) -> String {
         guard let percent else { return "--" }
         return String(format: "%.1f%%", percent)
@@ -1025,50 +1173,12 @@ enum CodexBackend {
         return parseIsoDate(string).map { ISO8601DateFormatter().string(from: $0) }
     }
 
-    private static func formatBeijingDateTime(_ iso: String?) -> String {
-        guard let date = parseIsoDate(iso) else { return "未设置" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = beijingTimeZone
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss '北京时间'"
-        return formatter.string(from: date)
-    }
-
-    private static func formatShortBeijingDateTime(_ iso: String?) -> String {
-        guard let date = parseIsoDate(iso) else { return "未设置" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = beijingTimeZone
-        formatter.dateFormat = "M月d日 HH:mm"
-        return formatter.string(from: date)
-    }
-
     private static func resetCreditTypeLabel(_ value: String?) -> String {
-        switch value {
-        case "codex_rate_limits":
-            return "Codex 速率限制重置"
-        case let value? where !value.isEmpty:
-            return value
-        default:
-            return "未知分类"
-        }
+        AppText.resetCreditTypeLabel(value)
     }
 
     private static func resetCreditStatusLabel(_ value: String?) -> String {
-        switch value {
-        case "available":
-            return "可用"
-        case "redeemed":
-            return "已兑换"
-        case "expired":
-            return "已过期"
-        case "used":
-            return "已使用"
-        case let value? where !value.isEmpty:
-            return value
-        default:
-            return "未知"
-        }
+        AppText.resetCreditStatusLabel(value)
     }
 
     private static func resetCreditSortKey(_ credit: ResetCreditItem) -> String {
@@ -1081,7 +1191,15 @@ enum CodexBackend {
 
 enum CodexMCPServer {
     static func run() {
+        let activity = MCPActivity()
+        let timer = makeIdleTimer(activity: activity)
+        timer?.resume()
+        defer { timer?.cancel() }
+
         while let line = readLine() {
+            activity.beginHandling()
+            defer { activity.endHandling() }
+
             guard let data = line.data(using: .utf8),
                   let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   message.keys.contains("id")
@@ -1089,6 +1207,58 @@ enum CodexMCPServer {
                 continue
             }
             handle(message)
+        }
+    }
+
+    private static func makeIdleTimer(activity: MCPActivity) -> DispatchSourceTimer? {
+        let timeout = idleTimeout()
+        guard timeout > 0 else { return nil }
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        let timeoutInterval = DispatchTimeInterval.milliseconds(Int(timeout * 1000))
+        let repeatSeconds = min(30, max(5, timeout / 4))
+        let repeatInterval = DispatchTimeInterval.milliseconds(Int(repeatSeconds * 1000))
+        timer.schedule(deadline: .now() + timeoutInterval, repeating: repeatInterval)
+        timer.setEventHandler {
+            guard activity.shouldExit(timeout: timeout) else { return }
+            appendSharedLog("mcp idle exit after \(Int(timeout))s")
+            Darwin.exit(0)
+        }
+        return timer
+    }
+
+    private static func idleTimeout() -> TimeInterval {
+        guard let raw = ProcessInfo.processInfo.environment["CODEX_MCP_IDLE_TIMEOUT_SECONDS"],
+              let value = TimeInterval(raw)
+        else {
+            return 300
+        }
+        return max(0, value)
+    }
+
+    private final class MCPActivity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastActivity = Date()
+        private var activeRequests = 0
+
+        func beginHandling() {
+            lock.lock()
+            activeRequests += 1
+            lastActivity = Date()
+            lock.unlock()
+        }
+
+        func endHandling() {
+            lock.lock()
+            activeRequests = max(0, activeRequests - 1)
+            lastActivity = Date()
+            lock.unlock()
+        }
+
+        func shouldExit(timeout: TimeInterval) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return activeRequests == 0 && Date().timeIntervalSince(lastActivity) >= timeout
         }
     }
 

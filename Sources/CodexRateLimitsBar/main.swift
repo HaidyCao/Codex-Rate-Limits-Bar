@@ -215,6 +215,101 @@ struct AutoLaunchManager {
     }
 }
 
+final class RateLimitsMenuView: NSView {
+    private var primary: RateLimitWindow?
+    private var secondary: RateLimitWindow?
+
+    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
+        self.primary = primary
+        self.secondary = secondary
+        needsDisplay = true
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        drawText(AppText.usageTitle, in: NSRect(x: 16, y: 10, width: bounds.width - 32, height: 20), font: .systemFont(ofSize: 14, weight: .semibold), color: .labelColor)
+        drawQuotaRow(label: AppText.fiveHourLimit, window: primary, includeDate: false, y: 38)
+        drawQuotaRow(label: AppText.weeklyLimit, window: secondary, includeDate: true, y: 84)
+    }
+
+    private func drawQuotaRow(label: String, window: RateLimitWindow?, includeDate: Bool, y: CGFloat) {
+        let remaining = window?.remainingPercent
+        let statusColor = color(for: remaining)
+        let value = remaining.map { "\($0)%" } ?? "--"
+        let reset = formatResetDisplay(window, includeDate: includeDate)
+        let rightLabel = reset.isEmpty ? value : "\(value) · \(reset)"
+
+        drawText(label, in: NSRect(x: 16, y: y, width: 120, height: 18), font: .systemFont(ofSize: 12, weight: .semibold), color: .labelColor)
+        drawText(rightLabel, in: NSRect(x: 136, y: y, width: bounds.width - 152, height: 18), font: .monospacedDigitSystemFont(ofSize: 12, weight: .semibold), color: .labelColor, alignment: .right)
+
+        let barRect = NSRect(x: 16, y: y + 25, width: bounds.width - 32, height: 8)
+        drawRoundedRect(barRect, fill: NSColor.separatorColor.withAlphaComponent(0.35), stroke: .clear, radius: 4)
+        if let remaining {
+            let fillWidth = max(0, min(1, CGFloat(remaining) / 100)) * barRect.width
+            drawRoundedRect(NSRect(x: barRect.minX, y: barRect.minY, width: fillWidth, height: barRect.height), fill: statusColor, stroke: .clear, radius: 4)
+        }
+    }
+
+    private func color(for remaining: Int?) -> NSColor {
+        guard let remaining else { return .tertiaryLabelColor }
+        if remaining < 10 { return .systemRed }
+        if remaining < 25 { return .systemYellow }
+        return .systemGreen
+    }
+
+    private func formatResetDisplay(_ window: RateLimitWindow?, includeDate: Bool) -> String {
+        guard let window else { return "" }
+        let date: Date?
+        if let resetsAt = window.resetsAt {
+            date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
+        } else {
+            date = parseIsoDate(window.resetsAtIso)
+        }
+        guard let date else { return "" }
+        return AppText.resetDisplay(date, includeDate: includeDate)
+    }
+
+    private func parseIsoDate(_ iso: String?) -> Date? {
+        guard let iso else { return nil }
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: iso) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: iso)
+    }
+
+    private func drawRoundedRect(_ rect: NSRect, fill: NSColor, stroke: NSColor, radius: CGFloat) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        if stroke != .clear {
+            stroke.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+
+    private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineBreakMode = .byTruncatingTail
+        NSString(string: text).draw(in: rect, withAttributes: [
+            .font: font,
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ])
+    }
+}
+
 final class ResetCreditsMenuView: NSView {
     private var snapshot: ResetCreditsSnapshot?
 
@@ -238,24 +333,23 @@ final class ResetCreditsMenuView: NSView {
 
         let primary = NSColor.labelColor
         let secondary = NSColor.secondaryLabelColor
-        let tertiary = NSColor.tertiaryLabelColor
-        let accent = (snapshot?.availableCount ?? 0) > 0 ? NSColor.systemOrange : tertiary
+        let accent = (snapshot?.availableCount ?? 0) > 0 ? NSColor.systemOrange : secondary
 
-        drawText("重置券", in: NSRect(x: 16, y: 6, width: 56, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: secondary)
-        drawText(snapshot?.display?.summaryLabel ?? "可用次数：--", in: NSRect(x: 76, y: 6, width: bounds.width - 92, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: primary)
+        drawText(AppText.resetCreditsTitle, in: NSRect(x: 16, y: 6, width: 88, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: primary)
+        drawText(snapshot?.display?.summaryLabel ?? AppText.availableCount(nil), in: NSRect(x: 110, y: 6, width: bounds.width - 126, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: primary)
 
-        let category = snapshot?.display?.categoryLabel ?? "Codex 速率限制重置"
+        let category = snapshot?.display?.categoryLabel ?? AppText.resetCreditsCategory
         drawAccentLine(at: NSPoint(x: 16, y: 29), color: accent)
-        drawText(category, in: NSRect(x: 44, y: 24, width: bounds.width - 60, height: 16), font: .systemFont(ofSize: 11, weight: .regular), color: tertiary)
+        drawText(category, in: NSRect(x: 44, y: 24, width: bounds.width - 60, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: secondary)
 
         let rows = Array((snapshot?.display?.detailLabels ?? []).prefix(4))
         if rows.isEmpty {
-            drawText("暂无可显示的重置券", in: NSRect(x: 16, y: 40, width: bounds.width - 32, height: 16), font: .systemFont(ofSize: 11, weight: .regular), color: tertiary)
+            drawText(AppText.noResetCredits, in: NSRect(x: 16, y: 40, width: bounds.width - 32, height: 16), font: .systemFont(ofSize: 11, weight: .regular), color: secondary)
             return
         }
 
         for (index, row) in rows.enumerated() {
-            drawText(row, in: NSRect(x: 16, y: 43 + CGFloat(index * 18), width: bounds.width - 32, height: 16), font: .monospacedDigitSystemFont(ofSize: 11, weight: .regular), color: secondary)
+            drawText(row, in: NSRect(x: 16, y: 43 + CGFloat(index * 18), width: bounds.width - 32, height: 16), font: .monospacedDigitSystemFont(ofSize: 11, weight: .medium), color: primary)
         }
     }
 
@@ -276,8 +370,8 @@ final class ResetCreditsMenuView: NSView {
 }
 
 final class AutoLaunchMenuView: NSView {
-    private let sectionLabel = NSTextField(labelWithString: "启动")
-    private let checkbox = NSButton(checkboxWithTitle: "在开机时启动", target: nil, action: nil)
+    private let sectionLabel = NSTextField(labelWithString: AppText.launchTitle)
+    private let checkbox = NSButton(checkboxWithTitle: AppText.launchAtLogin, target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -355,16 +449,16 @@ final class LocalUsageMenuView: NSView {
         let eventCount = snapshot?.eventCount ?? 0
         let cacheHitPercent = snapshot?.cacheHitPercent
 
-        drawText("Codex · 真实消耗 Tokens", in: NSRect(x: 16, y: 12, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .semibold), color: secondary)
+        drawText(AppText.localUsageTitle, in: NSRect(x: 16, y: 12, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .semibold), color: secondary)
         let rawTotal = formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
         drawText(rawTotal, in: NSRect(x: 16, y: 36, width: min(rawWidth + 4, 285), height: 42), font: rawFont, color: primary)
-        drawPill("≈ \(formatScaledNumber(totalTokens, maximumFractionDigits: 2))", at: NSPoint(x: min(24 + rawWidth, 300), y: 45), color: tertiary, fillColor: cardFill)
+        drawPill("≈ \(TokenAmountFormatter.compact(totalTokens, maximumFractionDigits: 2))", at: NSPoint(x: min(24 + rawWidth, 300), y: 45), color: tertiary, fillColor: cardFill)
 
         let requestRect = NSRect(x: bounds.width - 126, y: 20, width: 110, height: 58)
         drawRoundedRect(requestRect, fill: cardFill, stroke: cardStroke, radius: 10)
-        drawText("总请求数", in: requestRect.insetBy(dx: 12, dy: 9), font: .systemFont(ofSize: 11, weight: .semibold), color: secondary)
+        drawText(AppText.totalRequests, in: requestRect.insetBy(dx: 12, dy: 9), font: .systemFont(ofSize: 11, weight: .semibold), color: secondary)
         drawText(formatRawNumber(Int64(eventCount)), in: NSRect(x: requestRect.minX + 12, y: requestRect.minY + 30, width: requestRect.width - 24, height: 22), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: primary)
 
         let padding: CGFloat = 16
@@ -374,9 +468,9 @@ final class LocalUsageMenuView: NSView {
         let rowTwoY: CGFloat = 158
         let cardHeight: CGFloat = 52
         let wideCardWidth = floor((contentWidth - gap) / 2)
-        drawMetricCard(NSRect(x: padding, y: rowOneY, width: wideCardWidth, height: cardHeight), title: "新增输入", value: formatScaledNumber(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: cardFill, stroke: cardStroke)
-        drawMetricCard(NSRect(x: padding + wideCardWidth + gap, y: rowOneY, width: wideCardWidth, height: cardHeight), title: "Output", value: formatScaledNumber(outputTokens, maximumFractionDigits: 1), tint: purple, fill: cardFill, stroke: cardStroke)
-        drawMetricCard(NSRect(x: padding, y: rowTwoY, width: wideCardWidth, height: cardHeight), title: "命中", value: formatScaledNumber(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: cardFill, stroke: cardStroke)
+        drawMetricCard(NSRect(x: padding, y: rowOneY, width: wideCardWidth, height: cardHeight), title: AppText.newInput, value: TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: cardFill, stroke: cardStroke)
+        drawMetricCard(NSRect(x: padding + wideCardWidth + gap, y: rowOneY, width: wideCardWidth, height: cardHeight), title: AppText.output, value: TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: cardFill, stroke: cardStroke)
+        drawMetricCard(NSRect(x: padding, y: rowTwoY, width: wideCardWidth, height: cardHeight), title: AppText.hit, value: TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: cardFill, stroke: cardStroke)
         drawCacheHitCard(NSRect(x: padding + wideCardWidth + gap, y: rowTwoY, width: wideCardWidth, height: cardHeight), percent: cacheHitPercent, fill: cardFill, stroke: cardStroke, tint: green)
     }
 
@@ -389,7 +483,7 @@ final class LocalUsageMenuView: NSView {
 
     private func drawCacheHitCard(_ rect: NSRect, percent: Double?, fill: NSColor, stroke: NSColor, tint: NSColor) {
         drawRoundedRect(rect, fill: fill, stroke: stroke, radius: 10)
-        drawText("缓存命中率", in: NSRect(x: rect.minX + 12, y: rect.minY + 9, width: rect.width - 92, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: .secondaryLabelColor)
+        drawText(AppText.cacheHitRate, in: NSRect(x: rect.minX + 12, y: rect.minY + 9, width: rect.width - 92, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: .secondaryLabelColor)
         drawText(formatPercent(percent), in: NSRect(x: rect.maxX - 86, y: rect.minY + 9, width: 74, height: 17), font: .monospacedDigitSystemFont(ofSize: 13, weight: .bold), color: tint, alignment: .right)
 
         let barRect = NSRect(x: rect.minX + 12, y: rect.minY + 33, width: rect.width - 24, height: 7)
@@ -437,24 +531,10 @@ final class LocalUsageMenuView: NSView {
         let formatter = NumberFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.groupingSeparator = ","
         formatter.maximumFractionDigits = 0
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-    }
-
-    private func formatScaledNumber(_ value: Int64, maximumFractionDigits: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "zh_Hans_CN")
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = maximumFractionDigits
-        formatter.numberStyle = .decimal
-        let doubleValue = Double(value)
-        if value >= 100_000_000 {
-            return "\(formatter.string(from: NSNumber(value: doubleValue / 100_000_000)) ?? String(format: "%.\(maximumFractionDigits)f", doubleValue / 100_000_000))亿"
-        }
-        if value >= 10_000 {
-            return "\(formatter.string(from: NSNumber(value: doubleValue / 10_000)) ?? String(format: "%.\(maximumFractionDigits)f", doubleValue / 10_000))万"
-        }
-        return formatRawNumber(value)
     }
 
     private func formatPercent(_ percent: Double?) -> String {
@@ -468,9 +548,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let tokenStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
-    private let usageHeaderItem = NSMenuItem(title: "Usage", action: nil, keyEquivalent: "")
-    private let fiveHourItem = NSMenuItem(title: "5 小时 --", action: nil, keyEquivalent: "")
-    private let weeklyItem = NSMenuItem(title: "1 周 --", action: nil, keyEquivalent: "")
+    private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 130))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -482,8 +561,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let autoLaunchItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let autoLaunchView = AutoLaunchMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 38))
-    private var refreshTimer: Timer?
+    private var rateLimitsTimer: Timer?
+    private var localUsageTimer: Timer?
+    private var resetCreditsTimer: Timer?
     private var isRefreshing = false
+    private var isRefreshingRateLimits = false
+    private var isRefreshingLocalUsage = false
+    private var isRefreshingResetCredits = false
+    private var currentPrimaryRemaining: Int?
+    private var currentSecondaryRemaining: Int?
+    private var currentResetAvailableCount: Int?
+    private var currentRateLimitError: String?
+    private var currentResetCreditsError: String?
+    private var currentLocalUsageError: String?
+    private var lastLoggedErrorDetails: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableAutomaticTermination("Keep the Codex rate limits status item available")
@@ -492,29 +583,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenu()
         configureAutoLaunch()
         refresh()
-        refreshTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefresh), userInfo: nil, repeats: true)
+        localUsageTimer = Timer.scheduledTimer(timeInterval: 30, target: self, selector: #selector(timerRefreshLocalUsage), userInfo: nil, repeats: true)
+        rateLimitsTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefreshRateLimits), userInfo: nil, repeats: true)
+        resetCreditsTimer = Timer.scheduledTimer(timeInterval: 600, target: self, selector: #selector(timerRefreshResetCredits), userInfo: nil, repeats: true)
     }
 
     private func setupStatusItem() {
         guard let button = statusItem.button else { return }
         button.imagePosition = .imageOnly
         button.image = makeStatusImage(top: "5h --", bottom: "W --", style: .waiting)
-        button.toolTip = "Codex rate limits"
+        button.toolTip = AppText.rateLimitStatusTooltip
         statusItem.menu = menu
     }
 
     private func setupTokenStatusItem() {
         guard let button = tokenStatusItem.button else { return }
         button.imagePosition = .imageOnly
-        button.image = makeStatusImage(top: "消耗 --", bottom: "命中 --", style: .waiting)
-        button.toolTip = "Codex local token usage"
+        button.image = makeStatusImage(top: AppText.consumption(nil), bottom: AppText.cacheHit(nil), style: .waiting)
+        button.toolTip = AppText.localUsageStatusTooltip
         tokenStatusItem.menu = menu
     }
 
     private func setupMenu() {
-        usageHeaderItem.isEnabled = false
-        fiveHourItem.isEnabled = false
-        weeklyItem.isEnabled = false
+        rateLimitsItem.isEnabled = false
         resetCreditsItem.isEnabled = false
         localUsageHeaderItem.isEnabled = false
         localConsumptionItem.isEnabled = false
@@ -526,6 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         localConsumptionItem.isHidden = true
         localCacheHitItem.isHidden = true
         localUsageDetailItem.isHidden = true
+        rateLimitsItem.view = rateLimitsView
         resetCreditsItem.view = resetCreditsView
         localUsagePanelItem.view = localUsagePanelView
         errorItem.isHidden = true
@@ -533,9 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoLaunchView.configure(target: self, action: #selector(toggleAutoLaunch))
         updateAutoLaunchMenu(enabled: AutoLaunchManager.preferredEnabled)
 
-        menu.addItem(usageHeaderItem)
-        menu.addItem(fiveHourItem)
-        menu.addItem(weeklyItem)
+        menu.addItem(rateLimitsItem)
         menu.addItem(resetCreditsItem)
         menu.addItem(.separator())
         menu.addItem(localUsagePanelItem)
@@ -548,11 +638,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(autoLaunchItem)
         menu.addItem(.separator())
 
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshFromMenu), keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: AppText.refreshNow, action: #selector(refreshFromMenu), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
 
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: AppText.quit, action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
@@ -561,8 +651,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh()
     }
 
-    @objc private func timerRefresh() {
-        refresh()
+    @objc private func timerRefreshRateLimits() {
+        refreshRateLimits()
+    }
+
+    @objc private func timerRefreshLocalUsage() {
+        refreshLocalUsage()
+    }
+
+    @objc private func timerRefreshResetCredits() {
+        refreshResetCredits()
     }
 
     @objc private func toggleAutoLaunch() {
@@ -587,7 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try AutoLaunchManager.setEnabled(enabled)
             updateAutoLaunchMenu(enabled: enabled)
-            if errorItem.title.hasPrefix("开机自启失败") {
+            if errorItem.title == AppText.autoLaunchFailure {
                 errorItem.title = ""
                 errorItem.isHidden = true
             }
@@ -602,7 +700,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showAutoLaunchError(_ error: Error) {
-        errorItem.title = "开机自启失败：请查看提示"
+        errorItem.title = AppText.autoLaunchFailure
         errorItem.toolTip = Self.errorToolTip(error)
         errorItem.isHidden = false
     }
@@ -612,7 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRefreshing = true
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.fetchRateLimits()
+            let result = Self.fetchStatus()
             DispatchQueue.main.async {
                 self?.isRefreshing = false
                 switch result {
@@ -625,86 +723,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func refreshRateLimits() {
+        guard !isRefreshing, !isRefreshingRateLimits else { return }
+        isRefreshingRateLimits = true
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Self.fetchRateLimits()
+            DispatchQueue.main.async {
+                self?.isRefreshingRateLimits = false
+                switch result {
+                case .success(let payload):
+                    self?.applyRateLimits(payload)
+                    self?.updateCombinedError()
+                case .failure(let error):
+                    self?.applyRateLimitsError(error)
+                }
+            }
+        }
+    }
+
+    private func refreshLocalUsage() {
+        guard !isRefreshing, !isRefreshingLocalUsage else { return }
+        isRefreshingLocalUsage = true
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Self.fetchLocalUsage()
+            DispatchQueue.main.async {
+                self?.isRefreshingLocalUsage = false
+                switch result {
+                case .success(let localUsage):
+                    self?.currentLocalUsageError = localUsage.error
+                    self?.apply(localUsage)
+                    self?.updateCombinedError()
+                case .failure(let error):
+                    self?.applyLocalUsageError(error)
+                }
+            }
+        }
+    }
+
+    private func refreshResetCredits() {
+        guard !isRefreshing, !isRefreshingResetCredits else { return }
+        isRefreshingResetCredits = true
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = Self.fetchResetCredits()
+            DispatchQueue.main.async {
+                self?.isRefreshingResetCredits = false
+                switch result {
+                case .success(let resetCredits):
+                    self?.apply(resetCredits)
+                    self?.updateCombinedError()
+                case .failure(let error):
+                    self?.applyResetCreditsError(error)
+                }
+            }
+        }
+    }
+
     private func apply(_ payload: RateLimitPayload) {
+        applyRateLimits(payload)
+        if let resetCredits = payload.resetCredits {
+            apply(resetCredits)
+        }
+        if let localUsage = payload.localUsage {
+            apply(localUsage)
+        }
+        currentRateLimitError = payload.rateLimitError
+        currentResetCreditsError = payload.resetCredits?.error
+        currentLocalUsageError = payload.localUsageError
+        updateCombinedError()
+    }
+
+    private func applyRateLimits(_ payload: RateLimitPayload) {
         let primary = payload.rateLimits?.primary
         let secondary = payload.rateLimits?.secondary
         let primaryRemaining = primary?.remainingPercent
         let secondaryRemaining = secondary?.remainingPercent
+        currentPrimaryRemaining = primaryRemaining
+        currentSecondaryRemaining = secondaryRemaining
+        currentRateLimitError = payload.rateLimitError
         let top = primaryRemaining.map { "5h \($0)%" } ?? "5h --"
         let bottom = secondaryRemaining.map { "W \($0)%" } ?? "W --"
         updateStatusImage(top: top, bottom: bottom, style: style(for: primaryRemaining, secondaryRemaining))
 
-        fiveHourItem.title = formatUsageLine(label: "5 小时", remaining: primaryRemaining, window: primary, includeDate: false)
-        weeklyItem.title = formatUsageLine(label: "1 周", remaining: secondaryRemaining, window: secondary, includeDate: true)
-        updatePayloadError(payload)
-        let resetSuffix = payload.resetCredits?.availableCount.map { ", resets \($0)" } ?? ""
-        statusItem.button?.toolTip = "Codex 5h \(primaryRemaining.map { "\($0)%" } ?? "--"), week \(secondaryRemaining.map { "\($0)%" } ?? "--")\(resetSuffix)"
-        resetCreditsView.update(payload.resetCredits)
+        rateLimitsView.update(primary: primary, secondary: secondary)
+        updateRateLimitTooltip()
+    }
 
-        if let localUsage = payload.localUsage {
-            apply(localUsage)
-        }
+    private func apply(_ resetCredits: ResetCreditsSnapshot) {
+        currentResetAvailableCount = resetCredits.availableCount
+        currentResetCreditsError = resetCredits.error
+        resetCreditsView.update(resetCredits)
+        updateRateLimitTooltip()
     }
 
     private func apply(_ localUsage: LocalUsageSnapshot) {
-        let consumption = localUsage.display?.consumptionLabel ?? "消耗 \(formatTokenAmount(localUsage.totalTokens))"
-        let cacheHit = "命中 \(formatPercent(localUsage.cacheHitPercent))"
+        let consumption = localUsage.display?.consumptionLabel ?? AppText.consumption(TokenAmountFormatter.compact(localUsage.totalTokens))
+        let cacheHit = AppText.cacheHit(formatPercent(localUsage.cacheHitPercent))
         tokenStatusItem.button?.image = makeStatusImage(top: consumption, bottom: cacheHit, style: .normal)
-        tokenStatusItem.button?.toolTip = "Codex 本机今日 \(formatTokenAmount(localUsage.totalTokens)), cache hit \(formatPercent(localUsage.cacheHitPercent))"
+        tokenStatusItem.button?.toolTip = AppText.localUsageTooltip(tokens: TokenAmountFormatter.compact(localUsage.totalTokens), cacheHit: formatPercent(localUsage.cacheHitPercent))
 
         localConsumptionItem.title = consumption
         localCacheHitItem.title = cacheHit
-        localUsageDetailItem.title = "事件 \(localUsage.eventCount) · 文件 \(localUsage.filesWithEvents)/\(localUsage.filesScanned)"
+        localUsageDetailItem.title = AppText.localUsageDetail(events: localUsage.eventCount, filesWithEvents: localUsage.filesWithEvents, filesScanned: localUsage.filesScanned)
         localUsageDetailItem.isHidden = true
         localUsagePanelView.update(localUsage)
     }
 
-    private func updatePayloadError(_ payload: RateLimitPayload) {
+    private func applyRateLimitsError(_ error: Error) {
+        currentRateLimitError = Self.normalizedErrorText(error)
+        statusItem.button?.toolTip = AppText.rateLimitRefreshFailedTooltip
+        updateCombinedError()
+        Self.appendLog("rate limit refresh failed: \(Self.normalizedErrorText(error))")
+    }
+
+    private func applyLocalUsageError(_ error: Error) {
+        currentLocalUsageError = Self.normalizedErrorText(error)
+        tokenStatusItem.button?.toolTip = AppText.localUsageRefreshFailedTooltip
+        updateCombinedError()
+        Self.appendLog("local usage refresh failed: \(Self.normalizedErrorText(error))")
+    }
+
+    private func applyResetCreditsError(_ error: Error) {
+        currentResetCreditsError = Self.normalizedErrorText(error)
+        updateRateLimitTooltip()
+        updateCombinedError()
+        Self.appendLog("reset credits refresh failed: \(Self.normalizedErrorText(error))")
+    }
+
+    private func updateRateLimitTooltip() {
+        statusItem.button?.toolTip = AppText.rateLimitTooltip(
+            primary: currentPrimaryRemaining.map { "\($0)%" } ?? "--",
+            secondary: currentSecondaryRemaining.map { "\($0)%" } ?? "--",
+            resetCount: currentResetAvailableCount
+        )
+    }
+
+    private func updateCombinedError() {
         var details: [String] = []
-        if let rateLimitError = payload.rateLimitError, !rateLimitError.isEmpty {
-            details.append("限额：\(rateLimitError)")
+        if let rateLimitError = currentRateLimitError, !rateLimitError.isEmpty {
+            details.append("\(AppText.rateLimitErrorLabel): \(rateLimitError)")
         }
-        if let resetCreditsError = payload.resetCredits?.error, !resetCreditsError.isEmpty {
-            details.append("重置券：\(resetCreditsError)")
+        if let resetCreditsError = currentResetCreditsError, !resetCreditsError.isEmpty {
+            details.append("\(AppText.resetCreditsTitle): \(resetCreditsError)")
         }
-        if let localUsageError = payload.localUsageError, !localUsageError.isEmpty {
-            details.append("本机用量：\(localUsageError)")
+        if let localUsageError = currentLocalUsageError, !localUsageError.isEmpty {
+            details.append("\(AppText.localUsageErrorLabel): \(localUsageError)")
         }
 
         guard !details.isEmpty else {
             errorItem.title = ""
             errorItem.toolTip = nil
             errorItem.isHidden = true
+            lastLoggedErrorDetails = nil
             return
         }
 
-        errorItem.title = "部分刷新失败：请查看提示"
-        errorItem.toolTip = details.joined(separator: "\n")
+        let detailText = details.joined(separator: "\n")
+        errorItem.title = AppText.partialRefreshFailure
+        errorItem.toolTip = detailText
         errorItem.isHidden = false
-        Self.appendLog("partial refresh failure: \(details.joined(separator: " | "))")
+        if detailText != lastLoggedErrorDetails {
+            lastLoggedErrorDetails = detailText
+            Self.appendLog("partial refresh failure: \(details.joined(separator: " | "))")
+        }
     }
 
     private func apply(_ error: Error) {
         errorItem.title = Self.refreshErrorTitle(error)
         errorItem.toolTip = Self.errorToolTip(error)
         errorItem.isHidden = false
-        statusItem.button?.toolTip = "Codex rate limit refresh failed; showing last value"
-        tokenStatusItem.button?.toolTip = "Codex local usage refresh failed; showing last value"
+        statusItem.button?.toolTip = AppText.rateLimitRefreshFailedTooltip
+        tokenStatusItem.button?.toolTip = AppText.localUsageRefreshFailedTooltip
         Self.appendLog("refresh failed: \(Self.normalizedErrorText(error))")
     }
 
     private static func refreshErrorTitle(_ error: Error) -> String {
         let detail = normalizedErrorText(error)
         if detail.contains("account/rateLimits/read failed") {
-            return "刷新失败：Codex 限额接口暂不可用"
+            return AppText.refreshRateLimitUnavailable
         }
         if detail.contains("account/usage/read failed") {
-            return "刷新失败：Codex 用量接口暂不可用"
+            return AppText.refreshUsageUnavailable
         }
         if detail.localizedCaseInsensitiveContains("timed out") || detail.localizedCaseInsensitiveContains("timeout") {
-            return "刷新失败：Codex 接口超时"
+            return AppText.refreshTimeout
         }
-        return "刷新失败：Codex 状态暂不可用"
+        return AppText.refreshStatusUnavailable
     }
 
     private static func errorToolTip(_ error: Error) -> String {
@@ -727,8 +933,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = makeStatusImage(top: top, bottom: bottom, style: style)
     }
 
-    nonisolated private static func fetchRateLimits() -> Result<RateLimitPayload, Error> {
+    nonisolated private static func fetchStatus() -> Result<RateLimitPayload, Error> {
         .success(CodexBackend.readStatus())
+    }
+
+    nonisolated private static func fetchRateLimits() -> Result<RateLimitPayload, Error> {
+        Result { try CodexBackend.readRateLimits() }
+    }
+
+    nonisolated private static func fetchLocalUsage() -> Result<LocalUsageSnapshot, Error> {
+        Result { try CodexBackend.readLocalTokenUsage() }
+    }
+
+    nonisolated private static func fetchResetCredits() -> Result<ResetCreditsSnapshot, Error> {
+        Result { try CodexBackend.readResetCredits(soft: true) }
     }
 
     nonisolated private static func appendLog(_ message: String) {
@@ -754,73 +972,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func formatUsageLine(label: String, remaining: Int?, window: RateLimitWindow?, includeDate: Bool) -> String {
-        let percentage = remaining.map { "\($0)%" } ?? "--"
-        let reset = formatResetDisplay(window, includeDate: includeDate)
-        guard !reset.isEmpty else { return "\(label) \(percentage)" }
-        return "\(label) \(percentage) · \(reset)"
-    }
-
-    private func formatResetDisplay(_ window: RateLimitWindow?, includeDate: Bool) -> String {
-        guard let window else { return "" }
-        let date: Date?
-        if let resetsAt = window.resetsAt {
-            date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
-        } else {
-            date = parseIsoDate(window.resetsAtIso)
-        }
-        guard let date else { return "" }
-
-        var calendar = Calendar.current
-        calendar.timeZone = TimeZone.current
-        let display = DateFormatter()
-        display.locale = Locale(identifier: "zh_Hans_CN")
-        display.timeZone = TimeZone.current
-        if includeDate || !calendar.isDateInToday(date) {
-            display.dateFormat = calendar.component(.year, from: date) == calendar.component(.year, from: Date()) ? "M月d日 HH:mm" : "yyyy年M月d日 HH:mm"
-        } else {
-            display.dateFormat = "HH:mm"
-        }
-        return display.string(from: date)
-    }
-
-    private func parseIsoDate(_ iso: String?) -> Date? {
-        guard let iso else { return nil }
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: iso) {
-            return date
-        }
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: iso)
-    }
-
     private func style(for primary: Int?, _ secondary: Int?) -> StatusStyle {
         let lowest = min(primary ?? 100, secondary ?? 100)
         if lowest <= 10 { return .critical }
         if lowest <= 25 { return .warning }
         return .normal
-    }
-
-    private func formatTokenAmount(_ tokens: Int64) -> String {
-        let value = Double(tokens)
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "zh_Hans_CN")
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = 2
-        formatter.numberStyle = .decimal
-
-        if tokens >= 100_000_000 {
-            let formatted = formatter.string(from: NSNumber(value: value / 100_000_000)) ?? String(format: "%.2f", value / 100_000_000)
-            return "\(formatted)亿"
-        }
-        if tokens >= 10_000 {
-            let formatted = formatter.string(from: NSNumber(value: value / 10_000)) ?? String(format: "%.2f", value / 10_000)
-            return "\(formatted)万"
-        }
-        return formatter.string(from: NSNumber(value: tokens)) ?? "\(tokens)"
     }
 
     private func formatPercent(_ percent: Double?) -> String {
