@@ -216,8 +216,35 @@ struct AutoLaunchManager {
 }
 
 final class RateLimitsMenuView: NSView {
+    private let cardView = RateLimitsCardView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        cardView.frame = NSRect(x: 16, y: 8, width: bounds.width - 32, height: bounds.height - 16)
+        addSubview(cardView)
+    }
+
+    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
+        cardView.update(primary: primary, secondary: secondary)
+    }
+}
+
+class RateLimitsDrawingView: NSView {
     private var primary: RateLimitWindow?
     private var secondary: RateLimitWindow?
+
+    override var isFlipped: Bool {
+        true
+    }
 
     func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
         self.primary = primary
@@ -225,41 +252,58 @@ final class RateLimitsMenuView: NSView {
         needsDisplay = true
     }
 
-    override var isFlipped: Bool {
-        true
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        drawText(AppText.usageTitle, in: NSRect(x: 16, y: 10, width: bounds.width - 32, height: 20), font: .systemFont(ofSize: 14, weight: .semibold), color: .labelColor)
-        drawQuotaRow(label: AppText.fiveHourLimit, window: primary, includeDate: false, y: 38)
-        drawQuotaRow(label: AppText.weeklyLimit, window: secondary, includeDate: true, y: 84)
+        let labelColor = NSColor.labelColor
+        let secondaryColor = NSColor.secondaryLabelColor
+
+        drawSymbol("chart.bar.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
+        drawText(AppText.usageTitle, in: NSRect(x: 32, y: 10, width: 200, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
+
+        drawQuotaRow(label: AppText.fiveHourLimit, window: primary, includeDate: false, y: 36)
+        drawQuotaRow(label: AppText.weeklyLimit, window: secondary, includeDate: true, y: 74)
     }
 
     private func drawQuotaRow(label: String, window: RateLimitWindow?, includeDate: Bool, y: CGFloat) {
         let remaining = window?.remainingPercent
-        let statusColor = color(for: remaining)
+        let colors = gradientColors(for: remaining)
         let value = remaining.map { "\($0)%" } ?? "--"
         let reset = formatResetDisplay(window, includeDate: includeDate)
         let rightLabel = reset.isEmpty ? value : "\(value) · \(reset)"
 
-        drawText(label, in: NSRect(x: 16, y: y, width: 120, height: 18), font: .systemFont(ofSize: 12, weight: .semibold), color: .labelColor)
-        drawText(rightLabel, in: NSRect(x: 136, y: y, width: bounds.width - 152, height: 18), font: .monospacedDigitSystemFont(ofSize: 12, weight: .semibold), color: .labelColor, alignment: .right)
+        drawText(label, in: NSRect(x: 12, y: y, width: 120, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: NSColor.secondaryLabelColor)
+        drawText(rightLabel, in: NSRect(x: 132, y: y, width: bounds.width - 144, height: 16), font: .monospacedDigitSystemFont(ofSize: 11, weight: .semibold), color: NSColor.labelColor, alignment: .right)
 
-        let barRect = NSRect(x: 16, y: y + 25, width: bounds.width - 32, height: 8)
-        drawRoundedRect(barRect, fill: NSColor.separatorColor.withAlphaComponent(0.35), stroke: .clear, radius: 4)
+        let barRect = NSRect(x: 12, y: y + 21, width: bounds.width - 24, height: 5)
+        drawRoundedRect(barRect, fill: NSColor.separatorColor.withAlphaComponent(0.2), stroke: .clear, radius: 2.5)
+
         if let remaining {
             let fillWidth = max(0, min(1, CGFloat(remaining) / 100)) * barRect.width
-            drawRoundedRect(NSRect(x: barRect.minX, y: barRect.minY, width: fillWidth, height: barRect.height), fill: statusColor, stroke: .clear, radius: 4)
+            if fillWidth > 0 {
+                let fillRect = NSRect(x: barRect.minX, y: barRect.minY, width: fillWidth, height: barRect.height)
+                let path = NSBezierPath(roundedRect: fillRect, xRadius: 2.5, yRadius: 2.5)
+                if let gradient = NSGradient(starting: colors.start, ending: colors.end) {
+                    gradient.draw(in: path, angle: 0.0)
+                } else {
+                    colors.start.setFill()
+                    path.fill()
+                }
+            }
         }
     }
 
-    private func color(for remaining: Int?) -> NSColor {
-        guard let remaining else { return .tertiaryLabelColor }
-        if remaining < 10 { return .systemRed }
-        if remaining < 25 { return .systemYellow }
-        return .systemGreen
+    private func gradientColors(for remaining: Int?) -> (start: NSColor, end: NSColor) {
+        guard let remaining else {
+            return (NSColor.tertiaryLabelColor, NSColor.tertiaryLabelColor)
+        }
+        if remaining < 10 {
+            return (NSColor(red: 0.92, green: 0.30, blue: 0.26, alpha: 1.0), NSColor(red: 0.82, green: 0.20, blue: 0.16, alpha: 1.0))
+        }
+        if remaining < 25 {
+            return (NSColor(red: 0.95, green: 0.77, blue: 0.06, alpha: 1.0), NSColor(red: 0.90, green: 0.65, blue: 0.04, alpha: 1.0))
+        }
+        return (NSColor(red: 0.15, green: 0.80, blue: 0.44, alpha: 1.0), NSColor(red: 0.18, green: 0.70, blue: 0.35, alpha: 1.0))
     }
 
     private func formatResetDisplay(_ window: RateLimitWindow?, includeDate: Bool) -> String {
@@ -308,58 +352,149 @@ final class RateLimitsMenuView: NSView {
             .paragraphStyle: paragraph,
         ])
     }
+
+    private func drawSymbol(_ name: String, in rect: NSRect, color: NSColor) {
+        if let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .bold)
+            let configured = image.withSymbolConfiguration(config) ?? image
+            let tinted = configured.tinted(with: color)
+            let imgSize = tinted.size
+            guard imgSize.width > 0, imgSize.height > 0 else { return }
+            let aspect = imgSize.width / imgSize.height
+            var targetWidth = rect.width
+            var targetHeight = rect.height
+            if aspect > 1.0 {
+                targetHeight = rect.width / aspect
+            } else {
+                targetWidth = rect.height * aspect
+            }
+            let targetX = rect.minX + (rect.width - targetWidth) / 2
+            let targetY = rect.minY + (rect.height - targetHeight) / 2
+            tinted.draw(in: NSRect(x: targetX, y: targetY, width: targetWidth, height: targetHeight))
+        }
+    }
+}
+
+class RateLimitsCardView: NSVisualEffectView {
+    private let drawingView = RateLimitsDrawingView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
+        updateBorderColor()
+
+        drawingView.frame = bounds
+        drawingView.autoresizingMask = [.width, .height]
+        addSubview(drawingView)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.08).cgColor
+    }
+
+    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
+        drawingView.update(primary: primary, secondary: secondary)
+    }
 }
 
 final class ResetCreditsMenuView: NSView {
-    private var snapshot: ResetCreditsSnapshot?
+    private let cardView = ResetCreditsCardView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        cardView.frame = NSRect(x: 16, y: 4, width: bounds.width - 32, height: bounds.height - 8)
+        addSubview(cardView)
+    }
 
     func update(_ snapshot: ResetCreditsSnapshot?) {
-        self.snapshot = snapshot
-        setFrameSize(NSSize(width: frame.width, height: Self.height(for: snapshot)))
-        needsDisplay = true
+        let h = Self.height(for: snapshot)
+        setFrameSize(NSSize(width: frame.width, height: h))
+        cardView.frame = NSRect(x: 16, y: 4, width: bounds.width - 32, height: h - 8)
+        cardView.update(snapshot)
     }
 
     static func height(for snapshot: ResetCreditsSnapshot?) -> CGFloat {
         let rows = min(snapshot?.display?.detailLabels?.count ?? 0, 4)
-        return rows == 0 ? 50 : CGFloat(52 + rows * 18)
+        if rows == 0 {
+            return 66
+        }
+        return CGFloat(50 + rows * 18)
     }
+}
+
+class ResetCreditsDrawingView: NSView {
+    private var snapshot: ResetCreditsSnapshot?
 
     override var isFlipped: Bool {
         true
     }
 
+    func update(_ snapshot: ResetCreditsSnapshot?) {
+        self.snapshot = snapshot
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        let primary = NSColor.labelColor
-        let secondary = NSColor.secondaryLabelColor
-        let accent = (snapshot?.availableCount ?? 0) > 0 ? NSColor.systemOrange : secondary
+        let labelColor = NSColor.labelColor
+        let secondaryColor = NSColor.secondaryLabelColor
+        let availableCount = snapshot?.availableCount ?? 0
+        let accent = availableCount > 0 ? NSColor.systemOrange : secondaryColor
 
-        drawText(AppText.resetCreditsTitle, in: NSRect(x: 16, y: 6, width: 88, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: primary)
-        drawText(snapshot?.display?.summaryLabel ?? AppText.availableCount(nil), in: NSRect(x: 110, y: 6, width: bounds.width - 126, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: primary)
+        drawSymbol("ticket.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
+        drawText(AppText.resetCreditsTitle, in: NSRect(x: 32, y: 10, width: 88, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
-        let category = snapshot?.display?.categoryLabel ?? AppText.resetCreditsCategory
-        drawAccentLine(at: NSPoint(x: 16, y: 29), color: accent)
-        drawText(category, in: NSRect(x: 44, y: 24, width: bounds.width - 60, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: secondary)
+        let summary = snapshot?.display?.summaryLabel ?? AppText.availableCount(nil)
+        drawText(summary, in: NSRect(x: 120, y: 10, width: bounds.width - 132, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: accent, alignment: .right)
 
         let rows = Array((snapshot?.display?.detailLabels ?? []).prefix(4))
         if rows.isEmpty {
-            drawText(AppText.noResetCredits, in: NSRect(x: 16, y: 40, width: bounds.width - 32, height: 16), font: .systemFont(ofSize: 11, weight: .regular), color: secondary)
+            drawText(AppText.noResetCredits, in: NSRect(x: 12, y: 34, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .regular), color: secondaryColor)
             return
         }
 
         for (index, row) in rows.enumerated() {
-            drawText(row, in: NSRect(x: 16, y: 43 + CGFloat(index * 18), width: bounds.width - 32, height: 16), font: .monospacedDigitSystemFont(ofSize: 11, weight: .medium), color: primary)
+            drawText(row, in: NSRect(x: 12, y: 34 + CGFloat(index * 18), width: bounds.width - 24, height: 16), font: .monospacedDigitSystemFont(ofSize: 10.5, weight: .medium), color: labelColor)
         }
     }
 
-    private func drawAccentLine(at point: NSPoint, color: NSColor) {
-        color.withAlphaComponent(0.9).setFill()
-        NSBezierPath(roundedRect: NSRect(x: point.x, y: point.y, width: 18, height: 2), xRadius: 1, yRadius: 1).fill()
-    }
-
-    private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor) {
+    private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) {
         let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
         paragraph.lineBreakMode = .byTruncatingTail
         NSString(string: text).draw(in: rect, withAttributes: [
             .font: font,
@@ -367,10 +502,107 @@ final class ResetCreditsMenuView: NSView {
             .paragraphStyle: paragraph,
         ])
     }
+
+    private func drawSymbol(_ name: String, in rect: NSRect, color: NSColor) {
+        if let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .bold)
+            let configured = image.withSymbolConfiguration(config) ?? image
+            let tinted = configured.tinted(with: color)
+            let imgSize = tinted.size
+            guard imgSize.width > 0, imgSize.height > 0 else { return }
+            let aspect = imgSize.width / imgSize.height
+            var targetWidth = rect.width
+            var targetHeight = rect.height
+            if aspect > 1.0 {
+                targetHeight = rect.width / aspect
+            } else {
+                targetWidth = rect.height * aspect
+            }
+            let targetX = rect.minX + (rect.width - targetWidth) / 2
+            let targetY = rect.minY + (rect.height - targetHeight) / 2
+            tinted.draw(in: NSRect(x: targetX, y: targetY, width: targetWidth, height: targetHeight))
+        }
+    }
+}
+
+class ResetCreditsCardView: NSVisualEffectView {
+    private let drawingView = ResetCreditsDrawingView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
+        updateBorderColor()
+
+        drawingView.frame = bounds
+        drawingView.autoresizingMask = [.width, .height]
+        addSubview(drawingView)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.08).cgColor
+    }
+
+    func update(_ snapshot: ResetCreditsSnapshot?) {
+        drawingView.update(snapshot)
+    }
 }
 
 final class AutoLaunchMenuView: NSView {
-    private let sectionLabel = NSTextField(labelWithString: AppText.launchTitle)
+    private let cardView = AutoLaunchCardView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        cardView.frame = NSRect(x: 16, y: 2, width: bounds.width - 32, height: bounds.height - 4)
+        addSubview(cardView)
+    }
+
+    var isChecked: Bool {
+        cardView.isChecked
+    }
+
+    func configure(target: AnyObject?, action: Selector) {
+        cardView.configure(target: target, action: action)
+    }
+
+    func update(enabled: Bool) {
+        cardView.update(enabled: enabled)
+    }
+}
+
+class AutoLaunchCardView: NSVisualEffectView {
     private let checkbox = NSButton(checkboxWithTitle: AppText.launchAtLogin, target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
@@ -383,8 +615,33 @@ final class AutoLaunchMenuView: NSView {
         setup()
     }
 
-    override var isFlipped: Bool {
-        true
+    private func setup() {
+        wantsLayer = true
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
+        updateBorderColor()
+
+        checkbox.font = .systemFont(ofSize: 12, weight: .semibold)
+        checkbox.setButtonType(.switch)
+
+        addSubview(checkbox)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.1).cgColor
     }
 
     var isChecked: Bool {
@@ -400,46 +657,65 @@ final class AutoLaunchMenuView: NSView {
         checkbox.state = enabled ? .on : .off
     }
 
-    override func layout() {
-        super.layout()
-        sectionLabel.frame = NSRect(x: 16, y: 10, width: 56, height: 20)
-        checkbox.frame = NSRect(x: 86, y: 5, width: bounds.width - 102, height: 28)
+    override var isFlipped: Bool {
+        true
     }
 
-    private func setup() {
-        sectionLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        sectionLabel.textColor = .secondaryLabelColor
-        checkbox.font = .systemFont(ofSize: 14, weight: .semibold)
-        checkbox.setButtonType(.switch)
-        addSubview(sectionLabel)
-        addSubview(checkbox)
+    override func layout() {
+        super.layout()
+        let yOffset = floor((bounds.height - 20) / 2)
+        checkbox.frame = NSRect(x: 12, y: yOffset - 3, width: bounds.width - 24, height: 26)
     }
 }
 
 final class LocalUsageMenuView: NSView {
+    private let cardView = LocalUsageCardView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        cardView.frame = NSRect(x: 16, y: 6, width: bounds.width - 32, height: bounds.height - 12)
+        addSubview(cardView)
+    }
+
+    func update(_ snapshot: LocalUsageSnapshot) {
+        cardView.update(snapshot)
+    }
+}
+
+class LocalUsageDrawingView: NSView {
     private var snapshot: LocalUsageSnapshot?
+
+    override var isFlipped: Bool {
+        true
+    }
 
     func update(_ snapshot: LocalUsageSnapshot) {
         self.snapshot = snapshot
         needsDisplay = true
     }
 
-    override var isFlipped: Bool {
-        true
-    }
-
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let primary = NSColor.labelColor
-        let secondary = NSColor.secondaryLabelColor
-        let tertiary = NSColor.tertiaryLabelColor
-        let green = NSColor.systemGreen
+        let labelColor = NSColor.labelColor
+        let secondaryColor = NSColor.secondaryLabelColor
+
         let blue = NSColor.systemBlue
         let purple = NSColor.systemPurple
-        let cardFill = (isDark ? NSColor.white : NSColor.black).withAlphaComponent(isDark ? 0.055 : 0.035)
-        let cardStroke = NSColor.separatorColor.withAlphaComponent(isDark ? 0.42 : 0.28)
+        let green = NSColor.systemGreen
+
+        let subCardFill = isDark ? NSColor.white.withAlphaComponent(0.055) : NSColor.black.withAlphaComponent(0.035)
+        let subCardStroke = isDark ? NSColor.white.withAlphaComponent(0.08) : NSColor.black.withAlphaComponent(0.05)
 
         let totalTokens = snapshot?.totalTokens ?? 0
         let inputTokens = snapshot?.inputTokens ?? 0
@@ -449,71 +725,88 @@ final class LocalUsageMenuView: NSView {
         let eventCount = snapshot?.eventCount ?? 0
         let cacheHitPercent = snapshot?.cacheHitPercent
 
-        drawText(AppText.localUsageTitle, in: NSRect(x: 16, y: 12, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .semibold), color: secondary)
+        drawSymbol("cpu.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
+        drawText(AppText.localUsageTitle, in: NSRect(x: 32, y: 10, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
+
         let rawTotal = formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
-        drawText(rawTotal, in: NSRect(x: 16, y: 36, width: min(rawWidth + 4, 285), height: 42), font: rawFont, color: primary)
-        drawPill("≈ \(TokenAmountFormatter.compact(totalTokens, maximumFractionDigits: 2))", at: NSPoint(x: min(24 + rawWidth, 300), y: 45), color: tertiary, fillColor: cardFill)
+        drawText(rawTotal, in: NSRect(x: 12, y: 32, width: min(rawWidth + 4, 250), height: 42), font: rawFont, color: labelColor)
 
-        let requestRect = NSRect(x: bounds.width - 126, y: 20, width: 110, height: 58)
-        drawRoundedRect(requestRect, fill: cardFill, stroke: cardStroke, radius: 10)
-        drawText(AppText.totalRequests, in: requestRect.insetBy(dx: 12, dy: 9), font: .systemFont(ofSize: 11, weight: .semibold), color: secondary)
-        drawText(formatRawNumber(Int64(eventCount)), in: NSRect(x: requestRect.minX + 12, y: requestRect.minY + 30, width: requestRect.width - 24, height: 22), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: primary)
+        let requestRect = NSRect(x: bounds.width - 120, y: 12, width: 108, height: 58)
+        drawSubCard(requestRect, fill: subCardFill, stroke: subCardStroke)
+        drawText(AppText.totalRequests, in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 6, width: requestRect.width - 20, height: 16), font: .systemFont(ofSize: 10.5, weight: .semibold), color: secondaryColor)
+        drawText(formatRawNumber(Int64(eventCount)), in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 24, width: requestRect.width - 20, height: 24), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: labelColor)
 
-        let padding: CGFloat = 16
+        let padding: CGFloat = 12
         let gap: CGFloat = 8
-        let contentWidth = bounds.width - padding * 2
-        let rowOneY: CGFloat = 92
-        let rowTwoY: CGFloat = 158
+        let gridWidth = bounds.width - padding * 2
+        let cardWidth = floor((gridWidth - gap) / 2)
         let cardHeight: CGFloat = 52
-        let wideCardWidth = floor((contentWidth - gap) / 2)
-        drawMetricCard(NSRect(x: padding, y: rowOneY, width: wideCardWidth, height: cardHeight), title: AppText.newInput, value: TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: cardFill, stroke: cardStroke)
-        drawMetricCard(NSRect(x: padding + wideCardWidth + gap, y: rowOneY, width: wideCardWidth, height: cardHeight), title: AppText.output, value: TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: cardFill, stroke: cardStroke)
-        drawMetricCard(NSRect(x: padding, y: rowTwoY, width: wideCardWidth, height: cardHeight), title: AppText.hit, value: TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: cardFill, stroke: cardStroke)
-        drawCacheHitCard(NSRect(x: padding + wideCardWidth + gap, y: rowTwoY, width: wideCardWidth, height: cardHeight), percent: cacheHitPercent, fill: cardFill, stroke: cardStroke, tint: green)
+
+        let rowOneY: CGFloat = 84
+        let rowTwoY: CGFloat = 144
+
+        let rect1 = NSRect(x: padding, y: rowOneY, width: cardWidth, height: cardHeight)
+        drawMetricCard(rect1, title: AppText.newInput, value: TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: subCardFill, stroke: subCardStroke)
+
+        let rect2 = NSRect(x: padding + cardWidth + gap, y: rowOneY, width: cardWidth, height: cardHeight)
+        drawMetricCard(rect2, title: AppText.output, value: TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: subCardFill, stroke: subCardStroke)
+
+        let rect3 = NSRect(x: padding, y: rowTwoY, width: cardWidth, height: cardHeight)
+        drawMetricCard(rect3, title: AppText.hit, value: TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: subCardFill, stroke: subCardStroke)
+
+        let rect4 = NSRect(x: padding + cardWidth + gap, y: rowTwoY, width: cardWidth, height: cardHeight)
+        drawCacheHitCard(rect4, percent: cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
     }
 
-    private func drawMetricCard(_ rect: NSRect, title: String, value: String, tint: NSColor, fill: NSColor, stroke: NSColor) {
-        drawRoundedRect(rect, fill: fill, stroke: stroke, radius: 10)
-        drawText(title, in: NSRect(x: rect.minX + 12, y: rect.minY + 9, width: rect.width - 24, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: NSColor.secondaryLabelColor)
-        drawText(value, in: NSRect(x: rect.minX + 12, y: rect.minY + 29, width: rect.width - 24, height: 19), font: .monospacedDigitSystemFont(ofSize: 17, weight: .bold), color: NSColor.labelColor)
-        drawAccentLine(in: rect, color: tint)
-    }
-
-    private func drawCacheHitCard(_ rect: NSRect, percent: Double?, fill: NSColor, stroke: NSColor, tint: NSColor) {
-        drawRoundedRect(rect, fill: fill, stroke: stroke, radius: 10)
-        drawText(AppText.cacheHitRate, in: NSRect(x: rect.minX + 12, y: rect.minY + 9, width: rect.width - 92, height: 17), font: .systemFont(ofSize: 12, weight: .semibold), color: .secondaryLabelColor)
-        drawText(formatPercent(percent), in: NSRect(x: rect.maxX - 86, y: rect.minY + 9, width: 74, height: 17), font: .monospacedDigitSystemFont(ofSize: 13, weight: .bold), color: tint, alignment: .right)
-
-        let barRect = NSRect(x: rect.minX + 12, y: rect.minY + 33, width: rect.width - 24, height: 7)
-        drawRoundedRect(barRect, fill: NSColor.separatorColor.withAlphaComponent(0.35), stroke: .clear, radius: 3.5)
-        if let percent {
-            let width = max(0, min(1, percent / 100)) * barRect.width
-            drawRoundedRect(NSRect(x: barRect.minX, y: barRect.minY, width: width, height: barRect.height), fill: tint.withAlphaComponent(0.9), stroke: .clear, radius: 3.5)
-        }
-    }
-
-    private func drawPill(_ text: String, at point: NSPoint, color: NSColor, fillColor: NSColor) {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        let width = ceil(NSString(string: text).size(withAttributes: [.font: font]).width) + 18
-        let rect = NSRect(x: point.x, y: point.y, width: width, height: 24)
-        drawRoundedRect(rect, fill: fillColor, stroke: .clear, radius: 8)
-        drawText(text, in: rect.insetBy(dx: 9, dy: 4), font: font, color: color)
-    }
-
-    private func drawAccentLine(in rect: NSRect, color: NSColor) {
-        color.withAlphaComponent(0.85).setFill()
-        NSBezierPath(roundedRect: NSRect(x: rect.minX + 12, y: rect.minY + 7, width: 18, height: 2), xRadius: 1, yRadius: 1).fill()
-    }
-
-    private func drawRoundedRect(_ rect: NSRect, fill: NSColor, stroke: NSColor, radius: CGFloat) {
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+    private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
         fill.setFill()
         path.fill()
         stroke.setStroke()
-        path.lineWidth = 1
+        path.lineWidth = 0.5
         path.stroke()
+    }
+
+    private func drawMetricCard(_ rect: NSRect, title: String, value: String, tint: NSColor, fill: NSColor, stroke: NSColor) {
+        drawSubCard(rect, fill: fill, stroke: stroke)
+        drawText(title, in: NSRect(x: rect.minX + 12, y: rect.minY + 7, width: rect.width - 24, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: NSColor.secondaryLabelColor)
+        drawText(value, in: NSRect(x: rect.minX + 12, y: rect.minY + 26, width: rect.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 16, weight: .bold), color: NSColor.labelColor)
+        drawVerticalAccentBar(in: rect, color: tint)
+    }
+
+    private func drawCacheHitCard(_ rect: NSRect, percent: Double?, fill: NSColor, stroke: NSColor, tint: NSColor) {
+        drawSubCard(rect, fill: fill, stroke: stroke)
+        drawText(AppText.cacheHitRate, in: NSRect(x: rect.minX + 12, y: rect.minY + 7, width: rect.width - 86, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
+        drawText(formatPercent(percent), in: NSRect(x: rect.maxX - 70, y: rect.minY + 7, width: 58, height: 16), font: .monospacedDigitSystemFont(ofSize: 12, weight: .bold), color: tint, alignment: .right)
+
+        let barRect = NSRect(x: rect.minX + 12, y: rect.minY + 31, width: rect.width - 24, height: 5)
+        let pathBg = NSBezierPath(roundedRect: barRect, xRadius: 2.5, yRadius: 2.5)
+        NSColor.separatorColor.withAlphaComponent(0.2).setFill()
+        pathBg.fill()
+
+        if let percent {
+            let width = max(0, min(1, percent / 100)) * barRect.width
+            if width > 0 {
+                let fillRect = NSRect(x: barRect.minX, y: barRect.minY, width: width, height: barRect.height)
+                let pathFill = NSBezierPath(roundedRect: fillRect, xRadius: 2.5, yRadius: 2.5)
+                let startCol = NSColor(red: 0.0, green: 0.8, blue: 0.6, alpha: 1.0)
+                let endCol = NSColor(red: 0.0, green: 0.6, blue: 0.5, alpha: 1.0)
+                if let gradient = NSGradient(starting: startCol, ending: endCol) {
+                    gradient.draw(in: pathFill, angle: 0.0)
+                } else {
+                    tint.withAlphaComponent(0.9).setFill()
+                    pathFill.fill()
+                }
+            }
+        }
+    }
+
+    private func drawVerticalAccentBar(in rect: NSRect, color: NSColor) {
+        color.withAlphaComponent(0.85).setFill()
+        let bar = NSBezierPath(roundedRect: NSRect(x: rect.minX + 1.5, y: rect.minY + 12, width: 3, height: 28), xRadius: 1.5, yRadius: 1.5)
+        bar.fill()
     }
 
     private func drawText(_ text: String, in rect: NSRect, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) {
@@ -525,6 +818,27 @@ final class LocalUsageMenuView: NSView {
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ])
+    }
+
+    private func drawSymbol(_ name: String, in rect: NSRect, color: NSColor) {
+        if let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 11.5, weight: .bold)
+            let configured = image.withSymbolConfiguration(config) ?? image
+            let tinted = configured.tinted(with: color)
+            let imgSize = tinted.size
+            guard imgSize.width > 0, imgSize.height > 0 else { return }
+            let aspect = imgSize.width / imgSize.height
+            var targetWidth = rect.width
+            var targetHeight = rect.height
+            if aspect > 1.0 {
+                targetHeight = rect.width / aspect
+            } else {
+                targetWidth = rect.height * aspect
+            }
+            let targetX = rect.minX + (rect.width - targetWidth) / 2
+            let targetY = rect.minY + (rect.height - targetHeight) / 2
+            tinted.draw(in: NSRect(x: targetX, y: targetY, width: targetWidth, height: targetHeight))
+        }
     }
 
     private func formatRawNumber(_ value: Int64) -> String {
@@ -540,6 +854,52 @@ final class LocalUsageMenuView: NSView {
     private func formatPercent(_ percent: Double?) -> String {
         guard let percent else { return "--" }
         return String(format: "%.1f%%", percent)
+    }
+}
+
+class LocalUsageCardView: NSVisualEffectView {
+    private let drawingView = LocalUsageDrawingView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        layer?.cornerRadius = 12
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0.5
+        updateBorderColor()
+
+        drawingView.frame = bounds
+        drawingView.autoresizingMask = [.width, .height]
+        addSubview(drawingView)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
+            : NSColor(white: 0.0, alpha: 0.08).cgColor
+    }
+
+    func update(_ snapshot: LocalUsageSnapshot) {
+        drawingView.update(snapshot)
     }
 }
 
@@ -1069,3 +1429,15 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+
+extension NSImage {
+    func tinted(with color: NSColor) -> NSImage {
+        guard let copy = self.copy() as? NSImage else { return self }
+        copy.lockFocus()
+        color.set()
+        let rect = NSRect(origin: .zero, size: copy.size)
+        rect.fill(using: .sourceIn)
+        copy.unlockFocus()
+        return copy
+    }
+}
