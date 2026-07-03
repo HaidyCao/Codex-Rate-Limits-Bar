@@ -400,16 +400,19 @@ enum AppText {
         }
     }
 
-    static func resetCreditDetail(index: Int, status: String?, createdAt: String?, expiresAt: String?) -> String {
+    static func resetCreditDetail(index: Int, status: String?, expiresAt: String?) -> String {
+        let expiration = expiresAt ?? notSet
         switch language {
-        case .simplifiedChinese, .traditionalChinese:
-            return "\(index). \(status ?? unknown) · \(createdAt ?? notSet) -> \(expiresAt ?? notSet)"
+        case .simplifiedChinese:
+            return "\(index). \(status ?? unknown) · 到期 \(expiration)"
+        case .traditionalChinese:
+            return "\(index). \(status ?? unknown) · 到期 \(expiration)"
         case .japanese:
-            return "\(index). \(status ?? unknown) · \(createdAt ?? notSet) -> \(expiresAt ?? notSet)"
+            return "\(index). \(status ?? unknown) · 期限 \(expiration)"
         case .korean:
-            return "\(index). \(status ?? unknown) · \(createdAt ?? notSet) -> \(expiresAt ?? notSet)"
+            return "\(index). \(status ?? unknown) · 만료 \(expiration)"
         case .english:
-            return "\(index). \(status ?? unknown) · \(createdAt ?? notSet) -> \(expiresAt ?? notSet)"
+            return "\(index). \(status ?? unknown) · Expires \(expiration)"
         }
     }
 

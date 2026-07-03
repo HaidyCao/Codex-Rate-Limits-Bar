@@ -466,6 +466,37 @@ enum CodexBackend {
         try localUsageScanner.snapshot()
     }
 
+    private static func localUsageRootURLs() -> [URL] {
+        let sessionsRoot = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".codex")
+                .appendingPathComponent("sessions")
+                .path
+        let sessionsURL = URL(fileURLWithPath: sessionsRoot).standardizedFileURL
+
+        guard ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"] == nil else {
+            return [sessionsURL]
+        }
+
+        let archivedURL = sessionsURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("archived_sessions")
+            .standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: archivedURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              archivedURL.path != sessionsURL.path
+        else {
+            return [sessionsURL]
+        }
+
+        return [sessionsURL, archivedURL]
+    }
+
+    private static func localUsageSourceDescription(rootURLs: [URL]) -> String {
+        rootURLs.map(\.path).joined(separator: ",")
+    }
+
     private final class LocalUsageScanner: @unchecked Sendable {
         private let lock = NSLock()
         private var cache: LocalUsageScanCache?
@@ -483,15 +514,12 @@ enum CodexBackend {
             let dayStart = calendar.startOfDay(for: now)
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
             let localDate = CodexBackend.localDateString(now)
-            let sessionsRoot = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]
-                ?? FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent(".codex")
-                    .appendingPathComponent("sessions")
-                    .path
+            let rootURLs = CodexBackend.localUsageRootURLs()
+            let source = CodexBackend.localUsageSourceDescription(rootURLs: rootURLs)
 
-            let isColdScan = cache?.source != sessionsRoot || cache?.localDate != localDate
+            let isColdScan = cache?.source != source || cache?.localDate != localDate
             if isColdScan {
-                cache = LocalUsageScanCache(source: sessionsRoot, localDate: localDate, dayStart: dayStart, dayEnd: dayEnd)
+                cache = LocalUsageScanCache(source: source, localDate: localDate, dayStart: dayStart, dayEnd: dayEnd)
             } else {
                 cache?.dayStart = dayStart
                 cache?.dayEnd = dayEnd
@@ -501,8 +529,9 @@ enum CodexBackend {
                 throw RuntimeError("local usage cache unavailable")
             }
 
-            let rootURL = URL(fileURLWithPath: sessionsRoot)
-            let files = CodexBackend.walkJsonlFileInfos(root: rootURL, dayStart: dayStart)
+            let files = CodexBackend.deduplicatedJsonlFileInfos(rootURLs
+                .flatMap { CodexBackend.walkJsonlFileInfos(root: $0, dayStart: dayStart) }
+            )
             var stats = LocalUsageScanStats()
             stats.filesScanned = files.count
             stats.fullRescanFiles = isColdScan ? files.count : 0
@@ -818,11 +847,10 @@ enum CodexBackend {
         let visibleSource = credits.contains { $0.status == "available" }
             ? credits.filter { $0.status == "available" }
             : credits
-        let detailLabels = Array(visibleSource.prefix(3)).enumerated().map { index, credit in
+        let detailLabels = Array(visibleSource.prefix(4)).enumerated().map { index, credit in
             AppText.resetCreditDetail(
                 index: index + 1,
                 status: credit.statusLabel,
-                createdAt: credit.createdAtShortLabel,
                 expiresAt: credit.expiresAtShortLabel
             )
         }
@@ -896,11 +924,7 @@ enum CodexBackend {
 
     private static func emptyLocalUsageSnapshot(_ error: Error) -> LocalUsageSnapshot {
         let now = Date()
-        let source = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex")
-                .appendingPathComponent("sessions")
-                .path
+        let source = localUsageSourceDescription(rootURLs: localUsageRootURLs())
         return LocalUsageSnapshot(
             fetchedAtIso: ISO8601DateFormatter().string(from: now),
             source: source,
@@ -1104,6 +1128,23 @@ enum CodexBackend {
             files.append(JsonlFileInfo(url: file, modifiedAt: modifiedAt, size: UInt64(values.fileSize ?? 0)))
         }
         return files
+    }
+
+    private static func deduplicatedJsonlFileInfos(_ files: [JsonlFileInfo]) -> [JsonlFileInfo] {
+        var byFileName: [String: JsonlFileInfo] = [:]
+        for file in files {
+            let key = file.url.lastPathComponent
+            guard let existing = byFileName[key] else {
+                byFileName[key] = file
+                continue
+            }
+
+            if file.size > existing.size
+                || (file.size == existing.size && file.url.path < existing.url.path) {
+                byFileName[key] = file
+            }
+        }
+        return byFileName.values.sorted { $0.url.path < $1.url.path }
     }
 
     private static func sessionIdFromMeta(_ event: [String: Any]) -> String? {
@@ -1328,7 +1369,7 @@ enum CodexMCPServer {
             ],
             [
                 "name": "get_codex_local_usage",
-                "description": "Read today's machine-local Codex token usage from ~/.codex/sessions JSONL files.",
+                "description": "Read today's machine-local Codex token usage from active and archived Codex session JSONL files.",
                 "inputSchema": emptyInputSchema(),
             ],
             [
