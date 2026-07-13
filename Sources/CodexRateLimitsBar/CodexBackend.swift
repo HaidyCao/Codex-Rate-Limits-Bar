@@ -645,8 +645,9 @@ enum CodexBackend {
                     state.importedEventCount += 1
                 } else {
                     let sameSession = state.previousUsageSessionId == state.activeSessionId
-                    let regressed = sameSession && CodexBackend.usageRegressed(state.previousTotalUsage, currentTotalUsage)
-                    if let delta = CodexBackend.positiveDelta(state.previousTotalUsage, currentTotalUsage, sameSession: sameSession) {
+                    let baseline = sameSession ? state.previousTotalUsage : state.previousObservedTotalUsage
+                    let regressed = sameSession && CodexBackend.usageRegressed(baseline, currentTotalUsage)
+                    if let delta = CodexBackend.positiveDelta(baseline, currentTotalUsage, sameSession: sameSession) {
                         state.totals.add(delta)
                     } else {
                         state.duplicateEventCount += 1
@@ -666,6 +667,7 @@ enum CodexBackend {
                 state.previousTotalUsage = currentTotalUsage
             }
             state.previousUsageSessionId = state.activeSessionId
+            state.previousObservedTotalUsage = currentTotalUsage
         }
 
         private func makeSnapshot(cache: LocalUsageScanCache, filesScanned: Int, now: Date) -> LocalUsageSnapshot {
@@ -754,6 +756,7 @@ enum CodexBackend {
         var modifiedAt: Date?
         var pendingData = Data()
         var previousTotalUsage: TokenUsage?
+        var previousObservedTotalUsage: TokenUsage?
         var previousUsageSessionId: String?
         var primarySessionId: String?
         var activeSessionId: String?
