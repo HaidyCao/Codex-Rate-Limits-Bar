@@ -7,6 +7,7 @@ Tiny macOS menu bar app for Codex rate limits.
 - A second menu bar item shows today's local machine token usage:
   - Top line: consumed tokens, scaled to localized compact units.
   - Bottom line: cache hit rate, calculated as cached input tokens divided by input tokens.
+  - Visible by default and can be hidden from the menu settings.
   - Data source: `~/.codex/sessions/**/*.jsonl` and `~/.codex/archived_sessions/*.jsonl` token_count events.
 - The app, command-line data reader, and bundled MCP server are implemented in
   one Swift executable. Node.js is not required.

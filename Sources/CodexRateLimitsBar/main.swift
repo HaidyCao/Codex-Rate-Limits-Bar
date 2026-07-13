@@ -240,6 +240,21 @@ struct AutoLaunchManager {
     }
 }
 
+struct StatusItemPreferences {
+    static let localUsageStatusItemVisibleKey = "localUsageStatusItemVisible"
+
+    static var isLocalUsageStatusItemVisible: Bool {
+        guard UserDefaults.standard.object(forKey: localUsageStatusItemVisibleKey) != nil else {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: localUsageStatusItemVisibleKey)
+    }
+
+    static func setLocalUsageStatusItemVisible(_ visible: Bool) {
+        UserDefaults.standard.set(visible, forKey: localUsageStatusItemVisibleKey)
+    }
+}
+
 final class RateLimitsMenuView: NSView {
     private let cardView = RateLimitsCardView()
 
@@ -593,8 +608,8 @@ class ResetCreditsCardView: NSVisualEffectView {
     }
 }
 
-final class AutoLaunchMenuView: NSView {
-    private let cardView = AutoLaunchCardView()
+final class PreferencesMenuView: NSView {
+    private let cardView = PreferencesCardView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -611,21 +626,41 @@ final class AutoLaunchMenuView: NSView {
         addSubview(cardView)
     }
 
-    var isChecked: Bool {
-        cardView.isChecked
+    var isAutoLaunchChecked: Bool {
+        cardView.isAutoLaunchChecked
     }
 
-    func configure(target: AnyObject?, action: Selector) {
-        cardView.configure(target: target, action: action)
+    var isLocalUsageStatusItemChecked: Bool {
+        cardView.isLocalUsageStatusItemChecked
     }
 
-    func update(enabled: Bool) {
-        cardView.update(enabled: enabled)
+    func configure(
+        autoLaunchTarget: AnyObject?,
+        autoLaunchAction: Selector,
+        localUsageStatusItemTarget: AnyObject?,
+        localUsageStatusItemAction: Selector
+    ) {
+        cardView.configure(
+            autoLaunchTarget: autoLaunchTarget,
+            autoLaunchAction: autoLaunchAction,
+            localUsageStatusItemTarget: localUsageStatusItemTarget,
+            localUsageStatusItemAction: localUsageStatusItemAction
+        )
+    }
+
+    func updateAutoLaunch(enabled: Bool) {
+        cardView.updateAutoLaunch(enabled: enabled)
+    }
+
+    func updateLocalUsageStatusItem(visible: Bool) {
+        cardView.updateLocalUsageStatusItem(visible: visible)
     }
 }
 
-class AutoLaunchCardView: NSVisualEffectView {
-    private let checkbox = NSButton(checkboxWithTitle: AppText.launchAtLogin, target: nil, action: nil)
+class PreferencesCardView: NSVisualEffectView {
+    private let autoLaunchCheckbox = NSButton(checkboxWithTitle: AppText.launchAtLogin, target: nil, action: nil)
+    private let localUsageStatusItemCheckbox = NSButton(checkboxWithTitle: AppText.showLocalUsageStatusItem, target: nil, action: nil)
+    private let separator = NSBox()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -648,10 +683,14 @@ class AutoLaunchCardView: NSVisualEffectView {
         layer?.borderWidth = 0.5
         updateBorderColor()
 
-        checkbox.font = .systemFont(ofSize: 12, weight: .semibold)
-        checkbox.setButtonType(.switch)
+        for checkbox in [autoLaunchCheckbox, localUsageStatusItemCheckbox] {
+            checkbox.font = .systemFont(ofSize: 12, weight: .semibold)
+            checkbox.setButtonType(.switch)
+            addSubview(checkbox)
+        }
 
-        addSubview(checkbox)
+        separator.boxType = .separator
+        addSubview(separator)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -666,17 +705,32 @@ class AutoLaunchCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.1).cgColor
     }
 
-    var isChecked: Bool {
-        checkbox.state == .on
+    var isAutoLaunchChecked: Bool {
+        autoLaunchCheckbox.state == .on
     }
 
-    func configure(target: AnyObject?, action: Selector) {
-        checkbox.target = target
-        checkbox.action = action
+    var isLocalUsageStatusItemChecked: Bool {
+        localUsageStatusItemCheckbox.state == .on
     }
 
-    func update(enabled: Bool) {
-        checkbox.state = enabled ? .on : .off
+    func configure(
+        autoLaunchTarget: AnyObject?,
+        autoLaunchAction: Selector,
+        localUsageStatusItemTarget: AnyObject?,
+        localUsageStatusItemAction: Selector
+    ) {
+        autoLaunchCheckbox.target = autoLaunchTarget
+        autoLaunchCheckbox.action = autoLaunchAction
+        localUsageStatusItemCheckbox.target = localUsageStatusItemTarget
+        localUsageStatusItemCheckbox.action = localUsageStatusItemAction
+    }
+
+    func updateAutoLaunch(enabled: Bool) {
+        autoLaunchCheckbox.state = enabled ? .on : .off
+    }
+
+    func updateLocalUsageStatusItem(visible: Bool) {
+        localUsageStatusItemCheckbox.state = visible ? .on : .off
     }
 
     override var isFlipped: Bool {
@@ -685,8 +739,11 @@ class AutoLaunchCardView: NSVisualEffectView {
 
     override func layout() {
         super.layout()
-        let yOffset = floor((bounds.height - 20) / 2)
-        checkbox.frame = NSRect(x: 12, y: yOffset - 3, width: bounds.width - 24, height: 26)
+        let rowHeight = floor(bounds.height / 2)
+        let checkboxY = floor((rowHeight - 20) / 2) - 3
+        autoLaunchCheckbox.frame = NSRect(x: 12, y: checkboxY, width: bounds.width - 24, height: 26)
+        localUsageStatusItemCheckbox.frame = NSRect(x: 12, y: rowHeight + checkboxY, width: bounds.width - 24, height: 26)
+        separator.frame = NSRect(x: 12, y: rowHeight, width: bounds.width - 24, height: 1)
     }
 }
 
@@ -941,8 +998,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 224))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let autoLaunchItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let autoLaunchView = AutoLaunchMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 38))
+    private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 72))
     private var rateLimitsTimer: Timer?
     private var localUsageTimer: Timer?
     private var resetCreditsTimer: Timer?
@@ -963,6 +1020,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupTokenStatusItem()
         setupMenu()
         configureAutoLaunch()
+        configureLocalUsageStatusItemVisibility()
         refresh()
         localUsageTimer = Timer.scheduledTimer(timeInterval: 30, target: self, selector: #selector(timerRefreshLocalUsage), userInfo: nil, repeats: true)
         rateLimitsTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefreshRateLimits), userInfo: nil, repeats: true)
@@ -1002,9 +1060,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resetCreditsItem.view = resetCreditsView
         localUsagePanelItem.view = localUsagePanelView
         errorItem.isHidden = true
-        autoLaunchItem.view = autoLaunchView
-        autoLaunchView.configure(target: self, action: #selector(toggleAutoLaunch))
+        preferencesItem.view = preferencesView
+        preferencesView.configure(
+            autoLaunchTarget: self,
+            autoLaunchAction: #selector(toggleAutoLaunch),
+            localUsageStatusItemTarget: self,
+            localUsageStatusItemAction: #selector(toggleLocalUsageStatusItemVisibility)
+        )
         updateAutoLaunchMenu(enabled: AutoLaunchManager.preferredEnabled)
+        preferencesView.updateLocalUsageStatusItem(visible: StatusItemPreferences.isLocalUsageStatusItemVisible)
 
         menu.addItem(rateLimitsItem)
         menu.addItem(resetCreditsItem)
@@ -1016,7 +1080,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(localUsageDetailItem)
         menu.addItem(.separator())
         menu.addItem(errorItem)
-        menu.addItem(autoLaunchItem)
+        menu.addItem(preferencesItem)
         menu.addItem(.separator())
 
         let refreshItem = NSMenuItem(title: AppText.refreshNow, action: #selector(refreshFromMenu), keyEquivalent: "r")
@@ -1045,7 +1109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleAutoLaunch() {
-        setAutoLaunch(enabled: autoLaunchView.isChecked)
+        setAutoLaunch(enabled: preferencesView.isAutoLaunchChecked)
+    }
+
+    @objc private func toggleLocalUsageStatusItemVisibility() {
+        setLocalUsageStatusItemVisible(preferencesView.isLocalUsageStatusItemChecked)
     }
 
     @objc private func quit() {
@@ -1077,7 +1145,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateAutoLaunchMenu(enabled: Bool) {
-        autoLaunchView.update(enabled: enabled)
+        preferencesView.updateAutoLaunch(enabled: enabled)
+    }
+
+    private func configureLocalUsageStatusItemVisibility() {
+        updateLocalUsageStatusItemVisibility(visible: StatusItemPreferences.isLocalUsageStatusItemVisible)
+    }
+
+    private func setLocalUsageStatusItemVisible(_ visible: Bool) {
+        StatusItemPreferences.setLocalUsageStatusItemVisible(visible)
+        updateLocalUsageStatusItemVisibility(visible: visible)
+    }
+
+    private func updateLocalUsageStatusItemVisibility(visible: Bool) {
+        preferencesView.updateLocalUsageStatusItem(visible: visible)
+        tokenStatusItem.isVisible = visible
     }
 
     private func showAutoLaunchError(_ error: Error) {

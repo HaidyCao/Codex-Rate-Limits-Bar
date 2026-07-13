@@ -118,6 +118,16 @@ enum AppText {
         }
     }
 
+    static var showLocalUsageStatusItem: String {
+        switch language {
+        case .simplifiedChinese: return "显示消耗和命中状态栏"
+        case .traditionalChinese: return "顯示消耗與命中狀態列"
+        case .japanese: return "消費とヒット率をメニューバーに表示"
+        case .korean: return "사용량과 적중률을 메뉴 막대에 표시"
+        case .english: return "Show usage and cache hit in menu bar"
+        }
+    }
+
     static var refreshNow: String {
         switch language {
         case .simplifiedChinese: return "立即刷新"
