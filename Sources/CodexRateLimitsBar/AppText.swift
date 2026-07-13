@@ -18,16 +18,6 @@ enum AppText {
         }
     }
 
-    static var fiveHourLimit: String {
-        switch language {
-        case .simplifiedChinese: return "5 小时"
-        case .traditionalChinese: return "5 小時"
-        case .japanese: return "5時間"
-        case .korean: return "5시간"
-        case .english: return "5 hours"
-        }
-    }
-
     static var weeklyLimit: String {
         switch language {
         case .simplifiedChinese: return "1 周"
@@ -370,23 +360,23 @@ enum AppText {
         }
     }
 
-    static func rateLimitTooltip(primary: String, secondary: String, resetCount: Int?) -> String {
+    static func rateLimitTooltip(weekly: String, resetCount: Int?) -> String {
         switch language {
         case .simplifiedChinese:
             let suffix = resetCount.map { "，重置券 \($0)" } ?? ""
-            return "Codex 5 小时 \(primary)，1 周 \(secondary)\(suffix)"
+            return "Codex 1 周 \(weekly)\(suffix)"
         case .traditionalChinese:
             let suffix = resetCount.map { "，重置券 \($0)" } ?? ""
-            return "Codex 5 小時 \(primary)，1 週 \(secondary)\(suffix)"
+            return "Codex 1 週 \(weekly)\(suffix)"
         case .japanese:
             let suffix = resetCount.map { "、リセット券 \($0)" } ?? ""
-            return "Codex 5時間 \(primary)、1週間 \(secondary)\(suffix)"
+            return "Codex 1週間 \(weekly)\(suffix)"
         case .korean:
             let suffix = resetCount.map { ", 초기화권 \($0)" } ?? ""
-            return "Codex 5시간 \(primary), 1주 \(secondary)\(suffix)"
+            return "Codex 1주 \(weekly)\(suffix)"
         case .english:
             let suffix = resetCount.map { ", resets \($0)" } ?? ""
-            return "Codex 5h \(primary), week \(secondary)\(suffix)"
+            return "Codex week \(weekly)\(suffix)"
         }
     }
 

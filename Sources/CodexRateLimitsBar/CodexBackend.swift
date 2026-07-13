@@ -784,11 +784,12 @@ enum CodexBackend {
         for (limitId, value) in dictionaryValue(response["rateLimitsByLimitId"]) ?? [:] {
             byLimitId[limitId] = normalizeSnapshot(dictionaryValue(value))
         }
+        let weekly = rateLimits?.weeklyWindow
         let display = RateLimitDisplay(
-            primaryLabel: rateLimits?.primary.map { "5h \($0.remainingPercent)%" } ?? "5h --",
-            secondaryLabel: rateLimits?.secondary.map { "W \($0.remainingPercent)%" } ?? "W --",
-            primaryRemainingPercent: rateLimits?.primary?.remainingPercent,
-            secondaryRemainingPercent: rateLimits?.secondary?.remainingPercent
+            primaryLabel: weekly.map { "W \($0.remainingPercent)%" } ?? "W --",
+            secondaryLabel: nil,
+            primaryRemainingPercent: weekly?.remainingPercent,
+            secondaryRemainingPercent: nil
         )
         return RateLimitPayload(
             fetchedAtIso: isoNow(),
@@ -898,8 +899,8 @@ enum CodexBackend {
             rateLimits: nil,
             rateLimitsByLimitId: nil,
             display: RateLimitDisplay(
-                primaryLabel: "5h --",
-                secondaryLabel: "W --",
+                primaryLabel: "W --",
+                secondaryLabel: nil,
                 primaryRemainingPercent: nil,
                 secondaryRemainingPercent: nil
             ),
@@ -1367,7 +1368,7 @@ enum CodexMCPServer {
             ],
             [
                 "name": "get_codex_rate_limits",
-                "description": "Read the current Codex 5-hour and weekly rate-limit snapshot.",
+                "description": "Read the current Codex weekly rate-limit snapshot.",
                 "inputSchema": emptyInputSchema(),
             ],
             [

@@ -25,6 +25,31 @@ struct RateLimitSnapshot: Codable {
     let secondary: RateLimitWindow?
     let credits: CreditsSnapshot?
     let individualLimit: JSONValue?
+
+    var weeklyWindow: RateLimitWindow? {
+        if primary?.windowDurationMins == 10_080 {
+            return primary
+        }
+        if secondary?.windowDurationMins == 10_080 {
+            return secondary
+        }
+
+        if let primary, let secondary {
+            if let primaryDuration = primary.windowDurationMins,
+               let secondaryDuration = secondary.windowDurationMins {
+                return primaryDuration >= secondaryDuration ? primary : secondary
+            }
+            if secondary.windowDurationMins != nil {
+                return secondary
+            }
+            if primary.windowDurationMins != nil {
+                return primary
+            }
+            return secondary
+        }
+
+        return primary ?? secondary
+    }
 }
 
 struct RateLimitDisplay: Codable {
@@ -233,22 +258,20 @@ final class RateLimitsMenuView: NSView {
         addSubview(cardView)
     }
 
-    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
-        cardView.update(primary: primary, secondary: secondary)
+    func update(weekly: RateLimitWindow?) {
+        cardView.update(weekly: weekly)
     }
 }
 
 class RateLimitsDrawingView: NSView {
-    private var primary: RateLimitWindow?
-    private var secondary: RateLimitWindow?
+    private var weekly: RateLimitWindow?
 
     override var isFlipped: Bool {
         true
     }
 
-    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
-        self.primary = primary
-        self.secondary = secondary
+    func update(weekly: RateLimitWindow?) {
+        self.weekly = weekly
         needsDisplay = true
     }
 
@@ -261,15 +284,14 @@ class RateLimitsDrawingView: NSView {
         drawSymbol("chart.bar.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
         drawText(AppText.usageTitle, in: NSRect(x: 32, y: 10, width: 200, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
-        drawQuotaRow(label: AppText.fiveHourLimit, window: primary, includeDate: false, y: 36)
-        drawQuotaRow(label: AppText.weeklyLimit, window: secondary, includeDate: true, y: 74)
+        drawQuotaRow(label: AppText.weeklyLimit, window: weekly, y: 36)
     }
 
-    private func drawQuotaRow(label: String, window: RateLimitWindow?, includeDate: Bool, y: CGFloat) {
+    private func drawQuotaRow(label: String, window: RateLimitWindow?, y: CGFloat) {
         let remaining = window?.remainingPercent
         let colors = gradientColors(for: remaining)
         let value = remaining.map { "\($0)%" } ?? "--"
-        let reset = formatResetDisplay(window, includeDate: includeDate)
+        let reset = formatResetDisplay(window)
         let rightLabel = reset.isEmpty ? value : "\(value) · \(reset)"
 
         drawText(label, in: NSRect(x: 12, y: y, width: 120, height: 16), font: .systemFont(ofSize: 11, weight: .semibold), color: NSColor.secondaryLabelColor)
@@ -306,7 +328,7 @@ class RateLimitsDrawingView: NSView {
         return (NSColor(red: 0.15, green: 0.80, blue: 0.44, alpha: 1.0), NSColor(red: 0.18, green: 0.70, blue: 0.35, alpha: 1.0))
     }
 
-    private func formatResetDisplay(_ window: RateLimitWindow?, includeDate: Bool) -> String {
+    private func formatResetDisplay(_ window: RateLimitWindow?) -> String {
         guard let window else { return "" }
         let date: Date?
         if let resetsAt = window.resetsAt {
@@ -315,7 +337,7 @@ class RateLimitsDrawingView: NSView {
             date = parseIsoDate(window.resetsAtIso)
         }
         guard let date else { return "" }
-        return AppText.resetDisplay(date, includeDate: includeDate)
+        return AppText.resetDisplay(date, includeDate: true)
     }
 
     private func parseIsoDate(_ iso: String?) -> Date? {
@@ -416,8 +438,8 @@ class RateLimitsCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.08).cgColor
     }
 
-    func update(primary: RateLimitWindow?, secondary: RateLimitWindow?) {
-        drawingView.update(primary: primary, secondary: secondary)
+    func update(weekly: RateLimitWindow?) {
+        drawingView.update(weekly: weekly)
     }
 }
 
@@ -909,7 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tokenStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 130))
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 92))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -928,8 +950,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRefreshingRateLimits = false
     private var isRefreshingLocalUsage = false
     private var isRefreshingResetCredits = false
-    private var currentPrimaryRemaining: Int?
-    private var currentSecondaryRemaining: Int?
+    private var currentWeeklyRemaining: Int?
     private var currentResetAvailableCount: Int?
     private var currentRateLimitError: String?
     private var currentResetCreditsError: String?
@@ -951,7 +972,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         guard let button = statusItem.button else { return }
         button.imagePosition = .imageOnly
-        button.image = makeStatusImage(top: "5h --", bottom: "W --", style: .waiting)
+        updateStatusImage("W --", style: .waiting)
         button.toolTip = AppText.rateLimitStatusTooltip
         statusItem.menu = menu
     }
@@ -959,7 +980,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupTokenStatusItem() {
         guard let button = tokenStatusItem.button else { return }
         button.imagePosition = .imageOnly
-        button.image = makeStatusImage(top: AppText.consumption(nil), bottom: AppText.cacheHit(nil), style: .waiting)
+        button.image = makeStatusImage(top: AppText.consumption(nil), bottom: AppText.cacheHit(nil))
         button.toolTip = AppText.localUsageStatusTooltip
         tokenStatusItem.menu = menu
     }
@@ -1156,18 +1177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyRateLimits(_ payload: RateLimitPayload) {
-        let primary = payload.rateLimits?.primary
-        let secondary = payload.rateLimits?.secondary
-        let primaryRemaining = primary?.remainingPercent
-        let secondaryRemaining = secondary?.remainingPercent
-        currentPrimaryRemaining = primaryRemaining
-        currentSecondaryRemaining = secondaryRemaining
+        let weekly = payload.rateLimits?.weeklyWindow
+        let weeklyRemaining = weekly?.remainingPercent
+        currentWeeklyRemaining = weeklyRemaining
         currentRateLimitError = payload.rateLimitError
-        let top = primaryRemaining.map { "5h \($0)%" } ?? "5h --"
-        let bottom = secondaryRemaining.map { "W \($0)%" } ?? "W --"
-        updateStatusImage(top: top, bottom: bottom, style: style(for: primaryRemaining, secondaryRemaining))
+        let status = weeklyRemaining.map { "W \($0)%" } ?? "W --"
+        updateStatusImage(status, style: style(for: weeklyRemaining))
 
-        rateLimitsView.update(primary: primary, secondary: secondary)
+        rateLimitsView.update(weekly: weekly)
         updateRateLimitTooltip()
     }
 
@@ -1181,7 +1198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func apply(_ localUsage: LocalUsageSnapshot) {
         let consumption = localUsage.display?.consumptionLabel ?? AppText.consumption(TokenAmountFormatter.compact(localUsage.totalTokens))
         let cacheHit = AppText.cacheHit(formatPercent(localUsage.cacheHitPercent))
-        tokenStatusItem.button?.image = makeStatusImage(top: consumption, bottom: cacheHit, style: .normal)
+        tokenStatusItem.button?.image = makeStatusImage(top: consumption, bottom: cacheHit)
         tokenStatusItem.button?.toolTip = AppText.localUsageTooltip(tokens: TokenAmountFormatter.compact(localUsage.totalTokens), cacheHit: formatPercent(localUsage.cacheHitPercent))
 
         localConsumptionItem.title = consumption
@@ -1214,8 +1231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateRateLimitTooltip() {
         statusItem.button?.toolTip = AppText.rateLimitTooltip(
-            primary: currentPrimaryRemaining.map { "\($0)%" } ?? "--",
-            secondary: currentSecondaryRemaining.map { "\($0)%" } ?? "--",
+            weekly: currentWeeklyRemaining.map { "\($0)%" } ?? "--",
             resetCount: currentResetAvailableCount
         )
     }
@@ -1289,8 +1305,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return lines.joined(separator: "\n")
     }
 
-    private func updateStatusImage(top: String, bottom: String, style: StatusStyle) {
-        statusItem.button?.image = makeStatusImage(top: top, bottom: bottom, style: style)
+    private func updateStatusImage(_ text: String, style: StatusStyle) {
+        guard let button = statusItem.button else { return }
+        button.image = makeStatusImage(top: text)
+        button.contentTintColor = statusTintColor(for: style)
     }
 
     nonisolated private static func fetchStatus() -> Result<RateLimitPayload, Error> {
@@ -1332,11 +1350,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func style(for primary: Int?, _ secondary: Int?) -> StatusStyle {
-        let lowest = min(primary ?? 100, secondary ?? 100)
-        if lowest <= 10 { return .critical }
-        if lowest <= 25 { return .warning }
+    private func style(for remaining: Int?) -> StatusStyle {
+        let remaining = remaining ?? 100
+        if remaining <= 10 { return .critical }
+        if remaining <= 25 { return .warning }
         return .normal
+    }
+
+    private func statusTintColor(for style: StatusStyle) -> NSColor? {
+        switch style {
+        case .normal:
+            return nil
+        case .warning:
+            return .systemOrange
+        case .critical, .error:
+            return .systemRed
+        case .waiting:
+            return .secondaryLabelColor
+        }
     }
 
     private func formatPercent(_ percent: Double?) -> String {
@@ -1352,7 +1383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ("", text)
     }
 
-    private func makeStatusImage(top: String, bottom: String, style: StatusStyle) -> NSImage {
+    private func makeStatusImage(top: String, bottom: String? = nil) -> NSImage {
         let titleParagraph = NSMutableParagraphStyle()
         titleParagraph.alignment = .right
         let valueParagraph = NSMutableParagraphStyle()
@@ -1368,16 +1399,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .foregroundColor: NSColor.black,
             .paragraphStyle: valueParagraph,
         ]
-        let topLine = splitStatusLine(top)
-        let bottomLine = splitStatusLine(bottom)
-        let titleWidth = ceil(max(
-            NSString(string: topLine.title).size(withAttributes: titleAttributes).width,
-            NSString(string: bottomLine.title).size(withAttributes: titleAttributes).width
-        ))
-        let valueWidth = ceil(max(
-            NSString(string: topLine.value).size(withAttributes: valueAttributes).width,
-            NSString(string: bottomLine.value).size(withAttributes: valueAttributes).width
-        ))
+        let lines = [top, bottom].compactMap { $0 }.map { splitStatusLine($0) }
+        let titleWidth = ceil(lines.map {
+            NSString(string: $0.title).size(withAttributes: titleAttributes).width
+        }.max() ?? 0)
+        let valueWidth = ceil(lines.map {
+            NSString(string: $0.value).size(withAttributes: valueAttributes).width
+        }.max() ?? 0)
         let gap: CGFloat = 7
         let horizontalPadding: CGFloat = 4
         let contentWidth = titleWidth + gap + valueWidth
@@ -1389,10 +1417,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let originX = floor((size.width - contentWidth) / 2)
         let titleRect = NSRect(x: originX, y: 0, width: titleWidth, height: 12)
         let valueRect = NSRect(x: originX + titleWidth + gap, y: 0, width: valueWidth, height: 12)
-        NSString(string: topLine.title).draw(in: titleRect.offsetBy(dx: 0, dy: 14.5), withAttributes: titleAttributes)
-        NSString(string: topLine.value).draw(in: valueRect.offsetBy(dx: 0, dy: 14.5), withAttributes: valueAttributes)
-        NSString(string: bottomLine.title).draw(in: titleRect.offsetBy(dx: 0, dy: 2.5), withAttributes: titleAttributes)
-        NSString(string: bottomLine.value).draw(in: valueRect.offsetBy(dx: 0, dy: 2.5), withAttributes: valueAttributes)
+        for (index, line) in lines.enumerated() {
+            let y: CGFloat = lines.count == 1 ? 8.5 : (index == 0 ? 14.5 : 2.5)
+            NSString(string: line.title).draw(in: titleRect.offsetBy(dx: 0, dy: y), withAttributes: titleAttributes)
+            NSString(string: line.value).draw(in: valueRect.offsetBy(dx: 0, dy: y), withAttributes: valueAttributes)
+        }
         image.isTemplate = true
         return image
     }
