@@ -470,35 +470,57 @@ enum AppText {
     static func resetDateTime(_ iso: String?, short: Bool) -> String {
         guard let date = parseIsoDate(iso) else { return notSet }
         let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeZone = TimeZone.current
-        formatter.setLocalizedDateFormatFromTemplate(short ? "MMMdHHmm" : "yyyyMMMdHHmmss")
+        formatter.locale = systemFormatLocale
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate(short ? "MMMdjm" : "yyyyMMMdjmss")
         return formatter.string(from: date)
     }
 
     static func resetDisplay(_ date: Date, includeDate: Bool) -> String {
-        var calendar = Calendar.current
-        calendar.timeZone = TimeZone.current
+        var calendar = Calendar.autoupdatingCurrent
+        calendar.timeZone = .autoupdatingCurrent
         let display = DateFormatter()
-        display.locale = locale
-        display.timeZone = TimeZone.current
+        display.locale = systemFormatLocale
+        display.timeZone = .autoupdatingCurrent
         if includeDate || !calendar.isDateInToday(date) {
             display.setLocalizedDateFormatFromTemplate(
-                calendar.component(.year, from: date) == calendar.component(.year, from: Date()) ? "MMMdHHmm" : "yyyyMMMdHHmm"
+                calendar.component(.year, from: date) == calendar.component(.year, from: Date()) ? "MMMdjm" : "yyyyMMMdjm"
             )
         } else {
-            display.setLocalizedDateFormatFromTemplate("HHmm")
+            display.setLocalizedDateFormatFromTemplate("jm")
         }
         return display.string(from: date)
+    }
+
+    static func statusBarResetDate(_ date: Date) -> String {
+        var calendar = Calendar.autoupdatingCurrent
+        calendar.timeZone = .autoupdatingCurrent
+        let formatter = DateFormatter()
+        formatter.locale = systemFormatLocale
+        formatter.timeZone = .autoupdatingCurrent
+        let template: String
+        if calendar.isDateInToday(date) {
+            template = "jm"
+        } else if calendar.component(.year, from: date) == calendar.component(.year, from: Date()) {
+            template = "MMMd"
+        } else {
+            template = "yyyyMMMd"
+        }
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter.string(from: date)
+    }
+
+    private static var systemFormatLocale: Locale {
+        let globalDefaults = UserDefaults.standard.persistentDomain(forName: UserDefaults.globalDomain)
+        if let identifier = globalDefaults?["AppleLocale"] as? String, !identifier.isEmpty {
+            return Locale(identifier: identifier)
+        }
+        return .autoupdatingCurrent
     }
 
     private static var language: Language {
         let preferred = Locale.preferredLanguages.first ?? Locale.autoupdatingCurrent.identifier
         return language(for: preferred)
-    }
-
-    private static var locale: Locale {
-        Locale(identifier: Locale.preferredLanguages.first ?? Locale.autoupdatingCurrent.identifier)
     }
 
     private static func language(for identifier: String) -> Language {

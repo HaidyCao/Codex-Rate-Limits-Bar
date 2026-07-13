@@ -8,6 +8,23 @@ struct RateLimitWindow: Codable {
     let windowDurationMins: Int?
     let resetsAt: Int?
     let resetsAtIso: String?
+
+    var resetDate: Date? {
+        if let resetsAt {
+            return Date(timeIntervalSince1970: TimeInterval(resetsAt))
+        }
+        guard let resetsAtIso else { return nil }
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractionalFormatter.date(from: resetsAtIso) {
+            return date
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: resetsAtIso)
+    }
 }
 
 struct CreditsSnapshot: Codable {
@@ -33,22 +50,7 @@ struct RateLimitSnapshot: Codable {
         if secondary?.windowDurationMins == 10_080 {
             return secondary
         }
-
-        if let primary, let secondary {
-            if let primaryDuration = primary.windowDurationMins,
-               let secondaryDuration = secondary.windowDurationMins {
-                return primaryDuration >= secondaryDuration ? primary : secondary
-            }
-            if secondary.windowDurationMins != nil {
-                return secondary
-            }
-            if primary.windowDurationMins != nil {
-                return primary
-            }
-            return secondary
-        }
-
-        return primary ?? secondary
+        return nil
     }
 }
 
@@ -344,28 +346,8 @@ class RateLimitsDrawingView: NSView {
     }
 
     private func formatResetDisplay(_ window: RateLimitWindow?) -> String {
-        guard let window else { return "" }
-        let date: Date?
-        if let resetsAt = window.resetsAt {
-            date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
-        } else {
-            date = parseIsoDate(window.resetsAtIso)
-        }
-        guard let date else { return "" }
+        guard let date = window?.resetDate else { return "" }
         return AppText.resetDisplay(date, includeDate: true)
-    }
-
-    private func parseIsoDate(_ iso: String?) -> Date? {
-        guard let iso else { return nil }
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: iso) {
-            return date
-        }
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: iso)
     }
 
     private func drawRoundedRect(_ rect: NSRect, fill: NSColor, stroke: NSColor, radius: CGFloat) {
@@ -1264,7 +1246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         currentWeeklyRemaining = weeklyRemaining
         currentRateLimitError = payload.rateLimitError
         let status = weeklyRemaining.map { "W \($0)%" } ?? "W --"
-        updateStatusImage(status, style: style(for: weeklyRemaining))
+        let reset = weekly?.resetDate.map(AppText.statusBarResetDate)
+        updateStatusImage(status, reset: reset, style: style(for: weeklyRemaining))
 
         rateLimitsView.update(weekly: weekly)
         updateRateLimitTooltip()
@@ -1387,9 +1370,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return lines.joined(separator: "\n")
     }
 
-    private func updateStatusImage(_ text: String, style: StatusStyle) {
+    private func updateStatusImage(_ text: String, reset: String? = nil, style: StatusStyle) {
         guard let button = statusItem.button else { return }
-        button.image = makeStatusImage(top: text)
+        button.image = makeStatusImage(top: text, bottom: reset, centerBottom: reset != nil, fontSize: 10)
         button.contentTintColor = statusTintColor(for: style)
     }
 
@@ -1465,12 +1448,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ("", text)
     }
 
-    private func makeStatusImage(top: String, bottom: String? = nil) -> NSImage {
+    private func makeStatusImage(
+        top: String,
+        bottom: String? = nil,
+        centerBottom: Bool = false,
+        fontSize: CGFloat = 11
+    ) -> NSImage {
         let titleParagraph = NSMutableParagraphStyle()
         titleParagraph.alignment = .right
         let valueParagraph = NSMutableParagraphStyle()
         valueParagraph.alignment = .left
-        let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+        let centeredParagraph = NSMutableParagraphStyle()
+        centeredParagraph.alignment = .center
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .bold)
         let titleAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.black,
@@ -1481,28 +1471,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .foregroundColor: NSColor.black,
             .paragraphStyle: valueParagraph,
         ]
-        let lines = [top, bottom].compactMap { $0 }.map { splitStatusLine($0) }
-        let titleWidth = ceil(lines.map {
+        let centeredAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.black,
+            .paragraphStyle: centeredParagraph,
+        ]
+        let rawLines = [top, bottom].compactMap { $0 }
+        let lines = rawLines.map { splitStatusLine($0) }
+        let columnLines = centerBottom && lines.count > 1 ? [lines[0]] : lines
+        let titleWidth = ceil(columnLines.map {
             NSString(string: $0.title).size(withAttributes: titleAttributes).width
         }.max() ?? 0)
-        let valueWidth = ceil(lines.map {
+        let valueWidth = ceil(columnLines.map {
             NSString(string: $0.value).size(withAttributes: valueAttributes).width
         }.max() ?? 0)
         let gap: CGFloat = 7
         let horizontalPadding: CGFloat = 4
-        let contentWidth = titleWidth + gap + valueWidth
+        let columnContentWidth = titleWidth + gap + valueWidth
+        let centeredBottomWidth = centerBottom && rawLines.count > 1
+            ? ceil(NSString(string: rawLines[1]).size(withAttributes: centeredAttributes).width)
+            : 0
+        let contentWidth = max(columnContentWidth, centeredBottomWidth)
         let size = NSSize(width: max(58, contentWidth + horizontalPadding * 2), height: 28)
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
 
-        let originX = floor((size.width - contentWidth) / 2)
+        let originX = floor((size.width - columnContentWidth) / 2)
         let titleRect = NSRect(x: originX, y: 0, width: titleWidth, height: 12)
         let valueRect = NSRect(x: originX + titleWidth + gap, y: 0, width: valueWidth, height: 12)
         for (index, line) in lines.enumerated() {
             let y: CGFloat = lines.count == 1 ? 8.5 : (index == 0 ? 14.5 : 2.5)
-            NSString(string: line.title).draw(in: titleRect.offsetBy(dx: 0, dy: y), withAttributes: titleAttributes)
-            NSString(string: line.value).draw(in: valueRect.offsetBy(dx: 0, dy: y), withAttributes: valueAttributes)
+            if centerBottom && index == 1 {
+                let centeredRect = NSRect(x: 0, y: y, width: size.width, height: 12)
+                NSString(string: rawLines[index]).draw(in: centeredRect, withAttributes: centeredAttributes)
+            } else {
+                NSString(string: line.title).draw(in: titleRect.offsetBy(dx: 0, dy: y), withAttributes: titleAttributes)
+                NSString(string: line.value).draw(in: valueRect.offsetBy(dx: 0, dy: y), withAttributes: valueAttributes)
+            }
         }
         image.isTemplate = true
         return image

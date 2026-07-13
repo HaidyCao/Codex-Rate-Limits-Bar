@@ -2,7 +2,7 @@
 
 Tiny macOS menu bar app for Codex rate limits.
 
-- Rate-limit status item: weekly remaining quota, shown as `W 92%`.
+- Rate-limit status item: weekly remaining quota, shown as `W 92%`, with the next reset below in the system date/time format (time today, date otherwise, and year only when needed).
 - Data source: `codex app-server --stdio` via `account/rateLimits/read`.
 - A second menu bar item shows today's local machine token usage:
   - Top line: consumed tokens, scaled to localized compact units.
