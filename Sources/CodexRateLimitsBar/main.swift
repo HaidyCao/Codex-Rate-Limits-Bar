@@ -1431,7 +1431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .critical, .error:
             return .systemRed
         case .waiting:
-            return .secondaryLabelColor
+            return nil
         }
     }
 
