@@ -1,6 +1,6 @@
 import Foundation
 
-enum TokenAmountFormatter {
+public enum TokenAmountFormatter {
     private enum UnitSystem {
         case simplifiedChinese
         case traditionalChinese
@@ -9,7 +9,7 @@ enum TokenAmountFormatter {
         case western
     }
 
-    static func compact(
+    public static func compact(
         _ tokens: Int64,
         maximumFractionDigits: Int = 2,
         locale: Locale = .autoupdatingCurrent,

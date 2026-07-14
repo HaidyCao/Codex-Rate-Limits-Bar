@@ -1,144 +1,8 @@
 import AppKit
+import CodexRateLimitsCore
 import Darwin
 import Foundation
-
-struct RateLimitWindow: Codable {
-    let usedPercent: Int
-    let remainingPercent: Int
-    let windowDurationMins: Int?
-    let resetsAt: Int?
-    let resetsAtIso: String?
-
-    var resetDate: Date? {
-        if let resetsAt {
-            return Date(timeIntervalSince1970: TimeInterval(resetsAt))
-        }
-        guard let resetsAtIso else { return nil }
-
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractionalFormatter.date(from: resetsAtIso) {
-            return date
-        }
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: resetsAtIso)
-    }
-}
-
-struct CreditsSnapshot: Codable {
-    let hasCredits: Bool
-    let unlimited: Bool
-    let balance: String?
-}
-
-struct RateLimitSnapshot: Codable {
-    let limitId: String?
-    let limitName: String?
-    let planType: String?
-    let rateLimitReachedType: String?
-    let primary: RateLimitWindow?
-    let secondary: RateLimitWindow?
-    let credits: CreditsSnapshot?
-    let individualLimit: JSONValue?
-
-    var weeklyWindow: RateLimitWindow? {
-        if primary?.windowDurationMins == 10_080 {
-            return primary
-        }
-        if secondary?.windowDurationMins == 10_080 {
-            return secondary
-        }
-        return nil
-    }
-}
-
-struct RateLimitDisplay: Codable {
-    let primaryLabel: String?
-    let secondaryLabel: String?
-    let primaryRemainingPercent: Int?
-    let secondaryRemainingPercent: Int?
-}
-
-struct RateLimitPayload: Codable {
-    let fetchedAtIso: String
-    let rateLimits: RateLimitSnapshot?
-    let rateLimitsByLimitId: [String: RateLimitSnapshot]?
-    let display: RateLimitDisplay?
-    let resetCredits: ResetCreditsSnapshot?
-    let localUsage: LocalUsageSnapshot?
-    let rateLimitError: String?
-    let localUsageError: String?
-    let usage: JSONValue?
-}
-
-struct ResetCreditItem: Codable {
-    let id: String?
-    let resetType: String?
-    let typeLabel: String?
-    let status: String?
-    let statusLabel: String?
-    let createdAtIso: String?
-    let expiresAtIso: String?
-    let createdAtLabel: String?
-    let expiresAtLabel: String?
-    let createdAtShortLabel: String?
-    let expiresAtShortLabel: String?
-}
-
-struct ResetCreditsDisplay: Codable {
-    let summaryLabel: String?
-    let categoryLabel: String?
-    let detailLabels: [String]?
-}
-
-struct ResetCreditsSnapshot: Codable {
-    let fetchedAtIso: String
-    let availableCount: Int?
-    let credits: [ResetCreditItem]
-    let error: String?
-    let display: ResetCreditsDisplay?
-}
-
-struct LocalUsageDisplay: Codable {
-    let consumptionLabel: String?
-    let cacheHitLabel: String?
-}
-
-struct LocalUsageTopFile: Codable {
-    let file: String
-    let eventCount: Int
-    let duplicateEventCount: Int
-    let importedEventCount: Int
-    let regressionEventCount: Int
-    let primarySessionId: String?
-    let totalTokens: Int64
-    let lastEventAtIso: String?
-}
-
-struct LocalUsageSnapshot: Codable {
-    let fetchedAtIso: String
-    let source: String?
-    let timezone: String?
-    let localDate: String
-    let inputTokens: Int64
-    let cachedInputTokens: Int64
-    let outputTokens: Int64
-    let reasoningOutputTokens: Int64
-    let totalTokens: Int64
-    let cacheHitPercent: Double?
-    let eventCount: Int
-    let duplicateEventCount: Int
-    let importedEventCount: Int
-    let regressionEventCount: Int
-    let filesScanned: Int
-    let filesWithEvents: Int
-    let parseErrorCount: Int
-    let error: String?
-    let topFiles: [LocalUsageTopFile]?
-    let display: LocalUsageDisplay?
-}
+import UserNotifications
 
 struct AutoLaunchManager {
     static let label = "local.codex.rate-limits-bar.autostart"
@@ -257,6 +121,23 @@ struct StatusItemPreferences {
     }
 }
 
+struct QuotaAlertPreferences {
+    private static let enabledKey = "quotaAlertsEnabled"
+
+    static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: enabledKey)
+    }
+
+    static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: enabledKey)
+    }
+}
+
+private struct RateLimitUIUpdate: Sendable {
+    let weekly: RateLimitWindow?
+    let error: String?
+}
+
 final class RateLimitsMenuView: NSView {
     private let cardView = RateLimitsCardView()
 
@@ -275,20 +156,22 @@ final class RateLimitsMenuView: NSView {
         addSubview(cardView)
     }
 
-    func update(weekly: RateLimitWindow?) {
-        cardView.update(weekly: weekly)
+    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
+        cardView.update(weekly: weekly, forecast: forecast)
     }
 }
 
 class RateLimitsDrawingView: NSView {
     private var weekly: RateLimitWindow?
+    private var forecast: QuotaForecast?
 
     override var isFlipped: Bool {
         true
     }
 
-    func update(weekly: RateLimitWindow?) {
+    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
         self.weekly = weekly
+        self.forecast = forecast
         needsDisplay = true
     }
 
@@ -302,6 +185,7 @@ class RateLimitsDrawingView: NSView {
         drawText(AppText.usageTitle, in: NSRect(x: 32, y: 10, width: 200, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
         drawQuotaRow(label: AppText.weeklyLimit, window: weekly, y: 36)
+        drawForecast(forecast, y: 72)
     }
 
     private func drawQuotaRow(label: String, window: RateLimitWindow?, y: CGFloat) {
@@ -330,16 +214,55 @@ class RateLimitsDrawingView: NSView {
                 }
             }
         }
+
+        if let budget = forecast?.budgetRemainingPercent {
+            let ratio = max(0, min(1, CGFloat(budget) / 100))
+            let markerX = barRect.minX + ratio * barRect.width
+            let markerColor = NSColor.labelColor.withAlphaComponent(0.78)
+            let marker = NSBezierPath()
+            marker.move(to: NSPoint(x: markerX, y: barRect.minY - 2))
+            marker.line(to: NSPoint(x: markerX, y: barRect.maxY + 2))
+            marker.lineWidth = 1.5
+            markerColor.setStroke()
+            marker.stroke()
+        }
+    }
+
+    private func drawForecast(_ forecast: QuotaForecast?, y: CGFloat) {
+        guard let forecast else {
+            drawSymbol("waveform.path.ecg", in: NSRect(x: 12, y: y, width: 14, height: 14), color: .tertiaryLabelColor)
+            drawText(AppText.quotaForecastLabelPlaceholder, in: NSRect(x: 32, y: y - 1, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: .secondaryLabelColor)
+            return
+        }
+
+        let color: NSColor
+        let symbol: String
+        switch forecast.status {
+        case .exhausted:
+            color = .systemRed
+            symbol = "exclamationmark.circle.fill"
+        case .atRisk:
+            color = .systemOrange
+            symbol = "exclamationmark.triangle.fill"
+        case .onPace:
+            color = .systemGreen
+            symbol = "checkmark.circle.fill"
+        case .insufficientData:
+            color = .secondaryLabelColor
+            symbol = "waveform.path.ecg"
+        }
+        drawSymbol(symbol, in: NSRect(x: 12, y: y, width: 14, height: 14), color: color)
+        drawText(AppText.quotaForecastLabel(forecast), in: NSRect(x: 32, y: y - 1, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: color)
     }
 
     private func gradientColors(for remaining: Int?) -> (start: NSColor, end: NSColor) {
         guard let remaining else {
             return (NSColor.tertiaryLabelColor, NSColor.tertiaryLabelColor)
         }
-        if remaining < 10 {
+        if remaining <= 10 {
             return (NSColor(red: 0.92, green: 0.30, blue: 0.26, alpha: 1.0), NSColor(red: 0.82, green: 0.20, blue: 0.16, alpha: 1.0))
         }
-        if remaining < 25 {
+        if remaining <= 25 {
             return (NSColor(red: 0.95, green: 0.77, blue: 0.06, alpha: 1.0), NSColor(red: 0.90, green: 0.65, blue: 0.04, alpha: 1.0))
         }
         return (NSColor(red: 0.15, green: 0.80, blue: 0.44, alpha: 1.0), NSColor(red: 0.18, green: 0.70, blue: 0.35, alpha: 1.0))
@@ -435,8 +358,8 @@ class RateLimitsCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.08).cgColor
     }
 
-    func update(weekly: RateLimitWindow?) {
-        drawingView.update(weekly: weekly)
+    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
+        drawingView.update(weekly: weekly, forecast: forecast)
     }
 }
 
@@ -616,17 +539,25 @@ final class PreferencesMenuView: NSView {
         cardView.isLocalUsageStatusItemChecked
     }
 
+    var isQuotaAlertsChecked: Bool {
+        cardView.isQuotaAlertsChecked
+    }
+
     func configure(
         autoLaunchTarget: AnyObject?,
         autoLaunchAction: Selector,
         localUsageStatusItemTarget: AnyObject?,
-        localUsageStatusItemAction: Selector
+        localUsageStatusItemAction: Selector,
+        quotaAlertsTarget: AnyObject?,
+        quotaAlertsAction: Selector
     ) {
         cardView.configure(
             autoLaunchTarget: autoLaunchTarget,
             autoLaunchAction: autoLaunchAction,
             localUsageStatusItemTarget: localUsageStatusItemTarget,
-            localUsageStatusItemAction: localUsageStatusItemAction
+            localUsageStatusItemAction: localUsageStatusItemAction,
+            quotaAlertsTarget: quotaAlertsTarget,
+            quotaAlertsAction: quotaAlertsAction
         )
     }
 
@@ -637,12 +568,18 @@ final class PreferencesMenuView: NSView {
     func updateLocalUsageStatusItem(visible: Bool) {
         cardView.updateLocalUsageStatusItem(visible: visible)
     }
+
+    func updateQuotaAlerts(enabled: Bool) {
+        cardView.updateQuotaAlerts(enabled: enabled)
+    }
 }
 
 class PreferencesCardView: NSVisualEffectView {
     private let autoLaunchCheckbox = NSButton(checkboxWithTitle: AppText.launchAtLogin, target: nil, action: nil)
     private let localUsageStatusItemCheckbox = NSButton(checkboxWithTitle: AppText.showLocalUsageStatusItem, target: nil, action: nil)
-    private let separator = NSBox()
+    private let quotaAlertsCheckbox = NSButton(checkboxWithTitle: AppText.enableQuotaAlerts, target: nil, action: nil)
+    private let firstSeparator = NSBox()
+    private let secondSeparator = NSBox()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -665,14 +602,16 @@ class PreferencesCardView: NSVisualEffectView {
         layer?.borderWidth = 0.5
         updateBorderColor()
 
-        for checkbox in [autoLaunchCheckbox, localUsageStatusItemCheckbox] {
+        for checkbox in [autoLaunchCheckbox, localUsageStatusItemCheckbox, quotaAlertsCheckbox] {
             checkbox.font = .systemFont(ofSize: 12, weight: .semibold)
             checkbox.setButtonType(.switch)
             addSubview(checkbox)
         }
 
-        separator.boxType = .separator
-        addSubview(separator)
+        for separator in [firstSeparator, secondSeparator] {
+            separator.boxType = .separator
+            addSubview(separator)
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -695,16 +634,24 @@ class PreferencesCardView: NSVisualEffectView {
         localUsageStatusItemCheckbox.state == .on
     }
 
+    var isQuotaAlertsChecked: Bool {
+        quotaAlertsCheckbox.state == .on
+    }
+
     func configure(
         autoLaunchTarget: AnyObject?,
         autoLaunchAction: Selector,
         localUsageStatusItemTarget: AnyObject?,
-        localUsageStatusItemAction: Selector
+        localUsageStatusItemAction: Selector,
+        quotaAlertsTarget: AnyObject?,
+        quotaAlertsAction: Selector
     ) {
         autoLaunchCheckbox.target = autoLaunchTarget
         autoLaunchCheckbox.action = autoLaunchAction
         localUsageStatusItemCheckbox.target = localUsageStatusItemTarget
         localUsageStatusItemCheckbox.action = localUsageStatusItemAction
+        quotaAlertsCheckbox.target = quotaAlertsTarget
+        quotaAlertsCheckbox.action = quotaAlertsAction
     }
 
     func updateAutoLaunch(enabled: Bool) {
@@ -715,17 +662,23 @@ class PreferencesCardView: NSVisualEffectView {
         localUsageStatusItemCheckbox.state = visible ? .on : .off
     }
 
+    func updateQuotaAlerts(enabled: Bool) {
+        quotaAlertsCheckbox.state = enabled ? .on : .off
+    }
+
     override var isFlipped: Bool {
         true
     }
 
     override func layout() {
         super.layout()
-        let rowHeight = floor(bounds.height / 2)
+        let rowHeight = floor(bounds.height / 3)
         let checkboxY = floor((rowHeight - 20) / 2) - 3
         autoLaunchCheckbox.frame = NSRect(x: 12, y: checkboxY, width: bounds.width - 24, height: 26)
         localUsageStatusItemCheckbox.frame = NSRect(x: 12, y: rowHeight + checkboxY, width: bounds.width - 24, height: 26)
-        separator.frame = NSRect(x: 12, y: rowHeight, width: bounds.width - 24, height: 1)
+        quotaAlertsCheckbox.frame = NSRect(x: 12, y: rowHeight * 2 + checkboxY, width: bounds.width - 24, height: 26)
+        firstSeparator.frame = NSRect(x: 12, y: rowHeight, width: bounds.width - 24, height: 1)
+        secondSeparator.frame = NSRect(x: 12, y: rowHeight * 2, width: bounds.width - 24, height: 1)
     }
 }
 
@@ -965,12 +918,18 @@ class LocalUsageCardView: NSVisualEffectView {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let tokenStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let notificationCenter = UNUserNotificationCenter.current()
+    private let quotaMonitor = QuotaMonitor()
+    private let rateLimitsQueue = DispatchQueue(
+        label: "local.codex.rate-limits-bar.rate-limits",
+        qos: .utility
+    )
     private let menu = NSMenu()
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 92))
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 112))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -981,19 +940,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 224))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 72))
+    private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
     private var rateLimitsTimer: Timer?
     private var localUsageTimer: Timer?
     private var resetCreditsTimer: Timer?
-    private var isRefreshing = false
     private var isRefreshingRateLimits = false
     private var isRefreshingLocalUsage = false
     private var isRefreshingResetCredits = false
     private var currentWeeklyRemaining: Int?
+    private var currentQuotaForecast: QuotaForecast?
     private var currentResetAvailableCount: Int?
     private var currentRateLimitError: String?
     private var currentResetCreditsError: String?
     private var currentLocalUsageError: String?
+    private var currentQuotaMonitorError: String?
+    private var currentNotificationError: String?
+    private var quotaAlertsAuthorized = false
     private var lastLoggedErrorDetails: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1003,7 +965,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenu()
         configureAutoLaunch()
         configureLocalUsageStatusItemVisibility()
-        refresh()
+        configureQuotaAlerts()
+        refreshRateLimits()
+        refreshResetCredits()
+        refreshLocalUsage()
         localUsageTimer = Timer.scheduledTimer(timeInterval: 30, target: self, selector: #selector(timerRefreshLocalUsage), userInfo: nil, repeats: true)
         rateLimitsTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefreshRateLimits), userInfo: nil, repeats: true)
         resetCreditsTimer = Timer.scheduledTimer(timeInterval: 600, target: self, selector: #selector(timerRefreshResetCredits), userInfo: nil, repeats: true)
@@ -1012,7 +977,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         guard let button = statusItem.button else { return }
         button.imagePosition = .imageOnly
-        updateStatusImage("W --", style: .waiting)
+        updateStatusImage("W --")
         button.toolTip = AppText.rateLimitStatusTooltip
         statusItem.menu = menu
     }
@@ -1020,6 +985,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupTokenStatusItem() {
         guard let button = tokenStatusItem.button else { return }
         button.imagePosition = .imageOnly
+        button.contentTintColor = nil
         button.image = makeStatusImage(top: AppText.consumption(nil), bottom: AppText.cacheHit(nil))
         button.toolTip = AppText.localUsageStatusTooltip
         tokenStatusItem.menu = menu
@@ -1047,10 +1013,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             autoLaunchTarget: self,
             autoLaunchAction: #selector(toggleAutoLaunch),
             localUsageStatusItemTarget: self,
-            localUsageStatusItemAction: #selector(toggleLocalUsageStatusItemVisibility)
+            localUsageStatusItemAction: #selector(toggleLocalUsageStatusItemVisibility),
+            quotaAlertsTarget: self,
+            quotaAlertsAction: #selector(toggleQuotaAlerts)
         )
         updateAutoLaunchMenu(enabled: AutoLaunchManager.preferredEnabled)
         preferencesView.updateLocalUsageStatusItem(visible: StatusItemPreferences.isLocalUsageStatusItemVisible)
+        preferencesView.updateQuotaAlerts(enabled: QuotaAlertPreferences.isEnabled)
 
         menu.addItem(rateLimitsItem)
         menu.addItem(resetCreditsItem)
@@ -1075,7 +1044,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func refreshFromMenu() {
-        refresh()
+        refreshRateLimits()
+        refreshResetCredits()
+        refreshLocalUsage()
     }
 
     @objc private func timerRefreshRateLimits() {
@@ -1096,6 +1067,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLocalUsageStatusItemVisibility() {
         setLocalUsageStatusItemVisible(preferencesView.isLocalUsageStatusItemChecked)
+    }
+
+    @objc private func toggleQuotaAlerts() {
+        if preferencesView.isQuotaAlertsChecked {
+            checkQuotaAlertAuthorization(requestIfNeeded: true)
+        } else {
+            setQuotaAlertsEnabled(false)
+        }
     }
 
     @objc private func quit() {
@@ -1144,51 +1123,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tokenStatusItem.isVisible = visible
     }
 
+    private func configureQuotaAlerts() {
+        notificationCenter.delegate = self
+        let enabled = QuotaAlertPreferences.isEnabled
+        preferencesView.updateQuotaAlerts(enabled: enabled)
+        guard enabled else { return }
+        checkQuotaAlertAuthorization(requestIfNeeded: true)
+    }
+
+    private func checkQuotaAlertAuthorization(requestIfNeeded: Bool) {
+        notificationCenter.getNotificationSettings { [weak self] settings in
+            let authorizationStatus = settings.authorizationStatus.rawValue
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch UNAuthorizationStatus(rawValue: authorizationStatus) {
+                case .authorized, .provisional, .ephemeral:
+                    self.setQuotaAlertsEnabled(true)
+                case .notDetermined where requestIfNeeded:
+                    self.requestQuotaAlertAuthorization()
+                case .denied:
+                    self.setQuotaAlertsEnabled(false, error: AppText.notificationPermissionDenied)
+                case .notDetermined:
+                    self.setQuotaAlertsEnabled(false)
+                case .some(_), nil:
+                    self.setQuotaAlertsEnabled(false, error: AppText.notificationPermissionDenied)
+                }
+            }
+        }
+    }
+
+    private func requestQuotaAlertAuthorization() {
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let error {
+                    self.setQuotaAlertsEnabled(false, error: Self.normalizedErrorText(error))
+                } else if granted {
+                    self.setQuotaAlertsEnabled(true)
+                } else {
+                    self.setQuotaAlertsEnabled(false, error: AppText.notificationPermissionDenied)
+                }
+            }
+        }
+    }
+
+    private func setQuotaAlertsEnabled(_ enabled: Bool, error: String? = nil) {
+        QuotaAlertPreferences.setEnabled(enabled)
+        quotaAlertsAuthorized = enabled
+        currentNotificationError = error
+        preferencesView.updateQuotaAlerts(enabled: enabled)
+        updateCombinedError()
+        if enabled {
+            refreshRateLimits()
+        }
+    }
+
     private func showAutoLaunchError(_ error: Error) {
         errorItem.title = AppText.autoLaunchFailure
         errorItem.toolTip = Self.errorToolTip(error)
         errorItem.isHidden = false
     }
 
-    private func refresh() {
-        guard !isRefreshing else { return }
-        isRefreshing = true
+    private func refreshRateLimits() {
+        guard !isRefreshingRateLimits else { return }
+        isRefreshingRateLimits = true
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.fetchStatus()
+        rateLimitsQueue.async { [weak self] in
+            let result = Self.fetchRateLimits()
             DispatchQueue.main.async {
-                self?.isRefreshing = false
-                switch result {
-                case .success(let payload):
-                    self?.apply(payload)
-                case .failure(let error):
-                    self?.apply(error)
-                }
+                self?.processFetchedRateLimits(result)
             }
         }
     }
 
-    private func refreshRateLimits() {
-        guard !isRefreshing, !isRefreshingRateLimits else { return }
-        isRefreshingRateLimits = true
+    private func processFetchedRateLimits(_ result: Result<RateLimitPayload, Error>) {
+        switch result {
+        case .failure(let error):
+            isRefreshingRateLimits = false
+            applyRateLimitsError(error)
+        case .success(let payload):
+            let update = RateLimitUIUpdate(
+                weekly: payload.rateLimits?.weeklyWindow,
+                error: payload.rateLimitError
+            )
+            guard let weekly = update.weekly else {
+                isRefreshingRateLimits = false
+                applyRateLimits(update, monitor: nil)
+                updateCombinedError()
+                return
+            }
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.fetchRateLimits()
-            DispatchQueue.main.async {
-                self?.isRefreshingRateLimits = false
-                switch result {
-                case .success(let payload):
-                    self?.applyRateLimits(payload)
-                    self?.updateCombinedError()
-                case .failure(let error):
-                    self?.applyRateLimitsError(error)
+            let alertsEnabled = QuotaAlertPreferences.isEnabled && quotaAlertsAuthorized
+            let quotaMonitor = quotaMonitor
+            rateLimitsQueue.async { [weak self] in
+                let monitor = quotaMonitor.update(window: weekly, alertsEnabled: alertsEnabled)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isRefreshingRateLimits = false
+                    self.applyRateLimits(update, monitor: monitor)
+                    self.updateCombinedError()
                 }
             }
         }
     }
 
     private func refreshLocalUsage() {
-        guard !isRefreshing, !isRefreshingLocalUsage else { return }
+        guard !isRefreshingLocalUsage else { return }
         isRefreshingLocalUsage = true
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -1208,7 +1248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshResetCredits() {
-        guard !isRefreshing, !isRefreshingResetCredits else { return }
+        guard !isRefreshingResetCredits else { return }
         isRefreshingResetCredits = true
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -1226,31 +1266,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func apply(_ payload: RateLimitPayload) {
-        applyRateLimits(payload)
-        if let resetCredits = payload.resetCredits {
-            apply(resetCredits)
-        }
-        if let localUsage = payload.localUsage {
-            apply(localUsage)
-        }
-        currentRateLimitError = payload.rateLimitError
-        currentResetCreditsError = payload.resetCredits?.error
-        currentLocalUsageError = payload.localUsageError
-        updateCombinedError()
-    }
-
-    private func applyRateLimits(_ payload: RateLimitPayload) {
-        let weekly = payload.rateLimits?.weeklyWindow
+    private func applyRateLimits(_ update: RateLimitUIUpdate, monitor: QuotaMonitorSnapshot?) {
+        let weekly = update.weekly
         let weeklyRemaining = weekly?.remainingPercent
         currentWeeklyRemaining = weeklyRemaining
-        currentRateLimitError = payload.rateLimitError
+        currentRateLimitError = update.error
+        if weekly != nil, let monitor {
+            currentQuotaForecast = monitor.forecast
+            currentQuotaMonitorError = monitor.persistenceError
+            for alert in monitor.alerts {
+                deliverQuotaAlert(alert)
+            }
+        } else {
+            currentQuotaForecast = nil
+            currentQuotaMonitorError = nil
+        }
         let status = weeklyRemaining.map { "W \($0)%" } ?? "W --"
         let reset = weekly?.resetDate.map(AppText.statusBarResetDate)
-        updateStatusImage(status, reset: reset, style: style(for: weeklyRemaining))
+        updateStatusImage(status, reset: reset)
 
-        rateLimitsView.update(weekly: weekly)
+        rateLimitsView.update(weekly: weekly, forecast: currentQuotaForecast)
         updateRateLimitTooltip()
+    }
+
+    private func deliverQuotaAlert(_ event: QuotaAlertEvent) {
+        let content = UNMutableNotificationContent()
+        content.title = AppText.quotaAlertTitle(event)
+        content.body = AppText.quotaAlertBody(event)
+        content.sound = .default
+        content.threadIdentifier = "quota-alerts"
+        let request = UNNotificationRequest(identifier: event.identifier, content: content, trigger: nil)
+        notificationCenter.add(request) { [weak self] error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.currentNotificationError = error.map(Self.normalizedErrorText)
+                self.updateCombinedError()
+            }
+        }
     }
 
     private func apply(_ resetCredits: ResetCreditsSnapshot) {
@@ -1297,7 +1349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateRateLimitTooltip() {
         statusItem.button?.toolTip = AppText.rateLimitTooltip(
             weekly: currentWeeklyRemaining.map { "\($0)%" } ?? "--",
-            resetCount: currentResetAvailableCount
+            resetCount: currentResetAvailableCount,
+            forecast: currentQuotaForecast
         )
     }
 
@@ -1311,6 +1364,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let localUsageError = currentLocalUsageError, !localUsageError.isEmpty {
             details.append("\(AppText.localUsageErrorLabel): \(localUsageError)")
+        }
+        if let quotaMonitorError = currentQuotaMonitorError, !quotaMonitorError.isEmpty {
+            details.append("\(AppText.quotaForecastErrorLabel): \(quotaMonitorError)")
+        }
+        if let notificationError = currentNotificationError, !notificationError.isEmpty {
+            details.append("\(AppText.quotaAlertsErrorLabel): \(notificationError)")
         }
 
         guard !details.isEmpty else {
@@ -1331,29 +1390,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func apply(_ error: Error) {
-        errorItem.title = Self.refreshErrorTitle(error)
-        errorItem.toolTip = Self.errorToolTip(error)
-        errorItem.isHidden = false
-        statusItem.button?.toolTip = AppText.rateLimitRefreshFailedTooltip
-        tokenStatusItem.button?.toolTip = AppText.localUsageRefreshFailedTooltip
-        Self.appendLog("refresh failed: \(Self.normalizedErrorText(error))")
-    }
-
-    private static func refreshErrorTitle(_ error: Error) -> String {
-        let detail = normalizedErrorText(error)
-        if detail.contains("account/rateLimits/read failed") {
-            return AppText.refreshRateLimitUnavailable
-        }
-        if detail.contains("account/usage/read failed") {
-            return AppText.refreshUsageUnavailable
-        }
-        if detail.localizedCaseInsensitiveContains("timed out") || detail.localizedCaseInsensitiveContains("timeout") {
-            return AppText.refreshTimeout
-        }
-        return AppText.refreshStatusUnavailable
-    }
-
     private static func errorToolTip(_ error: Error) -> String {
         let detail = normalizedErrorText(error)
         guard detail.count > 1200 else { return detail }
@@ -1370,14 +1406,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return lines.joined(separator: "\n")
     }
 
-    private func updateStatusImage(_ text: String, reset: String? = nil, style: StatusStyle) {
+    private func updateStatusImage(_ text: String, reset: String? = nil) {
         guard let button = statusItem.button else { return }
+        // A nil tint lets AppKit choose a contrasting foreground for the current menu bar appearance.
+        button.contentTintColor = nil
         button.image = makeStatusImage(top: text, bottom: reset, centerBottom: reset != nil, fontSize: 10)
-        button.contentTintColor = statusTintColor(for: style)
-    }
-
-    nonisolated private static func fetchStatus() -> Result<RateLimitPayload, Error> {
-        .success(CodexBackend.readStatus())
     }
 
     nonisolated private static func fetchRateLimits() -> Result<RateLimitPayload, Error> {
@@ -1412,26 +1445,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch {
             // Logging must never break refresh.
-        }
-    }
-
-    private func style(for remaining: Int?) -> StatusStyle {
-        let remaining = remaining ?? 100
-        if remaining <= 10 { return .critical }
-        if remaining <= 25 { return .warning }
-        return .normal
-    }
-
-    private func statusTintColor(for style: StatusStyle) -> NSColor? {
-        switch style {
-        case .normal:
-            return nil
-        case .warning:
-            return .systemOrange
-        case .critical, .error:
-            return .systemRed
-        case .waiting:
-            return nil
         }
     }
 
@@ -1514,26 +1527,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-}
-
-enum StatusStyle {
-    case normal
-    case warning
-    case critical
-    case waiting
-    case error
-}
-
-struct RuntimeError: Error, LocalizedError {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
-    var errorDescription: String? {
-        message
-    }
 }
 
 let commandLineArguments = Array(CommandLine.arguments.dropFirst())

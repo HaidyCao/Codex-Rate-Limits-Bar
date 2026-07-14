@@ -9,7 +9,7 @@ CONTENTS := $(APP_DIR)/Contents
 USER_APPS := $(HOME)/Applications
 INSTALLED_APP := $(USER_APPS)/$(APP_NAME).app
 
-.PHONY: build run open stop install-user uninstall-user install-plugin clean verify
+.PHONY: build test run open stop install-user uninstall-user install-plugin clean verify
 
 build:
 	swift build -c $(CONFIG)
@@ -22,6 +22,9 @@ build:
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" "$(CONTENTS)/Info.plist"
 	-xattr -cr "$(APP_DIR)"
 	codesign --force --deep --sign - "$(APP_DIR)"
+
+test:
+	swift test
 
 run: build
 	open -n -g "$(APP_DIR)"
@@ -48,7 +51,7 @@ uninstall-user:
 install-plugin: install-user
 	"$(INSTALLED_APP)/Contents/MacOS/$(PRODUCT)" install-plugin --source "$(CURDIR)/plugins/codex-usage-monitor"
 
-verify: build
+verify: test build
 	@"$(CONTENTS)/MacOS/$(PRODUCT)" rate-limits
 
 clean:

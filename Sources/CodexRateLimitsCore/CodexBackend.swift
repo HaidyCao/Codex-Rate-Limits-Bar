@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-enum JSONValue: Codable {
+public enum JSONValue: Codable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -9,7 +9,7 @@ enum JSONValue: Codable {
     case array([JSONValue])
     case null
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
@@ -26,7 +26,7 @@ enum JSONValue: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case .string(let value):
@@ -65,12 +65,12 @@ enum JSONValue: Codable {
     }
 }
 
-struct AccountUsageSnapshot: Codable {
-    let fetchedAtIso: String
-    let usage: JSONValue
+public struct AccountUsageSnapshot: Codable {
+    public let fetchedAtIso: String
+    public let usage: JSONValue
 }
 
-private struct TokenUsage {
+private struct TokenUsage: Codable {
     var inputTokens: Int64 = 0
     var cachedInputTokens: Int64 = 0
     var outputTokens: Int64 = 0
@@ -364,14 +364,14 @@ private final class PipeCapture: @unchecked Sendable {
     }
 }
 
-enum CodexBackend {
+public enum CodexBackend {
     private static let clientName = "codex-rate-limits-bar"
     private static let clientTitle = "Codex Rate Limits Bar"
     private static let clientVersion = "0.1.0"
     private static let resetCreditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
     private static let localUsageScanner = LocalUsageScanner()
 
-    static func readRateLimits() throws -> RateLimitPayload {
+    public static func readRateLimits() throws -> RateLimitPayload {
         let results = try callCodexAppServer(methods: ["account/rateLimits/read"])
         guard let response = dictionaryValue(results["account/rateLimits/read"]) else {
             throw RuntimeError("account/rateLimits/read returned invalid payload")
@@ -379,7 +379,7 @@ enum CodexBackend {
         return normalizeRateLimitResponse(response)
     }
 
-    static func readTokenUsage() throws -> AccountUsageSnapshot {
+    public static func readTokenUsage() throws -> AccountUsageSnapshot {
         let results = try callCodexAppServer(methods: ["account/usage/read"])
         return AccountUsageSnapshot(
             fetchedAtIso: isoNow(),
@@ -387,7 +387,7 @@ enum CodexBackend {
         )
     }
 
-    static func readCombined() throws -> RateLimitPayload {
+    public static func readCombined() throws -> RateLimitPayload {
         let results = try callCodexAppServer(methods: ["account/rateLimits/read", "account/usage/read"])
         guard let response = dictionaryValue(results["account/rateLimits/read"]) else {
             throw RuntimeError("account/rateLimits/read returned invalid payload")
@@ -406,7 +406,7 @@ enum CodexBackend {
         )
     }
 
-    static func readResetCredits(soft: Bool = false) throws -> ResetCreditsSnapshot {
+    public static func readResetCredits(soft: Bool = false) throws -> ResetCreditsSnapshot {
         do {
             let tokens = try readCodexAuthTokens()
             var request = URLRequest(url: resetCreditsURL)
@@ -430,7 +430,7 @@ enum CodexBackend {
         }
     }
 
-    static func readStatus() -> RateLimitPayload {
+    public static func readStatus() -> RateLimitPayload {
         let ratePayload: RateLimitPayload
         do {
             ratePayload = try readRateLimits()
@@ -462,7 +462,7 @@ enum CodexBackend {
         )
     }
 
-    static func readLocalTokenUsage() throws -> LocalUsageSnapshot {
+    public static func readLocalTokenUsage() throws -> LocalUsageSnapshot {
         try localUsageScanner.snapshot()
     }
 
@@ -497,9 +497,52 @@ enum CodexBackend {
         rootURLs.map(\.path).joined(separator: ",")
     }
 
-    private final class LocalUsageScanner: @unchecked Sendable {
+    final class LocalUsageScanner: @unchecked Sendable {
+        private static let readChunkSize = 4 * 1_024 * 1_024
+        private static let sessionMetaMarker = Data("\"type\":\"session_meta\"".utf8)
+        private static let tokenCountMarker = Data("\"type\":\"token_count\"".utf8)
+
         private let lock = NSLock()
+        private let rootURLsProvider: () -> [URL]
+        private let nowProvider: () -> Date
+        private let calendarProvider: () -> Calendar
+        private let cacheFileURL: URL?
+        private var didLoadPersistentCache = false
         private var cache: LocalUsageScanCache?
+
+        init() {
+            rootURLsProvider = CodexBackend.localUsageRootURLs
+            nowProvider = Date.init
+            calendarProvider = { .current }
+            if ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"] == nil {
+                cacheFileURL = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Library")
+                    .appendingPathComponent("Application Support")
+                    .appendingPathComponent("Codex Rate Limits Bar")
+                    .appendingPathComponent("local-usage-cache.json")
+            } else {
+                cacheFileURL = nil
+            }
+        }
+
+        init(rootURLs: [URL], calendar: Calendar, now: @escaping () -> Date, cacheFileURL: URL? = nil) {
+            rootURLsProvider = { rootURLs }
+            nowProvider = now
+            calendarProvider = { calendar }
+            self.cacheFileURL = cacheFileURL
+        }
+
+        init(
+            rootURLs: [URL],
+            calendarProvider: @escaping () -> Calendar,
+            now: @escaping () -> Date,
+            cacheFileURL: URL? = nil
+        ) {
+            rootURLsProvider = { rootURLs }
+            nowProvider = now
+            self.calendarProvider = calendarProvider
+            self.cacheFileURL = cacheFileURL
+        }
 
         func snapshot() throws -> LocalUsageSnapshot {
             lock.lock()
@@ -509,20 +552,44 @@ enum CodexBackend {
 
         private func scanLocked() throws -> LocalUsageSnapshot {
             let startedAt = Date()
-            let now = Date()
-            let calendar = Calendar.current
+            let now = nowProvider()
+            let calendar = calendarProvider()
             let dayStart = calendar.startOfDay(for: now)
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? now
-            let localDate = CodexBackend.localDateString(now)
-            let rootURLs = CodexBackend.localUsageRootURLs()
+            let localDate = CodexBackend.localDateString(now, timeZone: calendar.timeZone)
+            let timeZone = calendar.timeZone.identifier
+            let rootURLs = rootURLsProvider()
             let source = CodexBackend.localUsageSourceDescription(rootURLs: rootURLs)
+            loadPersistentCacheIfNeeded()
 
-            let isColdScan = cache?.source != source || cache?.localDate != localDate
-            if isColdScan {
-                cache = LocalUsageScanCache(source: source, localDate: localDate, dayStart: dayStart, dayEnd: dayEnd)
+            let canReuseBaseline = cache?.source == source && cache?.timeZone == timeZone
+            let isColdScan: Bool
+            var cacheChanged = false
+            if !canReuseBaseline {
+                cache = LocalUsageScanCache(
+                    source: source,
+                    localDate: localDate,
+                    timeZone: timeZone,
+                    dayStart: dayStart,
+                    dayEnd: dayEnd
+                )
+                isColdScan = true
+                cacheChanged = true
+            } else if cache?.localDate != localDate, let previous = cache {
+                cache = LocalUsageScanCache(
+                    source: source,
+                    localDate: localDate,
+                    timeZone: timeZone,
+                    dayStart: dayStart,
+                    dayEnd: dayEnd,
+                    files: previous.files.mapValues { $0.resetForNewDay() }
+                )
+                isColdScan = false
+                cacheChanged = true
             } else {
                 cache?.dayStart = dayStart
                 cache?.dayEnd = dayEnd
+                isColdScan = false
             }
 
             guard var cache else {
@@ -534,28 +601,77 @@ enum CodexBackend {
             )
             var stats = LocalUsageScanStats()
             stats.filesScanned = files.count
-            stats.fullRescanFiles = isColdScan ? files.count : 0
 
             let livePaths = Set(files.map(\.url.path))
+            let previousFileCount = cache.files.count
             cache.files = cache.files.filter { livePaths.contains($0.key) }
+            cacheChanged = cacheChanged || cache.files.count != previousFileCount
 
             for file in files {
-                scan(file, cache: &cache, stats: &stats)
+                cacheChanged = scan(file, cache: &cache, stats: &stats) || cacheChanged
             }
 
             self.cache = cache
+            if cacheChanged {
+                persist(cache)
+            }
             let snapshot = makeSnapshot(cache: cache, filesScanned: files.count, now: now)
             stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             log(stats: stats, coldScan: isColdScan)
             return snapshot
         }
 
-        private func scan(_ file: JsonlFileInfo, cache: inout LocalUsageScanCache, stats: inout LocalUsageScanStats) {
+        private func loadPersistentCacheIfNeeded() {
+            guard !didLoadPersistentCache else { return }
+            didLoadPersistentCache = true
+            guard let cacheFileURL,
+                  let data = try? Data(contentsOf: cacheFileURL)
+            else {
+                return
+            }
+
+            do {
+                let document = try JSONDecoder().decode(LocalUsageCacheDocument.self, from: data)
+                if document.version == LocalUsageCacheDocument.currentVersion {
+                    cache = document.cache
+                }
+            } catch {
+                appendSharedLog("local usage cache ignored: \(errorMessage(error))")
+            }
+        }
+
+        private func persist(_ cache: LocalUsageScanCache) {
+            guard let cacheFileURL else { return }
+            do {
+                try FileManager.default.createDirectory(
+                    at: cacheFileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let document = LocalUsageCacheDocument(cache: cache)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                try encoder.encode(document).write(to: cacheFileURL, options: .atomic)
+            } catch {
+                appendSharedLog("local usage cache write failed: \(errorMessage(error))")
+            }
+        }
+
+        private func scan(
+            _ file: JsonlFileInfo,
+            cache: inout LocalUsageScanCache,
+            stats: inout LocalUsageScanStats
+        ) -> Bool {
             let path = file.url.path
+            let hadState = cache.files[path] != nil
             var state = cache.files[path] ?? LocalUsageFileState()
+            var changed = !hadState
+            if !hadState {
+                stats.fullRescanFiles += 1
+            }
             if file.size < state.offset {
                 state = LocalUsageFileState()
                 stats.fullRescanFiles += 1
+                changed = true
             }
 
             defer {
@@ -565,42 +681,68 @@ enum CodexBackend {
             }
 
             guard file.size > state.offset else {
-                return
+                return changed
             }
 
             do {
                 let handle = try FileHandle(forReadingFrom: file.url)
                 defer { try? handle.close() }
-                let previousOffset = state.offset
-                try handle.seek(toOffset: previousOffset)
-                let data = try handle.readToEnd() ?? Data()
-                state.offset = previousOffset + UInt64(data.count)
+                try handle.seek(toOffset: state.offset)
+                var remaining = file.size - state.offset
+                while remaining > 0 {
+                    let count = min(Self.readChunkSize, Int(remaining))
+                    guard let data = try handle.read(upToCount: count), !data.isEmpty else { break }
+                    state.offset += UInt64(data.count)
+                    remaining -= UInt64(data.count)
+                    stats.bytesRead += UInt64(data.count)
+                    process(data: data, state: &state, dayStart: cache.dayStart, dayEnd: cache.dayEnd)
+                }
                 stats.filesRead += 1
-                stats.bytesRead += UInt64(data.count)
-                process(data: data, state: &state, dayStart: cache.dayStart, dayEnd: cache.dayEnd)
+                changed = true
             } catch {
                 stats.readFailureCount += 1
                 appendSharedLog("local usage scan read failure: \(path): \(errorMessage(error))")
             }
+            return changed
         }
 
         private func process(data: Data, state: inout LocalUsageFileState, dayStart: Date, dayEnd: Date) {
             guard !data.isEmpty else { return }
+            let previousPendingCount = state.pendingData.count
             state.pendingData.append(data)
 
             var lineStart = state.pendingData.startIndex
             var consumedThrough = state.pendingData.startIndex
-            while let newlineIndex = state.pendingData[lineStart...].firstIndex(of: 0x0A) {
-                let lineData = Data(state.pendingData[lineStart..<newlineIndex])
-                processLine(trimmedLineData(lineData), state: &state, dayStart: dayStart, dayEnd: dayEnd)
+            var newlineSearchStart = state.pendingData.index(
+                state.pendingData.startIndex,
+                offsetBy: previousPendingCount
+            )
+            while let newlineIndex = state.pendingData[newlineSearchStart...].firstIndex(of: 0x0A) {
+                let lineData = trimmedLineData(state.pendingData[lineStart..<newlineIndex])
+                if isPotentialUsageLine(lineData) {
+                    processLine(lineData, state: &state, dayStart: dayStart, dayEnd: dayEnd)
+                }
                 let nextIndex = state.pendingData.index(after: newlineIndex)
                 lineStart = nextIndex
+                newlineSearchStart = nextIndex
                 consumedThrough = nextIndex
             }
 
             if consumedThrough > state.pendingData.startIndex {
                 state.pendingData.removeSubrange(state.pendingData.startIndex..<consumedThrough)
             }
+        }
+
+        private func isPotentialUsageLine(_ data: Data) -> Bool {
+            let prefix = data.prefix(1_024)
+            if prefix.range(of: Self.sessionMetaMarker) != nil
+                || prefix.range(of: Self.tokenCountMarker) != nil
+            {
+                return true
+            }
+            let suffix = data.suffix(256)
+            return suffix.range(of: Self.sessionMetaMarker) != nil
+                || suffix.range(of: Self.tokenCountMarker) != nil
         }
 
         private func trimmedLineData(_ data: Data) -> Data {
@@ -710,7 +852,7 @@ enum CodexBackend {
             return LocalUsageSnapshot(
                 fetchedAtIso: ISO8601DateFormatter().string(from: now),
                 source: cache.source,
-                timezone: TimeZone.current.identifier,
+                timezone: cache.timeZone,
                 localDate: cache.localDate,
                 inputTokens: totals.inputTokens,
                 cachedInputTokens: totals.cachedInputTokens,
@@ -742,15 +884,23 @@ enum CodexBackend {
         }
     }
 
-    private struct LocalUsageScanCache {
+    private struct LocalUsageCacheDocument: Codable {
+        static let currentVersion = 1
+
+        var version = currentVersion
+        let cache: LocalUsageScanCache
+    }
+
+    private struct LocalUsageScanCache: Codable {
         let source: String
         let localDate: String
+        let timeZone: String
         var dayStart: Date
         var dayEnd: Date
         var files: [String: LocalUsageFileState] = [:]
     }
 
-    private struct LocalUsageFileState {
+    private struct LocalUsageFileState: Codable {
         var offset: UInt64 = 0
         var size: UInt64 = 0
         var modifiedAt: Date?
@@ -767,6 +917,18 @@ enum CodexBackend {
         var regressionEventCount = 0
         var parseErrorCount = 0
         var lastEventAtIso: String?
+
+        func resetForNewDay() -> LocalUsageFileState {
+            var state = self
+            state.totals = TokenUsage()
+            state.eventCount = 0
+            state.duplicateEventCount = 0
+            state.importedEventCount = 0
+            state.regressionEventCount = 0
+            state.parseErrorCount = 0
+            state.lastEventAtIso = nil
+            return state
+        }
     }
 
     private struct LocalUsageScanStats {
@@ -933,7 +1095,7 @@ enum CodexBackend {
             fetchedAtIso: ISO8601DateFormatter().string(from: now),
             source: source,
             timezone: TimeZone.current.identifier,
-            localDate: localDateString(now),
+            localDate: localDateString(now, timeZone: .current),
             inputTokens: 0,
             cachedInputTokens: 0,
             outputTokens: 0,
@@ -1195,9 +1357,10 @@ enum CodexBackend {
             || delta.totalTokens > 0 ? delta : nil
     }
 
-    private static func localDateString(_ date: Date) -> String {
+    private static func localDateString(_ date: Date, timeZone: TimeZone) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
@@ -1560,13 +1723,13 @@ enum CodexPluginInstaller {
     }
 }
 
-enum CodexCommandLine {
-    static func isCLIInvocation(_ arguments: [String]) -> Bool {
+public enum CodexCommandLine {
+    public static func isCLIInvocation(_ arguments: [String]) -> Bool {
         guard let first = arguments.first else { return false }
         return !first.hasPrefix("-psn_")
     }
 
-    static func run(arguments: [String]) -> Int32 {
+    public static func run(arguments: [String]) -> Int32 {
         guard let command = arguments.first else { return 0 }
         do {
             switch command {
