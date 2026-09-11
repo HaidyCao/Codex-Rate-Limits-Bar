@@ -801,6 +801,73 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertNil(CodexBackend.localUsageCacheURL(environment: ["CODEX_SESSIONS_DIR": temporaryDirectory.path], home: temporaryDirectory))
     }
 
+    func testAccountSwitchResetsWeeklyObservationAndRetainsWholeMachineDailyUsage() throws {
+        let clock = TestClock(try date("2026-09-11T01:00:00Z"))
+        let file = temporaryDirectory.appendingPathComponent("rollout-account.jsonl")
+        let cacheFile = temporaryDirectory.appendingPathComponent("usage-cache.json")
+        try writeEvents([sessionMeta(id: "session-a", timestamp: "2026-09-11T00:00:00Z"),
+                         turnContext(model: "gpt-5.6-sol", timestamp: "2026-09-11T00:01:00Z")], to: file, modifiedAt: clock.now)
+        func context(_ key: String, limit: String = "codex") -> CodexAccountContext {
+            CodexAccountContext(codexHome: temporaryDirectory.path, authenticationSource: "auth.json",
+                                accountKey: key, accountLabel: nil, limitID: limit)
+        }
+        let scanner = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+                                                     now: { clock.now }, cacheFileURL: cacheFile)
+        let a = context("a"), b = context("b")
+        _ = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-17T00:00:00Z"), accountContext: a)
+        clock.now = try date("2026-09-11T02:00:00Z")
+        try appendEvent(tokenCount(total: 100_000, timestamp: "2026-09-11T01:30:00Z"), to: file, modifiedAt: clock.now)
+        let first = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"), accountContext: a)
+        XCTAssertEqual(first.weeklyQuotaCost?.observedCostUSD, 0.4)
+        let restarted = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+                                                       now: { clock.now }, cacheFileURL: cacheFile)
+        let resumed = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"), accountContext: a)
+        XCTAssertEqual(resumed.weeklyQuotaCost?.observationStartIso, first.weeklyQuotaCost?.observationStartIso)
+        XCTAssertEqual(resumed.weeklyQuotaCost?.observedCostUSD, 0.4)
+        clock.now = try date("2026-09-11T03:00:00Z")
+        let switched = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 40, end: "2026-09-17T00:00:00Z"), accountContext: b)
+        XCTAssertEqual(switched.totalTokens, 100_000)
+        XCTAssertEqual(switched.weeklyQuotaCost?.observedCostUSD, 0)
+        XCTAssertEqual(switched.weeklyQuotaCost?.baselineUsedPercent, 40)
+        XCTAssertEqual(switched.weeklyQuotaCost?.accountScopeKey, b.scopeKey)
+        clock.now = try date("2026-09-11T04:00:00Z")
+        try appendEvent(tokenCount(total: 150_000, timestamp: "2026-09-11T03:30:00Z"), to: file, modifiedAt: clock.now)
+        let bUsage = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 45, end: "2026-09-17T00:00:00Z"), accountContext: b)
+        XCTAssertEqual(bUsage.totalTokens, 150_000)
+        XCTAssertEqual(bUsage.weeklyQuotaCost?.observedCostUSD, 0.2)
+        let returned = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 20, end: "2026-09-17T00:00:00Z"), accountContext: a)
+        XCTAssertEqual(returned.weeklyQuotaCost?.observedCostUSD, 0)
+        XCTAssertEqual(returned.weeklyQuotaCost?.baselineUsedPercent, 20)
+        let otherBucket = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 30, end: "2026-09-17T00:00:00Z"), accountContext: context("a", limit: "spark"))
+        XCTAssertEqual(otherBucket.weeklyQuotaCost?.baselineUsedPercent, 30)
+        XCTAssertEqual(otherBucket.totalTokens, 150_000)
+    }
+
+    func testUnattributedWeeklyCacheStartsNewObservationWithoutLosingDailyTotals() throws {
+        let clock = TestClock(try date("2026-09-11T01:00:00Z"))
+        let file = temporaryDirectory.appendingPathComponent("rollout-legacy-account.jsonl")
+        try writeEvents([sessionMeta(id: "session-a", timestamp: "2026-09-11T00:00:00Z"),
+                         turnContext(model: "gpt-5.6-sol", timestamp: "2026-09-11T00:01:00Z")], to: file, modifiedAt: clock.now)
+        let scanner = self.scanner(now: { clock.now })
+        _ = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-17T00:00:00Z"))
+        clock.now = try date("2026-09-11T02:00:00Z")
+        try appendEvent(tokenCount(total: 100_000, timestamp: "2026-09-11T01:30:00Z"), to: file, modifiedAt: clock.now)
+        _ = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"))
+        let context = CodexAccountContext(codexHome: temporaryDirectory.path, authenticationSource: "auth.json",
+                                          accountKey: "a", accountLabel: nil, limitID: "codex")
+        let migrated = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"), accountContext: context)
+        XCTAssertEqual(migrated.totalTokens, 100_000)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.observedCostUSD, 0)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.baselineUsedPercent, 15)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.accountScopeKey, context.scopeKey)
+        let invalidated = try scanner.snapshot(accountContext: context, invalidateWeeklyObservation: true)
+        XCTAssertEqual(invalidated.totalTokens, 100_000)
+        XCTAssertNil(invalidated.weeklyQuotaCost)
+        clock.now = try date("2026-09-11T03:00:00Z")
+        let resumed = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 20, end: "2026-09-17T00:00:00Z"), accountContext: context)
+        XCTAssertEqual(resumed.weeklyQuotaCost?.baselineUsedPercent, 20)
+    }
+
     private func scanner(now: @escaping () -> Date) -> CodexBackend.LocalUsageScanner {
         CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar, now: now)
     }

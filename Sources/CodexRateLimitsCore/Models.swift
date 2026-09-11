@@ -69,9 +69,14 @@ public struct RateLimitPayload: Codable {
     public let rateLimitError: String?
     public let localUsageError: String?
     public let usage: JSONValue?
+    public var accountContext: CodexAccountContext? = nil
+
+    public var selectedRateLimit: RateLimitSnapshot? {
+        rateLimitsByLimitId?["codex"] ?? rateLimits
+    }
 }
 
-public struct ResetCreditItem: Codable {
+public struct ResetCreditItem: Codable, Sendable {
     public let id: String?
     public let resetType: String?
     public let typeLabel: String?
@@ -85,18 +90,20 @@ public struct ResetCreditItem: Codable {
     public let expiresAtShortLabel: String?
 }
 
-public struct ResetCreditsDisplay: Codable {
+public struct ResetCreditsDisplay: Codable, Sendable {
     public let summaryLabel: String?
     public let categoryLabel: String?
     public let detailLabels: [String]?
 }
 
-public struct ResetCreditsSnapshot: Codable {
+public struct ResetCreditsSnapshot: Codable, Sendable {
     public let fetchedAtIso: String
     public let availableCount: Int?
     public let credits: [ResetCreditItem]
     public let error: String?
     public let display: ResetCreditsDisplay?
+    public var detailsAvailable: Bool? = nil
+    public var accountContext: CodexAccountContext? = nil
 }
 
 public struct LocalUsageDisplay: Codable, Sendable {
@@ -169,6 +176,7 @@ public struct WeeklyQuotaCostEstimate: Codable, Sendable {
     public let unpricedTokens: Int64
     public var unpricedModels: [String]? = nil
     public var source: String? = nil
+    public var accountScopeKey: String? = nil
 }
 
 public struct LocalUsageTopFile: Codable, Sendable {
@@ -207,6 +215,7 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public let weeklyQuotaCost: WeeklyQuotaCostEstimate?
     public let display: LocalUsageDisplay?
     public var todayCredits: UsageCreditEstimate? = nil
+    public var accountContext: CodexAccountContext? = nil
 }
 
 public struct RuntimeError: Error, LocalizedError {

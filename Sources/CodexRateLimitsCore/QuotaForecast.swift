@@ -211,8 +211,10 @@ public struct QuotaAlertEvent: Codable, Equatable, Sendable {
     public let resetAt: Date
     public let projectedExhaustionAt: Date?
 
+    public var accountScopeKey: String? = nil
+
     public var identifier: String {
-        "quota-\(windowID.rawValue)-\(kind.rawValue)"
+        "quota-\(accountScopeKey.map { $0 + "-" } ?? "")\(windowID.rawValue)-\(kind.rawValue)"
     }
 }
 
@@ -346,6 +348,7 @@ public final class QuotaMonitor: @unchecked Sendable {
         var version = 1
         var samples: [QuotaSample] = []
         var alertState = QuotaAlertState()
+        var accountScopeKey: String?
     }
 
     public static var defaultFileURL: URL {
@@ -356,23 +359,40 @@ public final class QuotaMonitor: @unchecked Sendable {
             .appendingPathComponent("quota-history.json")
     }
 
-    private let fileURL: URL
+    private let baseFileURL: URL
+    private var fileURL: URL
+    private var activeScopeKey: String?
     private let lock = NSLock()
     private var isLoaded = false
     private var isDirty = false
     private var document = Document()
 
     public init(fileURL: URL = QuotaMonitor.defaultFileURL) {
+        self.baseFileURL = fileURL
         self.fileURL = fileURL
     }
 
     public func update(
         window: RateLimitWindow,
         at now: Date = Date(),
-        alertsEnabled: Bool
+        alertsEnabled: Bool,
+        accountContext: CodexAccountContext? = nil
     ) -> QuotaMonitorSnapshot {
         lock.lock()
         defer { lock.unlock() }
+        if let accountContext, accountContext.scopeKey == nil {
+            return QuotaMonitorSnapshot(forecast: nil, alerts: [], sampleCount: 0, persistenceError: nil)
+        }
+        let scope = accountContext?.scopeKey
+        if activeScopeKey != scope {
+            activeScopeKey = scope
+            fileURL = scope.map {
+                baseFileURL.deletingPathExtension().appendingPathExtension($0 + ".json")
+            } ?? baseFileURL
+            document = Document(accountScopeKey: scope)
+            isLoaded = false
+            isDirty = false
+        }
         loadIfNeeded()
 
         guard let windowID = QuotaWindowID(window: window) else {
@@ -416,9 +436,14 @@ public final class QuotaMonitor: @unchecked Sendable {
             }
         }
 
+        let alerts = decision.events.map { event in
+            QuotaAlertEvent(kind: event.kind, windowID: event.windowID,
+                            remainingPercent: event.remainingPercent, resetAt: event.resetAt,
+                            projectedExhaustionAt: event.projectedExhaustionAt, accountScopeKey: activeScopeKey)
+        }
         return QuotaMonitorSnapshot(
             forecast: forecast,
-            alerts: decision.events,
+            alerts: alerts,
             sampleCount: windowSamples.count,
             persistenceError: persistenceError
         )
@@ -456,7 +481,10 @@ public final class QuotaMonitor: @unchecked Sendable {
         guard let data = try? Data(contentsOf: fileURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
-        document = (try? decoder.decode(Document.self, from: data)) ?? Document()
+        if let loaded = try? decoder.decode(Document.self, from: data),
+           loaded.accountScopeKey == activeScopeKey {
+            document = loaded
+        }
     }
 
     private func shouldAppend(_ sample: QuotaSample) -> Bool {

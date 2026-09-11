@@ -7,7 +7,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
 - Rate-limit status item: weekly remaining quota, shown as `W 92%`, with the next reset below in the system date/time format (time today, date otherwise, and year only when needed).
 - The Usage card compares the remaining quota with the time budget, learns from recent consumption, and estimates either the remaining quota at reset or an early exhaustion time.
 - Optional system notifications warn at 25% and 10%, when a medium/high-confidence forecast predicts early exhaustion, and shortly after a weekly reset. Alerts are deduplicated per quota window and are disabled by default.
-- Forecast samples and alert state are stored in `~/Library/Application Support/Codex Rate Limits Bar/quota-history.json`; samples are recorded only when the percentage changes or every 30 minutes and are retained for 60 days.
+- Forecast samples and alert state are stored in `~/Library/Application Support/Codex Rate Limits Bar/quota-history.<scope>.json`, isolated by account, Codex home, authentication source and quota bucket. Samples are recorded only when the percentage changes or every 30 minutes and are retained for 60 days.
 - Data source: `codex app-server --stdio` via `account/rateLimits/read`.
 - The Usage card also shows the official purchased-credit balance when returned by Codex, separately from earned rate-limit reset coupons. Missing balances display `--`; zero, negative and unlimited balances stay distinct.
 - A second menu bar item shows today's local machine token usage:
@@ -22,6 +22,34 @@ Planned fixes and improvements: [Project TODO](TODO.md).
   one Swift executable. Node.js is not required.
 - If Codex was installed via npm, the app looks for the native Codex vendor
   binary and does not launch the Node wrapper.
+
+## Account Attribution
+
+The menu identifies the current account; its tooltip includes the Codex home,
+authentication source and quota bucket. Daily token and cost totals still cover
+all local homes. Quota, official credit balance, reset credits and weekly cost
+observations refer to the selected account.
+
+Each official refresh reads `account/read` and `account/rateLimits/read` from
+one app-server pinned to the active `CODEX_HOME` (default `~/.codex`). Reset
+credits use the returned `rateLimitResetCredits` when available; `availableCount`
+is authoritative even when details are absent or capped. For older responses,
+the private endpoint is used only with verified credentials from that same home.
+`CODEX_AUTH_FILE` no longer redirects reset queries independently of the Codex
+login. Account changes detected during a refresh discard that response.
+
+Persistent identity uses a digest of the local account/workspace and user
+identifiers, without storing access tokens or JWTs. If file credentials cannot
+be verified, including managed keyring/auto/ephemeral storage, official values
+remain available but account-specific history, alerts and weekly cost learning
+are paused and the menu marks the identity unconfirmed.
+
+Legacy `quota-history.json` is left intact and is not assigned to an account.
+The daily usage cache and cursors are reused; an untagged legacy weekly
+observation starts fresh. Tagged observations survive same-account restarts.
+Switching accounts or quota buckets starts a new weekly cost observation so
+events from the previous login cannot carry over. Forecast and alert history
+for a known account is restored when returning to its scope.
 
 ## Cost Estimates
 

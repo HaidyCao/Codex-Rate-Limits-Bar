@@ -1,6 +1,41 @@
 import Foundation
 
 public enum AppText {
+    public static var resetCreditDetailsUnavailable: String {
+        switch language {
+        case .simplifiedChinese: return "可用数量已确认，暂未提供明细"
+        case .traditionalChinese: return "可用數量已確認，暫未提供明細"
+        case .japanese: return "利用可能数は確認済みです。詳細は未提供です。"
+        case .korean: return "사용 가능 횟수는 확인되었으나 상세 정보가 없습니다."
+        case .english: return "Available count confirmed; details not provided."
+        }
+    }
+
+    public static func accountSource(_ context: CodexAccountContext?) -> String {
+        let label = context?.accountLabel ?? context.map { URL(fileURLWithPath: $0.codexHome).lastPathComponent } ?? "--"
+        let unknown = context?.scopeKey == nil
+        switch language {
+        case .simplifiedChinese: return "账户：\(label)\(unknown ? " · 身份未确认" : "")"
+        case .traditionalChinese: return "帳戶：\(label)\(unknown ? " · 身分未確認" : "")"
+        case .japanese: return "アカウント：\(label)\(unknown ? " · 未確認" : "")"
+        case .korean: return "계정: \(label)\(unknown ? " · 미확인" : "")"
+        case .english: return "Account: \(label)\(unknown ? " · identity unconfirmed" : "")"
+        }
+    }
+
+    public static func accountSourceDetail(_ context: CodexAccountContext?) -> String {
+        guard let context else { return accountSource(nil) }
+        let scope: String
+        switch language {
+        case .simplifiedChinese: scope = "额度、余额和重置次数属于此账户；今日用量为本机所有来源合计。"
+        case .traditionalChinese: scope = "額度、餘額與重置次數屬於此帳戶；今日用量為本機所有來源合計。"
+        case .japanese: scope = "上限・残高・リセットはこのアカウントの値です。今日の使用量はこの Mac 全体の合計です。"
+        case .korean: scope = "한도, 잔액, 초기화 횟수는 이 계정 기준입니다. 오늘 사용량은 이 Mac 전체의 합계입니다."
+        case .english: scope = "Quota, balance and resets belong to this account. Today’s usage totals all local sources."
+        }
+        return "\(accountSource(context))\n\(scope)\nCodex home: \(context.codexHome)\nAuth: \(context.authenticationSource)\nLimit: \(context.limitID)"
+    }
+
     private enum Language {
         case simplifiedChinese
         case traditionalChinese

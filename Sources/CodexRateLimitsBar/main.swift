@@ -137,6 +137,8 @@ private struct RateLimitUIUpdate: Sendable {
     let weekly: RateLimitWindow?
     let error: String?
     let credits: CreditsSnapshot?
+    let accountContext: CodexAccountContext?
+    let resetCredits: ResetCreditsSnapshot?
 }
 
 final class RateLimitsMenuView: NSView {
@@ -460,7 +462,8 @@ class ResetCreditsDrawingView: NSView {
 
         let rows = Array((snapshot?.display?.detailLabels ?? []).prefix(4))
         if rows.isEmpty {
-            drawText(AppText.noResetCredits, in: NSRect(x: 12, y: 34, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .regular), color: secondaryColor)
+            let placeholder = snapshot?.availableCount == 0 ? AppText.noResetCredits : AppText.resetCreditsUnavailable
+            drawText(placeholder, in: NSRect(x: 12, y: 34, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .regular), color: secondaryColor)
             return
         }
 
@@ -983,12 +986,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         qos: .utility,
         autoreleaseFrequency: .workItem
     )
-    private let resetCreditsQueue = DispatchQueue(
-        label: "local.codex.rate-limits-bar.reset-credits",
-        qos: .utility,
-        autoreleaseFrequency: .workItem
-    )
     private let menu = NSMenu()
+    private let accountItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 156))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -1004,12 +1003,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
     private var rateLimitsTimer: Timer?
     private var localUsageTimer: Timer?
-    private var resetCreditsTimer: Timer?
     private var isRefreshingRateLimits = false
     private var isRefreshingLocalUsage = false
-    private var isRefreshingResetCredits = false
     private var pendingLocalUsageRefresh = false
     private var currentWeeklyWindow: RateLimitWindow?
+    private var currentAccountContext: CodexAccountContext?
     private var currentCredits: CreditsSnapshot?
     private var currentLocalUsage: LocalUsageSnapshot?
     private var currentWeeklyRemaining: Int?
@@ -1032,11 +1030,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         configureLocalUsageStatusItemVisibility()
         configureQuotaAlerts()
         refreshRateLimits()
-        refreshResetCredits()
         refreshLocalUsage()
         localUsageTimer = Timer.scheduledTimer(timeInterval: 30, target: self, selector: #selector(timerRefreshLocalUsage), userInfo: nil, repeats: true)
         rateLimitsTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefreshRateLimits), userInfo: nil, repeats: true)
-        resetCreditsTimer = Timer.scheduledTimer(timeInterval: 600, target: self, selector: #selector(timerRefreshResetCredits), userInfo: nil, repeats: true)
     }
 
     private func setupStatusItem() {
@@ -1086,6 +1082,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         preferencesView.updateLocalUsageStatusItem(visible: StatusItemPreferences.isLocalUsageStatusItemVisible)
         preferencesView.updateQuotaAlerts(enabled: QuotaAlertPreferences.isEnabled)
 
+        accountItem.isEnabled = false
+        accountItem.title = AppText.accountSource(nil)
+        menu.addItem(accountItem)
         menu.addItem(rateLimitsItem)
         menu.addItem(resetCreditsItem)
         menu.addItem(.separator())
@@ -1110,7 +1109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func refreshFromMenu() {
         refreshRateLimits()
-        refreshResetCredits()
         refreshLocalUsage()
     }
 
@@ -1120,10 +1118,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func timerRefreshLocalUsage() {
         refreshLocalUsage()
-    }
-
-    @objc private func timerRefreshResetCredits() {
-        refreshResetCredits()
     }
 
     @objc private func toggleAutoLaunch() {
@@ -1268,9 +1262,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             applyRateLimitsError(error)
         case .success(let payload):
             let update = RateLimitUIUpdate(
-                weekly: payload.rateLimits?.weeklyWindow,
+                weekly: payload.selectedRateLimit?.weeklyWindow,
                 error: payload.rateLimitError,
-                credits: payload.rateLimits?.credits ?? payload.rateLimitsByLimitId?["codex"]?.credits
+                credits: payload.selectedRateLimit?.credits,
+                accountContext: payload.accountContext,
+                resetCredits: payload.resetCredits
             )
             guard let weekly = update.weekly else {
                 isRefreshingRateLimits = false
@@ -1282,7 +1278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let alertsEnabled = QuotaAlertPreferences.isEnabled && quotaAlertsAuthorized
             let quotaMonitor = quotaMonitor
             rateLimitsQueue.async { [weak self] in
-                let monitor = quotaMonitor.update(window: weekly, alertsEnabled: alertsEnabled)
+                let monitor = quotaMonitor.update(window: weekly, alertsEnabled: alertsEnabled, accountContext: update.accountContext)
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.isRefreshingRateLimits = false
@@ -1301,9 +1297,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         isRefreshingLocalUsage = true
         pendingLocalUsageRefresh = false
         let weeklyWindow = currentWeeklyWindow
+        let accountContext = currentAccountContext
 
         localUsageQueue.async { [weak self] in
-            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow)
+            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext)
             DispatchQueue.main.async {
                 self?.completeLocalUsageRefresh(result)
             }
@@ -1326,27 +1323,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private func refreshResetCredits() {
-        guard !isRefreshingResetCredits else { return }
-        isRefreshingResetCredits = true
-
-        resetCreditsQueue.async { [weak self] in
-            let result = Self.fetchResetCredits()
-            DispatchQueue.main.async {
-                self?.isRefreshingResetCredits = false
-                switch result {
-                case .success(let resetCredits):
-                    self?.apply(resetCredits)
-                    self?.updateCombinedError()
-                case .failure(let error):
-                    self?.applyResetCreditsError(error)
-                }
-            }
-        }
-    }
-
     private func applyRateLimits(_ update: RateLimitUIUpdate, monitor: QuotaMonitorSnapshot?) {
         let weekly = update.weekly
+        let previousAccountScope = currentAccountContext?.scopeKey
+        currentAccountContext = update.accountContext
+        accountItem.title = AppText.accountSource(update.accountContext)
+        accountItem.toolTip = AppText.accountSourceDetail(update.accountContext)
+        if let resetCredits = update.resetCredits { apply(resetCredits) }
         let previousWindowID = currentWeeklyWindow.flatMap(QuotaWindowID.init)?.rawValue
         let nextWindowID = weekly.flatMap(QuotaWindowID.init)?.rawValue
         currentWeeklyWindow = weekly
@@ -1375,7 +1358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             credits: currentCredits
         )
         updateRateLimitTooltip()
-        if previousWindowID != nextWindowID {
+        if previousWindowID != nextWindowID || previousAccountScope != currentAccountContext?.scopeKey {
             refreshLocalUsage()
         }
     }
@@ -1432,7 +1415,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func matchingWeeklyQuotaCost(for window: RateLimitWindow?) -> WeeklyQuotaCostEstimate? {
         guard let resetDate = window?.resetDate,
-              let estimate = currentLocalUsage?.weeklyQuotaCost
+              let estimate = currentLocalUsage?.weeklyQuotaCost,
+              let scope = currentAccountContext?.scopeKey,
+              estimate.accountScopeKey == scope
         else {
             return nil
         }
@@ -1454,13 +1439,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         tokenStatusItem.button?.toolTip = AppText.localUsageRefreshFailedTooltip
         updateCombinedError()
         Self.appendLog("local usage refresh failed: \(Self.normalizedErrorText(error))")
-    }
-
-    private func applyResetCreditsError(_ error: Error) {
-        currentResetCreditsError = Self.normalizedErrorText(error)
-        updateRateLimitTooltip()
-        updateCombinedError()
-        Self.appendLog("reset credits refresh failed: \(Self.normalizedErrorText(error))")
     }
 
     private func updateRateLimitTooltip() {
@@ -1536,13 +1514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated private static func fetchLocalUsage(
-        weeklyWindow: RateLimitWindow?
+        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?
     ) -> Result<LocalUsageSnapshot, Error> {
-        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow) }
-    }
-
-    nonisolated private static func fetchResetCredits() -> Result<ResetCreditsSnapshot, Error> {
-        Result { try CodexBackend.readResetCredits(soft: true) }
+        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext) }
     }
 
     nonisolated private static func appendLog(_ message: String) {

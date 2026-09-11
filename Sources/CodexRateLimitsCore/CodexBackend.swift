@@ -335,60 +335,85 @@ public enum CodexBackend {
     private static let localUsageScanner = LocalUsageScanner()
 
     public static func readRateLimits() throws -> RateLimitPayload {
-        let results = try callCodexAppServer(methods: ["account/rateLimits/read"])
-        guard let response = dictionaryValue(results["account/rateLimits/read"]) else {
-            throw RuntimeError("account/rateLimits/read returned invalid payload")
-        }
-        return normalizeRateLimitResponse(response)
+        try readAccountPayload(includeUsage: false)
     }
 
     public static func readTokenUsage() throws -> AccountUsageSnapshot {
         let results = try callCodexAppServer(methods: ["account/usage/read"])
-        return AccountUsageSnapshot(
-            fetchedAtIso: isoNow(),
-            usage: JSONValue.from(results["account/usage/read"])
-        )
+        return AccountUsageSnapshot(fetchedAtIso: isoNow(), usage: JSONValue.from(results["account/usage/read"]))
     }
 
     public static func readCombined() throws -> RateLimitPayload {
-        let results = try callCodexAppServer(methods: ["account/rateLimits/read", "account/usage/read"])
+        try readAccountPayload(includeUsage: true)
+    }
+
+    static func readAccountPayload(
+        includeUsage: Bool,
+        sourceProvider: () -> CodexAccountSource = { CodexAccountSource() },
+        call: ([String], String) throws -> [String: Any] = { try callCodexAppServer(methods: $0, codexHome: $1) },
+        fetchReset: (URLRequest) throws -> Data = fetchData
+    ) throws -> RateLimitPayload {
+        let before = sourceProvider()
+        let methods = ["account/read", "account/rateLimits/read"] + (includeUsage ? ["account/usage/read"] : [])
+        let results = try call(methods, before.codexHome.path)
+        let after = sourceProvider()
+        guard before.matches(after) else { throw RuntimeError("Codex account changed while refreshing; retry the request.") }
         guard let response = dictionaryValue(results["account/rateLimits/read"]) else {
             throw RuntimeError("account/rateLimits/read returned invalid payload")
         }
-        let payload = normalizeRateLimitResponse(response)
+        let account = dictionaryValue(results["account/read"]).flatMap { dictionaryValue($0["account"]) }
+        let normalized = normalizeRateLimitResponse(response)
+        let context = after.context(account: account, limitID: normalized.selectedRateLimit?.limitId ?? "codex")
+        let resetCredits = resolveResetCredits(response: response, source: after, context: context, fetch: fetchReset)
+        guard after.matches(sourceProvider()) else { throw RuntimeError("Codex account changed while refreshing; retry the request.") }
         return RateLimitPayload(
-            fetchedAtIso: payload.fetchedAtIso,
-            rateLimits: payload.rateLimits,
-            rateLimitsByLimitId: payload.rateLimitsByLimitId,
-            display: payload.display,
-            resetCredits: nil,
-            localUsage: nil,
-            rateLimitError: nil,
-            localUsageError: nil,
-            usage: JSONValue.from(results["account/usage/read"])
+            fetchedAtIso: normalized.fetchedAtIso, rateLimits: normalized.rateLimits,
+            rateLimitsByLimitId: normalized.rateLimitsByLimitId, display: normalized.display,
+            resetCredits: resetCredits, localUsage: nil, rateLimitError: nil, localUsageError: nil,
+            usage: includeUsage ? JSONValue.from(results["account/usage/read"]) : nil,
+            accountContext: context
         )
+    }
+
+    static func resolveResetCredits(
+        response: [String: Any], source: CodexAccountSource, context: CodexAccountContext,
+        fetch: (URLRequest) throws -> Data
+    ) -> ResetCreditsSnapshot {
+        var snapshot: ResetCreditsSnapshot
+        if let official = dictionaryValue(response["rateLimitResetCredits"]) {
+            snapshot = normalizeResetCreditsResponse(official)
+        } else {
+            do {
+                guard let identity = source.identityKey, identity == context.accountKey,
+                      source.codexHome.path == context.codexHome, source.authFile.path == context.authenticationSource,
+                      let accessToken = source.tokens["access_token"] as? String, !accessToken.isEmpty else {
+                    throw RuntimeError("Reset credits unavailable: the active account's file credentials could not be verified.")
+                }
+                var request = URLRequest(url: resetCreditsURL)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 12
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
+                request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
+                request.setValue(source.tokens["account_id"] as? String, forHTTPHeaderField: "ChatGPT-Account-ID")
+                let data = try fetch(request)
+                let object = try JSONSerialization.jsonObject(with: data)
+                snapshot = normalizeResetCreditsResponse(dictionaryValue(object) ?? [:])
+            } catch {
+                snapshot = emptyResetCreditsSnapshot(error)
+            }
+        }
+        snapshot.accountContext = context
+        return snapshot
     }
 
     public static func readResetCredits(soft: Bool = false) throws -> ResetCreditsSnapshot {
         do {
-            let tokens = try readCodexAuthTokens()
-            var request = URLRequest(url: resetCreditsURL)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 12
-            request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("codex-1", forHTTPHeaderField: "OpenAI-Beta")
-            request.setValue("Codex Desktop", forHTTPHeaderField: "originator")
-            if let accountID = tokens.accountID {
-                request.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-ID")
-            }
-
-            let data = try fetchData(request)
-            let object = try JSONSerialization.jsonObject(with: data)
-            return normalizeResetCreditsResponse(dictionaryValue(object) ?? [:])
+            guard let snapshot = try readRateLimits().resetCredits else { throw RuntimeError("Reset credits unavailable") }
+            if let error = snapshot.error, !soft { throw RuntimeError(error) }
+            return snapshot
         } catch {
-            if soft {
-                return emptyResetCreditsSnapshot(error)
-            }
+            if soft { return emptyResetCreditsSnapshot(error) }
             throw error
         }
     }
@@ -401,11 +426,11 @@ public enum CodexBackend {
             ratePayload = emptyRateLimitSnapshot(error)
         }
 
-        let resetCredits = (try? readResetCredits(soft: true)) ?? emptyResetCreditsSnapshot(RuntimeError("reset credits unavailable"))
+        let resetCredits = ratePayload.resetCredits ?? emptyResetCreditsSnapshot(RuntimeError("reset credits unavailable"))
         let localUsage: LocalUsageSnapshot
         let localUsageError: String?
         do {
-            localUsage = try readLocalTokenUsage(weeklyWindow: ratePayload.rateLimits?.weeklyWindow)
+            localUsage = try readLocalTokenUsage(weeklyWindow: ratePayload.selectedRateLimit?.weeklyWindow, accountContext: ratePayload.accountContext)
             localUsageError = nil
         } catch {
             localUsage = emptyLocalUsageSnapshot(error)
@@ -421,12 +446,19 @@ public enum CodexBackend {
             localUsage: localUsage,
             rateLimitError: ratePayload.rateLimitError,
             localUsageError: localUsageError,
-            usage: nil
+            usage: nil,
+            accountContext: ratePayload.accountContext
         )
     }
 
-    public static func readLocalTokenUsage(weeklyWindow: RateLimitWindow? = nil) throws -> LocalUsageSnapshot {
-        try localUsageScanner.snapshot(weeklyWindow: weeklyWindow)
+    public static func readLocalTokenUsage(weeklyWindow: RateLimitWindow? = nil,
+                                           accountContext: CodexAccountContext? = nil) throws -> LocalUsageSnapshot {
+        let current = CodexAccountSource()
+        let matches = accountContext?.accountKey != nil && accountContext?.accountKey == current.identityKey
+            && accountContext?.codexHome == current.codexHome.path
+        return try localUsageScanner.snapshot(weeklyWindow: matches ? weeklyWindow : nil,
+                                              accountContext: accountContext,
+                                              invalidateWeeklyObservation: accountContext != nil && !matches)
     }
 
     static func localUsageRootURLs(
@@ -537,16 +569,18 @@ public enum CodexBackend {
             self.cacheFileURL = cacheFileURL
         }
 
-        func snapshot(weeklyWindow: RateLimitWindow? = nil) throws -> LocalUsageSnapshot {
+        func snapshot(weeklyWindow: RateLimitWindow? = nil, accountContext: CodexAccountContext? = nil,
+                      invalidateWeeklyObservation: Bool = false) throws -> LocalUsageSnapshot {
             lock.lock()
             defer { lock.unlock() }
             defer { _ = malloc_zone_pressure_relief(nil, 0) }
             return try autoreleasepool {
-                try scanLocked(weeklyWindow: weeklyWindow)
+                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation)
             }
         }
 
-        private func scanLocked(weeklyWindow: RateLimitWindow?) throws -> LocalUsageSnapshot {
+        private func scanLocked(weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?,
+                                invalidateWeeklyObservation: Bool) throws -> LocalUsageSnapshot {
             let persistentLockFD = acquirePersistentCacheLock()
             defer { releasePersistentCacheLock(persistentLockFD) }
 
@@ -622,11 +656,17 @@ public enum CodexBackend {
             var stats = LocalUsageScanStats()
             stats.filesScanned = files.count
 
+            if invalidateWeeklyObservation, cache.weeklyCostObservation != nil {
+                cache.weeklyCostObservation = nil
+                for path in Array(cache.files.keys) { cache.files[path]?.weeklyCost = nil }
+                cacheChanged = true
+            }
             cacheChanged = updateWeeklyCostObservation(
                 cache: &cache,
                 window: weeklyWindow,
                 now: now,
-                rootPaths: weeklyRoots
+                rootPaths: weeklyRoots,
+                accountContext: accountContext
             ) || cacheChanged
 
             cacheChanged = reconcileCachedFiles(
@@ -666,7 +706,8 @@ public enum CodexBackend {
                 cache: cache,
                 filesScanned: files.count,
                 now: now,
-                weeklyWindow: weeklyWindow
+                weeklyWindow: weeklyWindow,
+                accountContext: accountContext
             )
             stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             log(stats: stats, coldScan: isColdScan)
@@ -798,8 +839,10 @@ public enum CodexBackend {
             cache: inout LocalUsageScanCache,
             window: RateLimitWindow?,
             now: Date,
-            rootPaths: [String]
+            rootPaths: [String],
+            accountContext: CodexAccountContext?
         ) -> Bool {
+            guard accountContext == nil || accountContext?.scopeKey != nil else { return false }
             guard let window,
                   let windowID = QuotaWindowID(window: window),
                   let durationMinutes = window.windowDurationMins,
@@ -812,6 +855,7 @@ public enum CodexBackend {
 
             let usedPercent = max(0, min(100, max(window.usedPercent, 100 - window.remainingPercent)))
             if let observation = cache.weeklyCostObservation,
+               observation.accountScopeKey == accountContext?.scopeKey,
                observation.windowID == windowID,
                observation.startedAt >= windowStart,
                observation.startedAt <= now,
@@ -828,7 +872,8 @@ public enum CodexBackend {
                 windowID: windowID,
                 startedAt: now,
                 baselineUsedPercent: usedPercent,
-                rootPaths: rootPaths
+                rootPaths: rootPaths,
+                accountScopeKey: accountContext?.scopeKey
             )
             for path in Array(cache.files.keys) {
                 cache.files[path]?.weeklyCost = nil
@@ -1168,7 +1213,8 @@ public enum CodexBackend {
             cache: LocalUsageScanCache,
             filesScanned: Int,
             now: Date,
-            weeklyWindow: RateLimitWindow?
+            weeklyWindow: RateLimitWindow?,
+            accountContext: CodexAccountContext?
         ) -> LocalUsageSnapshot {
             var totals = TokenUsage()
             var topFiles: [LocalUsageTopFile] = []
@@ -1261,7 +1307,8 @@ public enum CodexBackend {
                     estimatedCreditsLabel: AppText.todayEstimatedCredits(todayCredits),
                     pricingCoverageLabel: AppText.pricingCoverage(cost: todayCost, credits: todayCredits)
                 ),
-                todayCredits: todayCredits
+                todayCredits: todayCredits,
+                accountContext: accountContext
             )
         }
 
@@ -1309,7 +1356,8 @@ public enum CodexBackend {
                 pricedTokens: observed.pricedTokens,
                 unpricedTokens: observed.unpricedTokens,
                 unpricedModels: observed.unpricedModels,
-                source: observation.rootPaths?.joined(separator: ",")
+                source: observation.rootPaths?.joined(separator: ","),
+                accountScopeKey: observation.accountScopeKey
             )
         }
 
@@ -1344,6 +1392,7 @@ public enum CodexBackend {
         let startedAt: Date
         let baselineUsedPercent: Int
         var rootPaths: [String]?
+        var accountScopeKey: String?
     }
 
     private struct LocalUsageFileState: Codable {
@@ -1402,13 +1451,13 @@ public enum CodexBackend {
         var durationMs = 0
     }
 
-    private static func normalizeRateLimitResponse(_ response: [String: Any]) -> RateLimitPayload {
+    static func normalizeRateLimitResponse(_ response: [String: Any]) -> RateLimitPayload {
         let rateLimits = normalizeSnapshot(dictionaryValue(response["rateLimits"]))
         var byLimitId: [String: RateLimitSnapshot] = [:]
         for (limitId, value) in dictionaryValue(response["rateLimitsByLimitId"]) ?? [:] {
             byLimitId[limitId] = normalizeSnapshot(dictionaryValue(value))
         }
-        let weekly = rateLimits?.weeklyWindow
+        let weekly = (byLimitId["codex"] ?? rateLimits)?.weeklyWindow
         let display = RateLimitDisplay(
             primaryLabel: weekly.map { "W \($0.remainingPercent)%" } ?? "W --",
             secondaryLabel: nil,
@@ -1464,23 +1513,27 @@ public enum CodexBackend {
         )
     }
 
-    private static func normalizeResetCreditsResponse(_ response: [String: Any]) -> ResetCreditsSnapshot {
+    static func normalizeResetCreditsResponse(_ response: [String: Any]) -> ResetCreditsSnapshot {
         var credits = arrayValue(response["credits"])
             .compactMap { normalizeResetCredit(dictionaryValue($0)) }
         credits.sort { resetCreditSortKey($0) < resetCreditSortKey($1) }
 
         let fallbackAvailableCount = credits.filter { $0.status == "available" }.count
-        let availableCount = intValue(response["available_count"]) ?? fallbackAvailableCount
+        let availableCount = intValue(response["availableCount"] ?? response["available_count"])
+            ?? (response["credits"] is [Any] ? fallbackAvailableCount : nil)
         let firstTypeLabel = credits.first?.typeLabel ?? AppText.resetCreditsCategory
         let visibleSource = credits.contains { $0.status == "available" }
             ? credits.filter { $0.status == "available" }
             : credits
-        let detailLabels = Array(visibleSource.prefix(4)).enumerated().map { index, credit in
+        var detailLabels = Array(visibleSource.prefix(4)).enumerated().map { index, credit in
             AppText.resetCreditDetail(
                 index: index + 1,
                 status: credit.statusLabel,
                 expiresAt: credit.expiresAtShortLabel
             )
+        }
+        if detailLabels.isEmpty, (availableCount ?? 0) > 0 {
+            detailLabels = [AppText.resetCreditDetailsUnavailable]
         }
 
         return ResetCreditsSnapshot(
@@ -1492,16 +1545,17 @@ public enum CodexBackend {
                 summaryLabel: AppText.availableCount(availableCount),
                 categoryLabel: firstTypeLabel,
                 detailLabels: detailLabels
-            )
+            ),
+            detailsAvailable: response["credits"] is [Any]
         )
     }
 
     private static func normalizeResetCredit(_ credit: [String: Any]?) -> ResetCreditItem? {
         guard let credit else { return nil }
-        let resetType = stringValue(credit["reset_type"]) ?? stringValue(credit["type"]) ?? "unknown"
+        let resetType = stringValue(credit["resetType"] ?? credit["reset_type"]) ?? stringValue(credit["type"]) ?? "unknown"
         let status = stringValue(credit["status"])
-        let createdAtIso = isoString(credit["created_at"] ?? credit["granted_at"])
-        let expiresAtIso = isoString(credit["expires_at"])
+        let createdAtIso = isoString(credit["grantedAt"] ?? credit["created_at"] ?? credit["granted_at"])
+        let expiresAtIso = isoString(credit["expiresAt"] ?? credit["expires_at"])
         return ResetCreditItem(
             id: stringValue(credit["id"]),
             resetType: resetType,
@@ -1585,12 +1639,13 @@ public enum CodexBackend {
         )
     }
 
-    private static func callCodexAppServer(methods: [String], timeout: TimeInterval = 12) throws -> [String: Any] {
+    private static func callCodexAppServer(methods: [String], codexHome: String? = nil, timeout: TimeInterval = 12) throws -> [String: Any] {
         let spec = codexCommandSpec()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: spec.executable)
         process.arguments = spec.arguments + ["app-server", "--stdio"]
         process.environment = processEnvironment(codexExecutable: spec.executable)
+        if let codexHome { process.environment?["CODEX_HOME"] = codexHome }
 
         let stdin = Pipe()
         let stdout = Pipe()
@@ -1623,7 +1678,7 @@ public enum CodexBackend {
             "capabilities": [:],
         ])
         for method in methods {
-            try enqueue(label: method, method: method)
+            try enqueue(label: method, method: method, params: method == "account/read" ? ["refreshToken": false] : nil)
         }
 
         let state = AppServerCallState(labelsById: labelsById)
@@ -1692,26 +1747,6 @@ public enum CodexBackend {
         env["PATH"] = path
         env.merge(codexManagedEnvironment(for: codexExecutable)) { _, new in new }
         return env
-    }
-
-    private struct CodexAuthTokens {
-        let accessToken: String
-        let accountID: String?
-    }
-
-    private static func readCodexAuthTokens() throws -> CodexAuthTokens {
-        let authPath = ProcessInfo.processInfo.environment["CODEX_AUTH_FILE"]
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex")
-                .appendingPathComponent("auth.json")
-                .path
-        let data = try Data(contentsOf: URL(fileURLWithPath: authPath))
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        let tokens = dictionaryValue(object["tokens"]) ?? [:]
-        guard let accessToken = stringValue(tokens["access_token"]), !accessToken.isEmpty else {
-            throw RuntimeError("Codex auth file is missing tokens.access_token. Run codex login again.")
-        }
-        return CodexAuthTokens(accessToken: accessToken, accountID: stringValue(tokens["account_id"]))
     }
 
     private static func fetchData(_ request: URLRequest) throws -> Data {
