@@ -755,7 +755,7 @@ class LocalUsageDrawingView: NSView {
         toolTip = [AppText.todayEstimatedCredits(snapshot.todayCredits),
                    AppText.pricingCoverage(cost: snapshot.todayCost, credits: snapshot.todayCredits),
                    AppText.unpricedModels(cost: snapshot.todayCost, credits: snapshot.todayCredits),
-                   AppText.creditAssumptions(snapshot.todayCredits), AppText.creditsEstimateDetails]
+                   AppText.scanDetails(snapshot), AppText.creditsEstimateDetails]
             .compactMap { $0 }.joined(separator: "\n")
         needsDisplay = true
     }
@@ -786,7 +786,8 @@ class LocalUsageDrawingView: NSView {
         drawSymbol("cpu.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
         drawText(AppText.localUsageTitle, in: NSRect(x: 32, y: 10, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
-        let rawTotal = formatRawNumber(totalTokens)
+        let unavailable = snapshot?.diagnostics?.status == .unavailable
+        let rawTotal = unavailable ? "--" : formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
         drawText(rawTotal, in: NSRect(x: 12, y: 32, width: min(rawWidth + 4, bounds.width - 176), height: 42), font: rawFont, color: labelColor)
@@ -794,8 +795,8 @@ class LocalUsageDrawingView: NSView {
         let requestRect = NSRect(x: bounds.width - 152, y: 12, width: 140, height: 58)
         drawSubCard(requestRect, fill: subCardFill, stroke: subCardStroke)
         drawText(AppText.todayEstimatedCostCardTitle(requests: eventCount), in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 6, width: requestRect.width - 20, height: 16), font: .systemFont(ofSize: 10.5, weight: .semibold), color: secondaryColor)
-        let cost = USDFormatter.string(snapshot?.todayCost?.estimatedCostUSD)
-        let costSuffix = snapshot?.todayCost?.isPartial == true ? "+" : ""
+        let cost = USDFormatter.string(unavailable ? nil : snapshot?.todayCost?.estimatedCostUSD)
+        let costSuffix = snapshot?.diagnostics?.status == .partial ? "*" : snapshot?.todayCost?.isPartial == true ? "+" : ""
         drawText("\(cost)\(costSuffix)", in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 24, width: requestRect.width - 20, height: 24), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: labelColor)
 
         let padding: CGFloat = 12
@@ -819,12 +820,12 @@ class LocalUsageDrawingView: NSView {
         let rect4 = NSRect(x: padding + cardWidth + gap, y: rowTwoY, width: cardWidth, height: cardHeight)
         drawCacheHitCard(rect4, percent: cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
 
-        drawText(AppText.todayEstimatedCredits(snapshot?.todayCredits), in: NSRect(x: 12, y: 210, width: bounds.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold), color: labelColor)
+        drawText(AppText.todayEstimatedCredits(unavailable ? nil : snapshot?.todayCredits), in: NSRect(x: 12, y: 210, width: bounds.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold), color: labelColor)
         drawText(AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits), in: NSRect(x: 12, y: 234, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        let detail = AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits)
-            ?? AppText.creditAssumptions(snapshot?.todayCredits) ?? ""
-        drawText(detail, in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(AppText.scanStatus(snapshot?.diagnostics), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true ? .systemOrange : secondaryColor)
+        drawText(AppText.billingAssumptions(snapshot?.billingAssumptions) ?? "", in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? "", in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {
@@ -997,7 +998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let localCacheHitItem = NSMenuItem(title: "命中 --", action: nil, keyEquivalent: "")
     private let localUsageDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 308))
+    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 352))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
@@ -1408,7 +1409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             cacheHit: formatPercent(localUsage.cacheHitPercent),
             estimatedCost: localUsage.display?.estimatedCostLabel
         ) + "\n" + [localUsage.display?.estimatedCreditsLabel, localUsage.display?.pricingCoverageLabel,
-                     AppText.unpricedModels(cost: localUsage.todayCost, credits: localUsage.todayCredits)]
+                     AppText.unpricedModels(cost: localUsage.todayCost, credits: localUsage.todayCredits),
+                     AppText.scanDetails(localUsage)]
             .compactMap { $0 }.joined(separator: "\n")
 
         localConsumptionItem.title = consumption

@@ -432,7 +432,7 @@ public enum CodexBackend {
         let localUsageError: String?
         do {
             localUsage = try readLocalTokenUsage(weeklyWindow: ratePayload.selectedRateLimit?.weeklyWindow, accountContext: ratePayload.accountContext)
-            localUsageError = nil
+            localUsageError = localUsage.error
         } catch {
             localUsage = emptyLocalUsageSnapshot(error)
             localUsageError = errorMessage(error)
@@ -478,11 +478,7 @@ public enum CodexBackend {
         var seen = Set<String>()
         return homes.flatMap { root in
             [root.appendingPathComponent("sessions"), root.appendingPathComponent("archived_sessions")]
-        }.map { $0.standardizedFileURL.resolvingSymlinksInPath() }.filter { url in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-                && isDirectory.boolValue && seen.insert(url.path).inserted
-        }
+        }.map { $0.standardizedFileURL.resolvingSymlinksInPath() }.filter { seen.insert($0.path).inserted }
     }
 
     static func weeklyUsageRootURLs(
@@ -525,12 +521,8 @@ public enum CodexBackend {
 
     final class LocalUsageScanner: @unchecked Sendable {
         private static let readChunkSize = 1 * 1_024 * 1_024
-        private static let maxBufferedLineSize = 1 * 1_024 * 1_024
+        private static let maxBufferedLineSize = 8 * 1_024 * 1_024
         private static let retainedHistoryDays = 8
-        private static let sessionMetaMarker = Data("\"type\":\"session_meta\"".utf8)
-        private static let turnContextMarker = Data("\"type\":\"turn_context\"".utf8)
-        private static let threadSettingsMarker = Data("\"type\":\"thread_settings_applied\"".utf8)
-        private static let tokenCountMarker = Data("\"type\":\"token_count\"".utf8)
 
         private let lock = NSLock()
         private let rootURLsProvider: () -> [URL]
@@ -542,9 +534,12 @@ public enum CodexBackend {
         private var persistentCacheSignature: LocalUsageCacheFileSignature?
         private var readBuffer = Data()
         private var copyLedger: UsageCopyLedger?
-        private var copyReplayErrors: [String] = []
+        private var scanIssues: [UsageScanIssue] = []
+        private var rootStatuses: [UsageRootStatus] = []
+        private let allowMissingRoots: Bool
 
         init() {
+            allowMissingRoots = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]?.isEmpty != false
             rootURLsProvider = { CodexBackend.localUsageRootURLs() }
             weeklyRootURLsProvider = { CodexBackend.weeklyUsageRootURLs() }
             nowProvider = Date.init
@@ -553,7 +548,8 @@ public enum CodexBackend {
         }
 
         init(rootURLs: [URL], calendar: Calendar, now: @escaping () -> Date, cacheFileURL: URL? = nil,
-             weeklyRootURLs: [URL]? = nil) {
+             weeklyRootURLs: [URL]? = nil, allowMissingRoots: Bool = false) {
+            self.allowMissingRoots = allowMissingRoots
             rootURLsProvider = { rootURLs }
             weeklyRootURLsProvider = { weeklyRootURLs ?? rootURLs }
             nowProvider = now
@@ -567,6 +563,7 @@ public enum CodexBackend {
             now: @escaping () -> Date,
             cacheFileURL: URL? = nil
         ) {
+            allowMissingRoots = false
             rootURLsProvider = { rootURLs }
             weeklyRootURLsProvider = { rootURLs }
             nowProvider = now
@@ -586,6 +583,8 @@ public enum CodexBackend {
 
         private func scanLocked(weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?,
                                 invalidateWeeklyObservation: Bool, rebuild: Bool) throws -> LocalUsageSnapshot {
+            scanIssues = []
+            rootStatuses = []
             let persistentLockFD = acquirePersistentCacheLock()
             defer { releasePersistentCacheLock(persistentLockFD) }
 
@@ -653,14 +652,18 @@ public enum CodexBackend {
                 cache.rootPaths = rootURLs.map(\.path)
                 cacheChanged = true
             }
-            copyReplayErrors = []
             let discoveryStart = max(historyStart, min(dayStart, cache.weeklyCostObservation?.startedAt ?? dayStart))
             var byPath: [String: JsonlFileInfo] = [:]
             for root in rootURLs {
-                for var file in CodexBackend.walkJsonlFileInfos(root: root, dayStart: historyStart) {
+                let discovery = CodexBackend.walkJsonlFileInfos(root: root, dayStart: historyStart, allowMissing: allowMissingRoots)
+                scanIssues.append(contentsOf: discovery.issues)
+                rootStatuses.append(discovery.root)
+                for var file in discovery.files {
                     guard rebuild || file.modifiedAt >= discoveryStart || cache.files[file.url.path] != nil else { continue }
                     let state = cache.files[file.url.path]
-                    file.sessionID = state?.fileStamp == file.stamp ? state?.primarySessionId : UsageFileIdentity.sessionID(at: file.url)
+                    file.sessionID = state?.fileStamp == file.stamp ? state?.primarySessionId : autoreleasepool {
+                        UsageFileIdentity.sessionID(at: file.url)
+                    }
                     // An unreadable replacement must remain in its old copy
                     // transaction until its new session identity is available.
                     if file.sessionID == nil {
@@ -694,11 +697,15 @@ public enum CodexBackend {
                 let replayCopies = hasCopies && (rebuild || members.contains { file in
                     guard let state = cache.files[file.url.path] else { return true }
                     return state.fileStamp != file.stamp || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
+                        || state.diagnostics?.version != UsageFileDiagnostics.currentVersion
                         || state.copyMembers != paths || state.copyDay != localDate
                 })
                 let lostCopy = members.first?.sessionID.map { missingSessions.contains($0) } ?? false
                 if lostCopy {
-                    copyReplayErrors.append("A session copy is missing; retained its last verified totals: " + (members.first?.sessionID ?? key))
+                    for path in paths {
+                        scanIssues.append(UsageScanIssue(kind: .copyReplayIncomplete, path: path, count: 1,
+                                                        message: "A session copy is missing; retained the group's verified totals."))
+                    }
                     continue
                 }
                 if hasCopies && !replayCopies { continue }
@@ -712,6 +719,7 @@ public enum CodexBackend {
                        guard let state = cache.files[file.url.path] else { return false }
                        return state.copyMembers == paths && state.copyDay == localDate && state.hasUsageBounds == true
                            && state.prefixDigest != nil && !state.requiresCostRebuild
+                           && state.diagnostics?.version == UsageFileDiagnostics.currentVersion
                    }),
                    members.filter({ $0.url.path != changedMembers[0].url.path }).allSatisfy({ file in
                        (cache.files[file.url.path]?.latestUsageAt ?? .distantPast) < activityStart
@@ -722,7 +730,8 @@ public enum CodexBackend {
                     cache.files[file.url.path]?.copyMembers = paths
                     cache.files[file.url.path]?.copyDay = localDate
                     if stats.readFailureCount > previousFailures {
-                        copyReplayErrors.append("Could not refresh session copies; retained their previous totals: " + key)
+                        scanIssues.append(UsageScanIssue(kind: .copyReplayIncomplete, path: file.url.path, count: 1,
+                                                        message: "Could not refresh session copies; retained their previous totals."))
                     }
                     continue
                 }
@@ -744,10 +753,18 @@ public enum CodexBackend {
                 copyLedger = nil
                 if replayCopies && stats.readFailureCount > previousFailures {
                     for path in paths { cache.files[path] = previousStates[path] }
-                    copyReplayErrors.append("Could not rebuild session copies; retained their previous totals: " + key)
+                    for path in paths {
+                        scanIssues.append(UsageScanIssue(kind: .copyReplayIncomplete, path: path, count: 1,
+                                                        message: "Could not rebuild session copies; retained their previous totals."))
+                    }
                 } else if let completedLedger {
                     applyCopyContributions(completedLedger, cache: &cache)
                 }
+            }
+
+            for path in cache.files.keys where byPath[path] == nil {
+                scanIssues.append(UsageScanIssue(kind: .fileMissing, path: path, count: 1,
+                                                message: "A previously scanned file is missing or inaccessible; cached totals are retained."))
             }
 
             self.cache = cache
@@ -885,7 +902,8 @@ public enum CodexBackend {
                 // An entry with no current contribution cannot cause overlap;
                 // retire it so it cannot block replay of the archived history.
                 if old.totals.totalTokens == 0, old.eventCount == 0, old.importedEventCount == 0,
-                   old.parseErrorCount == 0, old.weeklyCost == nil {
+                   old.parseErrorCount == 0, old.weeklyCost == nil,
+                   (old.diagnostics?.invalidUsageRecords ?? 0) == 0, (old.diagnostics?.oversizedRecords ?? 0) == 0 {
                     cache.files.removeValue(forKey: path)
                     changed = true
                     continue
@@ -980,6 +998,7 @@ public enum CodexBackend {
             let previousState = cache.files[path]
             var state = previousState ?? LocalUsageFileState()
             var replay = force || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
+                || state.diagnostics?.version != UsageFileDiagnostics.currentVersion
                 || file.size < state.offset || state.fileStamp?.identity != file.stamp.identity
             if !replay, state.fileStamp == file.stamp, file.size == state.offset { return false }
             do {
@@ -993,6 +1012,7 @@ public enum CodexBackend {
                 }
                 if replay {
                     state = LocalUsageFileState()
+                    state.diagnostics = UsageFileDiagnostics()
                     hasher = SHA256()
                     stats.fullRescanFiles += 1
                 }
@@ -1033,6 +1053,7 @@ public enum CodexBackend {
                 return true
             } catch {
                 stats.readFailureCount += 1
+                scanIssues.append(UsageScanIssue(kind: .fileReadFailed, path: path, count: 1, message: errorMessage(error)))
                 appendSharedLog("local usage scan read failure: \(path): \(errorMessage(error))")
                 // Commit the cursor and totals together only after a verified read.
                 return false
@@ -1050,6 +1071,7 @@ public enum CodexBackend {
         ) {
             guard !data.isEmpty else { return }
             if state.pendingData.count > Self.maxBufferedLineSize {
+                state.diagnostics?.oversizedRecords += 1
                 state.pendingData.removeAll(keepingCapacity: false)
                 state.isSkippingOversizedLine = true
             }
@@ -1066,6 +1088,7 @@ public enum CodexBackend {
                 guard let newlineIndex = data[cursor...].firstIndex(of: 0x0A) else {
                     let fragment = data[cursor...]
                     if state.pendingData.count + fragment.count > Self.maxBufferedLineSize {
+                        state.diagnostics?.oversizedRecords += 1
                         state.pendingData.removeAll(keepingCapacity: false)
                         state.isSkippingOversizedLine = true
                     } else {
@@ -1086,6 +1109,8 @@ public enum CodexBackend {
                             weeklyObservationStart: weeklyObservationStart,
                             now: now
                         )
+                    } else {
+                        state.diagnostics?.oversizedRecords += 1
                     }
                 } else if state.pendingData.count + fragment.count <= Self.maxBufferedLineSize {
                     state.pendingData.append(contentsOf: fragment)
@@ -1101,6 +1126,7 @@ public enum CodexBackend {
                         now: now
                     )
                 } else {
+                    state.diagnostics?.oversizedRecords += 1
                     state.pendingData.removeAll(keepingCapacity: false)
                 }
                 cursor = data.index(after: newlineIndex)
@@ -1117,7 +1143,7 @@ public enum CodexBackend {
             now: Date
         ) {
             let lineData = trimmedLineData(data)
-            guard isPotentialUsageLine(lineData) else { return }
+            guard lineData.contains(where: { ![0x20, 0x09, 0x0D].contains($0) }) else { return }
             autoreleasepool {
                 processLine(
                     lineData,
@@ -1129,22 +1155,6 @@ public enum CodexBackend {
                     now: now
                 )
             }
-        }
-
-        private func isPotentialUsageLine(_ data: Data) -> Bool {
-            let prefix = data.prefix(1_024)
-            if prefix.range(of: Self.sessionMetaMarker) != nil
-                || prefix.range(of: Self.turnContextMarker) != nil
-                || prefix.range(of: Self.threadSettingsMarker) != nil
-                || prefix.range(of: Self.tokenCountMarker) != nil
-            {
-                return true
-            }
-            let suffix = data.suffix(256)
-            return suffix.range(of: Self.sessionMetaMarker) != nil
-                || suffix.range(of: Self.turnContextMarker) != nil
-                || suffix.range(of: Self.threadSettingsMarker) != nil
-                || suffix.range(of: Self.tokenCountMarker) != nil
         }
 
         private func trimmedLineData(_ data: Data) -> Data {
@@ -1164,11 +1174,17 @@ public enum CodexBackend {
             guard !lineData.isEmpty else { return }
             let object: [String: Any]
             do {
-                object = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] ?? [:]
+                guard let value = try JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                      stringValue(value["type"]) != nil else {
+                    state.diagnostics?.invalidUsageRecords += 1
+                    return
+                }
+                object = value
             } catch {
                 state.parseErrorCount += 1
                 return
             }
+            state.diagnostics?.validRecords += 1
 
             if let sessionId = CodexBackend.sessionIdFromMeta(object) {
                 if state.primarySessionId == nil {
@@ -1183,20 +1199,26 @@ public enum CodexBackend {
                 return
             }
 
-            if stringValue(object["type"]) == "turn_context",
-               let payload = dictionaryValue(object["payload"]) {
+            if stringValue(object["type"]) == "session_meta" {
+                state.diagnostics?.invalidUsageRecords += 1
+                return
+            }
+            if stringValue(object["type"]) == "turn_context" {
+                guard let payload = dictionaryValue(object["payload"]) else {
+                    state.diagnostics?.invalidUsageRecords += 1
+                    return
+                }
                 // A full turn context replaces the tier, including an absent tier.
                 state.currentServiceTier = CodexBackend.serviceTierFromPayload(payload)
-                if let model = CodexBackend.modelFromPayload(payload) {
-                    state.currentModel = model
-                }
+                state.currentModel = CodexBackend.modelFromPayload(payload)
                 return
             }
 
-            guard stringValue(object["type"]) == "event_msg",
-                  let payload = dictionaryValue(object["payload"]),
+            guard stringValue(object["type"]) == "event_msg" else { return }
+            guard let payload = dictionaryValue(object["payload"]),
                   let eventType = stringValue(payload["type"])
             else {
+                state.diagnostics?.invalidUsageRecords += 1
                 return
             }
             if eventType == "thread_settings_applied" {
@@ -1209,16 +1231,24 @@ public enum CodexBackend {
                 return
             }
 
-            guard eventType == "token_count",
-                  let info = dictionaryValue(payload["info"]),
+            guard eventType == "token_count" else { return }
+            // Rate-limit-only updates have no token sample to account for.
+            if (payload["info"] == nil || payload["info"] is NSNull), payload["rate_limits"] != nil { return }
+            guard let info = dictionaryValue(payload["info"]),
                   let currentTotalUsage = TokenUsage.from(info["total_token_usage"])
             else {
+                state.diagnostics?.invalidUsageRecords += 1
                 return
             }
 
             let timestamp = parseIsoDate(stringValue(object["timestamp"]))
+            guard timestamp != nil else {
+                state.diagnostics?.invalidUsageRecords += 1
+                return
+            }
             if let timestamp, timestamp > (state.latestUsageAt ?? .distantPast) { state.latestUsageAt = timestamp }
             let isToday = timestamp.map { $0 >= dayStart && $0 < dayEnd } ?? false
+            if isToday { state.diagnostics?.todayUsageEvents += 1 }
             let isInHistory = timestamp.map { $0 >= historyStart && $0 < dayEnd } ?? false
             let isImportedForkEvent = state.primarySessionId != nil
                 && state.activeSessionId != nil
@@ -1229,7 +1259,7 @@ public enum CodexBackend {
             let delta = CodexBackend.positiveDelta(baseline, currentTotalUsage, sameSession: sameSession)
 
             let model = CodexBackend.modelFromPayload(info) ?? CodexBackend.modelFromPayload(payload) ?? state.currentModel
-            let requestInputTokens = TokenUsage.from(info["last_token_usage"])?.inputTokens
+            let requestInputTokens = TokenUsage.nonnegativeInteger(dictionaryValue(info["last_token_usage"])?["input_tokens"])
             let serviceTier = CodexBackend.serviceTierFromPayload(info)
                 ?? CodexBackend.serviceTierFromPayload(payload) ?? state.currentServiceTier
             let eventKey = (isInHistory ? copyLedger : nil).map { _ in
@@ -1354,11 +1384,16 @@ public enum CodexBackend {
             topFiles.sort { $0.totalTokens > $1.totalTokens }
             let todayCost = todayCostAccumulator.estimate()
             let todayCredits = todayCostAccumulator.creditEstimate()
+            let diagnostics = makeDiagnostics(cache: cache, filesDiscovered: filesScanned)
+            let assumptions = todayCostAccumulator.billingAssumptions()
+            let weeklyDiagnostics = makeDiagnostics(cache: cache, filesDiscovered: filesScanned, roots: weeklyRoots)
             let weeklyQuotaCost = makeWeeklyQuotaCost(
                 observed: weeklyCostAccumulator.estimate(),
                 window: weeklyWindow,
                 observation: cache.weeklyCostObservation,
-                now: now
+                now: now,
+                diagnostics: weeklyDiagnostics,
+                assumptions: weeklyCostAccumulator.billingAssumptions()
             )
 
             return LocalUsageSnapshot(
@@ -1380,30 +1415,67 @@ public enum CodexBackend {
                 filesScanned: filesScanned,
                 filesWithEvents: filesWithEvents,
                 parseErrorCount: parseErrorCount,
-                error: copyReplayErrors.isEmpty ? nil : copyReplayErrors.joined(separator: "\n"),
+                error: diagnostics.status.isIncomplete ? AppText.scanStatus(diagnostics) : nil,
                 topFiles: Array(topFiles.prefix(8)),
                 todayCost: todayCost,
                 weeklyQuotaCost: weeklyQuotaCost,
                 display: LocalUsageDisplay(
-                    consumptionLabel: AppText.consumption(TokenAmountFormatter.compact(totals.totalTokens)),
-                    cacheHitLabel: AppText.cacheHit(CodexBackend.formatCacheHitPercent(cacheHitPercent)),
-                    estimatedCostLabel: AppText.todayEstimatedCost(todayCost),
+                    consumptionLabel: AppText.consumption(diagnostics.status == .unavailable ? nil : TokenAmountFormatter.compact(totals.totalTokens))
+                        + (diagnostics.status == .partial ? "*" : ""),
+                    cacheHitLabel: AppText.cacheHit(diagnostics.status == .unavailable ? nil : CodexBackend.formatCacheHitPercent(cacheHitPercent)),
+                    estimatedCostLabel: AppText.todayEstimatedCost(diagnostics.status == .unavailable ? nil : todayCost),
                     weeklyQuotaCostLabel: weeklyWindow == nil
                         ? nil
                         : AppText.weeklyQuotaEstimatedCost(weeklyQuotaCost),
-                    estimatedCreditsLabel: AppText.todayEstimatedCredits(todayCredits),
-                    pricingCoverageLabel: AppText.pricingCoverage(cost: todayCost, credits: todayCredits)
+                    estimatedCreditsLabel: AppText.todayEstimatedCredits(diagnostics.status == .unavailable ? nil : todayCredits),
+                    pricingCoverageLabel: AppText.pricingCoverage(cost: todayCost, credits: todayCredits),
+                    scanStatusLabel: AppText.scanStatus(diagnostics),
+                    billingAssumptionsLabel: AppText.billingAssumptions(assumptions)
                 ),
                 todayCredits: todayCredits,
-                accountContext: accountContext
+                accountContext: accountContext,
+                diagnostics: diagnostics,
+                billingAssumptions: assumptions
             )
+        }
+
+        private func makeDiagnostics(cache: LocalUsageScanCache, filesDiscovered: Int, roots: [String]? = nil) -> UsageScanDiagnostics {
+            func includes(_ path: String?) -> Bool {
+                guard let roots, let path else { return true }
+                return roots.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }
+            }
+            var issues = scanIssues.filter { includes($0.path) }
+            var validRecords = 0, usageEvents = 0, filesVerified = 0
+            let failedPaths = Set(scanIssues.filter { $0.kind == .fileReadFailed || $0.kind == .fileMissing }.compactMap(\.path))
+            for (path, state) in cache.files.sorted(by: { $0.key < $1.key }) where includes(path) {
+                let file = state.diagnostics
+                validRecords += file?.validRecords ?? (state.totals.totalTokens > 0 ? 1 : 0)
+                usageEvents += file?.todayUsageEvents ?? 0
+                if file?.version == UsageFileDiagnostics.currentVersion, !failedPaths.contains(path) { filesVerified += 1 }
+                func append(_ kind: UsageScanIssue.Kind, _ count: Int, _ message: String) {
+                    if count > 0 { issues.append(UsageScanIssue(kind: kind, path: path, count: count, message: message)) }
+                }
+                append(.invalidJSON, state.parseErrorCount, "Malformed JSON records could not be read.")
+                append(.invalidUsage, file?.invalidUsageRecords ?? 0, "Records lack valid usage totals, timestamps or required event fields.")
+                append(.oversizedRecord, file?.oversizedRecords ?? 0, "Records exceed the 8 MB parsing limit; their effect on usage could not be verified.")
+                append(.pendingRecord, !state.pendingData.isEmpty || state.isSkippingOversizedLine == true ? 1 : 0,
+                       "The last record is not complete; it will be retried after the next append.")
+                if file?.version != UsageFileDiagnostics.currentVersion {
+                    append(.cacheUnavailable, 1, "Cached statistics have not yet been verified with the current parser.")
+                }
+            }
+            issues.sort { ($0.path ?? "", $0.kind.rawValue) < ($1.path ?? "", $1.kind.rawValue) }
+            return .make(roots: rootStatuses.filter { includes($0.path) }, filesDiscovered: filesDiscovered,
+                         filesVerified: filesVerified, validRecords: validRecords, usageEvents: usageEvents, issues: issues)
         }
 
         private func makeWeeklyQuotaCost(
             observed: UsageCostEstimate,
             window: RateLimitWindow?,
             observation: LocalUsageWeeklyCostObservation?,
-            now: Date
+            now: Date,
+            diagnostics: UsageScanDiagnostics,
+            assumptions: UsageBillingAssumptions
         ) -> WeeklyQuotaCostEstimate? {
             guard let window,
                   let windowID = QuotaWindowID(window: window),
@@ -1420,8 +1492,10 @@ public enum CodexBackend {
 
             let usedPercent = max(0, min(100, max(window.usedPercent, 100 - window.remainingPercent)))
             let usedDeltaPercent = max(0, usedPercent - observation.baselineUsedPercent)
+            let pauseReason = diagnostics.status.isIncomplete ? "incompleteScan"
+                : (assumptions.assumedAPITokens > 0 || assumptions.assumedCreditTokens > 0) ? "billingAssumptions" : nil
             let estimatedQuotaUSD: Double?
-            if usedDeltaPercent >= 2,
+            if pauseReason == nil, usedDeltaPercent >= 2,
                observed.coveragePercent >= 95,
                observed.pricedTokens > 0,
                let observedCostUSD = observed.estimatedCostUSD {
@@ -1444,7 +1518,10 @@ public enum CodexBackend {
                 unpricedTokens: observed.unpricedTokens,
                 unpricedModels: observed.unpricedModels,
                 source: observation.rootPaths?.joined(separator: ","),
-                accountScopeKey: observation.accountScopeKey
+                accountScopeKey: observation.accountScopeKey,
+                scanStatus: diagnostics.status,
+                billingAssumptions: assumptions,
+                inferencePauseReason: pauseReason
             )
         }
 
@@ -1492,6 +1569,7 @@ public enum CodexBackend {
         var copyDay: String?
         var latestUsageAt: Date?
         var hasUsageBounds: Bool?
+        var diagnostics: UsageFileDiagnostics?
         var pendingData = Data()
         var isSkippingOversizedLine: Bool?
         var previousTotalUsage: TokenUsage?
@@ -1522,7 +1600,7 @@ public enum CodexBackend {
             state.duplicateEventCount = 0
             state.importedEventCount = 0
             state.regressionEventCount = 0
-            state.parseErrorCount = 0
+            state.diagnostics?.todayUsageEvents = 0
             state.lastEventAtIso = nil
             state.dailyCost = nil
             return state
@@ -1701,6 +1779,9 @@ public enum CodexBackend {
     private static func emptyLocalUsageSnapshot(_ error: Error) -> LocalUsageSnapshot {
         let now = Date()
         let source = localUsageSourceDescription(rootURLs: localUsageRootURLs())
+        let diagnostics = UsageScanDiagnostics.make(roots: [], filesDiscovered: 0, filesVerified: 0,
+            validRecords: 0, usageEvents: 0, issues: [UsageScanIssue(kind: .cacheUnavailable, path: nil, count: 1,
+                                                                 message: errorMessage(error))])
         return LocalUsageSnapshot(
             fetchedAtIso: ISO8601DateFormatter().string(from: now),
             source: source,
@@ -1728,8 +1809,10 @@ public enum CodexBackend {
                 consumptionLabel: AppText.consumption(nil),
                 cacheHitLabel: AppText.cacheHit(nil),
                 estimatedCostLabel: nil,
-                weeklyQuotaCostLabel: nil
-            )
+                weeklyQuotaCostLabel: nil,
+                scanStatusLabel: AppText.scanStatus(diagnostics)
+            ),
+            diagnostics: diagnostics
         )
     }
 
@@ -1875,16 +1958,45 @@ public enum CodexBackend {
         var size: UInt64 { stamp.size }
     }
 
-    private static func walkJsonlFileInfos(root: URL, dayStart: Date) -> [JsonlFileInfo] {
+    private struct JsonlDiscovery {
+        var files: [JsonlFileInfo]
+        var root: UsageRootStatus
+        var issues: [UsageScanIssue]
+    }
+
+    private static func walkJsonlFileInfos(root: URL, dayStart: Date, allowMissing: Bool) -> JsonlDiscovery {
+        var info = stat()
+        let result = stat(root.path, &info)
+        let missing = result != 0 && errno == ENOENT
+        guard result == 0, info.st_mode & S_IFMT == S_IFDIR, access(root.path, R_OK | X_OK) == 0 else {
+            return JsonlDiscovery(files: [], root: UsageRootStatus(path: root.path, state: missing ? .missing : .unavailable,
+                                                                   optional: allowMissing),
+                                  issues: missing && allowMissing ? [] : [UsageScanIssue(kind: .directoryUnavailable, path: root.path,
+                                     count: 1, message: missing ? "Session directory does not exist." : "Session directory cannot be read.")])
+        }
+        var issues: [UsageScanIssue] = []
+        let rootStatus = UsageRootStatus(path: root.path, state: .available, optional: allowMissing)
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
-                                                              options: [.skipsHiddenFiles]) else { return [] }
+                                                              options: [.skipsHiddenFiles], errorHandler: { url, error in
+            issues.append(UsageScanIssue(kind: .directoryUnavailable, path: url.path, count: 1, message: error.localizedDescription))
+            return true
+        }) else {
+            return JsonlDiscovery(files: [], root: rootStatus,
+                                  issues: [UsageScanIssue(kind: .directoryUnavailable, path: root.path, count: 1,
+                                                         message: "Session directory enumeration failed.")])
+        }
         var files: [JsonlFileInfo] = []
         for case let file as URL in enumerator where file.pathExtension == "jsonl" {
             let canonical = file.standardizedFileURL.resolvingSymlinksInPath()
-            guard let stamp = UsageFileStamp.read(canonical), stamp.modifiedAt >= dayStart else { continue }
+            guard let stamp = UsageFileStamp.read(canonical) else {
+                issues.append(UsageScanIssue(kind: .fileReadFailed, path: canonical.path, count: 1,
+                                            message: "Session file metadata is unavailable or the path is not a regular file."))
+                continue
+            }
+            guard stamp.modifiedAt >= dayStart else { continue }
             files.append(JsonlFileInfo(url: canonical, stamp: stamp))
         }
-        return files
+        return JsonlDiscovery(files: files, root: rootStatus, issues: issues)
     }
 
     private static func sessionIdFromMeta(_ event: [String: Any]) -> String? {
@@ -1893,7 +2005,8 @@ public enum CodexBackend {
         else {
             return nil
         }
-        return stringValue(payload["id"]) ?? stringValue(payload["session_id"])
+        let id = (stringValue(payload["id"]) ?? stringValue(payload["session_id"]))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     private static func modelFromPayload(_ payload: [String: Any]) -> String? {

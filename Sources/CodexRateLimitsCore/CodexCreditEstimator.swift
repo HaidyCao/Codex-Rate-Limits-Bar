@@ -31,6 +31,10 @@ enum CodexCreditEstimator {
         return "credits-v1/\(rate.input)/\(rate.cached)/\(rate.output)/\(rate.longContext)/\(rate.fastMultiplier ?? 0)"
     }
 
+    static func needsRequestContext(_ model: String?) -> Bool {
+        TokenCostEstimator.canonicalModel(model).flatMap { rates[$0]?.longContext } == true
+    }
+
     static func estimate(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String?) -> Double? {
         guard let model = TokenCostEstimator.canonicalModel(model), let rate = rates[model] else { return nil }
         let tier = serviceTier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

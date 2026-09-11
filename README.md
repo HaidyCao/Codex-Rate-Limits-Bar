@@ -17,7 +17,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
   - Visible by default and can be hidden from the menu settings.
   - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories; `CODEX_SESSIONS_DIR` explicitly selects one directory.
   - Session files are read incrementally with a reusable 1 MB buffer. Per-file identities, content fingerprints, cursors, daily baselines, and compact model cost buckets are persisted for up to eight days. Unchanged files reuse the cache; changed prefixes and relevant session copies trigger replay.
-- The Usage card learns the API-equivalent USD value of the weekly quota from this Mac's incremental cost and the matching change in Codex's used percentage. It waits for at least two observed percentage points and 95% known-price coverage before showing a value.
+- The Usage card learns the API-equivalent USD value of the weekly quota from this Mac's incremental cost and the matching change in Codex's used percentage. It waits for at least two observed percentage points and 95% known-price coverage, and pauses when the relevant scan is incomplete or billing conditions had to be assumed.
 - The app, command-line data reader, and bundled MCP server are implemented in
   one Swift executable. Node.js is not required.
 - If Codex was installed via npm, the app looks for the native Codex vendor
@@ -79,6 +79,47 @@ including today's logs. Rebuild recalculates tokens and price equivalents while
 preserving the account and a still-valid weekly observation baseline. The first
 upgrade also verifies retained files that lack identity metadata. Large histories
 can take tens of seconds to rebuild; the menu scan runs in the background.
+
+## Scan Completeness and Billing Assumptions
+
+Local usage exposes three separate measures in the menu, CLI and MCP:
+
+- `diagnostics.status` describes the scanned logs: `complete`, `empty` (no logs),
+  `noUsage` (no usage events today), `partial` (some data could not be verified),
+  or `unavailable` (no usable records could be verified). A valid zero-token
+  event is distinct from missing or unreadable logs.
+- API and credit `coveragePercent` describe prices for the tokens already
+  counted. **100% price coverage does not imply a complete scan or billing record.**
+- `billingAssumptions` reports missing mode/context token counts, the tokens
+  whose API or credit price used a default, and `apiPercent`/`creditPercent`.
+  These percentages use deduplicated observed tokens as the denominator; missing
+  both fields does not double-count a token. Only rules affected by the missing
+  field count toward assumed pricing (for example, Astra credits have no context tier).
+
+All bounded JSONL records are parsed as JSON, including whitespace, escaped keys
+and arbitrary field order. Reads use a reusable 1 MB buffer; a single record can
+grow to 8 MB to accommodate large normal session and compaction records. Larger
+records, malformed JSON, invalid usage fields and unfinished trailing records
+produce diagnostics. Rate-limit-only updates are valid non-usage events.
+Per-file diagnostic counters survive restarts. Old caches replay retained files
+to recover records skipped by the previous parser, preserving valid observations.
+
+Diagnostics cover the selected retained files and their cumulative baselines.
+They include directory/read failures, missing files, parsing/skipped/pending
+record counts, root availability and up to 50 path/reason entries, with an omitted
+entry count. Optional default homes that have never existed are listed without
+raising an error; an inaccessible directory or missing explicit
+`CODEX_SESSIONS_DIR` is a failure. A disappearing directory retains cached totals.
+File access recovery or repaired records are checked on the next refresh.
+
+The menu shows incomplete statistics in orange with details in the tooltip;
+unavailable totals display `--`. `status.localUsageError` carries the same error
+as `localUsage.error`. Daily amounts remain estimates over available data.
+Weekly amounts expose `scanStatus`, `billingAssumptions` and
+`inferencePauseReason` (`incompleteScan` or `billingAssumptions`); inference resumes
+when the relevant data is complete, without resetting its valid observation
+baseline. A failure in an unrelated home's independent session does not block
+the active account's weekly estimate.
 
 ## Cost Estimates
 
@@ -194,6 +235,7 @@ For a quick data-source check:
 
 ```sh
 make verify
+make verify-local-usage  # Isolated CLI/MCP fixtures; no real account or session data
 dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar local-usage
 dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar status
 ```

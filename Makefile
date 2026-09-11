@@ -9,7 +9,7 @@ CONTENTS := $(APP_DIR)/Contents
 USER_APPS := $(HOME)/Applications
 INSTALLED_APP := $(USER_APPS)/$(APP_NAME).app
 
-.PHONY: build test run open stop install-user uninstall-user install-plugin clean verify
+.PHONY: build test run open stop install-user uninstall-user install-plugin clean verify verify-local-usage
 
 build:
 	swift build -c $(CONFIG)
@@ -52,7 +52,11 @@ install-plugin: install-user
 	"$(INSTALLED_APP)/Contents/MacOS/$(PRODUCT)" install-plugin --source "$(CURDIR)/plugins/codex-usage-monitor"
 
 verify: test build
+	python3 Tests/Integration/verify_local_usage.py "$(CONTENTS)/MacOS/$(PRODUCT)"
 	@"$(CONTENTS)/MacOS/$(PRODUCT)" rate-limits
+
+verify-local-usage: build
+	python3 Tests/Integration/verify_local_usage.py "$(CONTENTS)/MacOS/$(PRODUCT)"
 
 clean:
 	rm -rf .build "$(DIST_DIR)"

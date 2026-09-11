@@ -113,6 +113,8 @@ public struct LocalUsageDisplay: Codable, Sendable {
     public let weeklyQuotaCostLabel: String?
     public var estimatedCreditsLabel: String? = nil
     public var pricingCoverageLabel: String? = nil
+    public var scanStatusLabel: String? = nil
+    public var billingAssumptionsLabel: String? = nil
 }
 
 public struct UsageModelCost: Codable, Sendable {
@@ -177,6 +179,9 @@ public struct WeeklyQuotaCostEstimate: Codable, Sendable {
     public var unpricedModels: [String]? = nil
     public var source: String? = nil
     public var accountScopeKey: String? = nil
+    public var scanStatus: UsageScanStatus? = nil
+    public var billingAssumptions: UsageBillingAssumptions? = nil
+    public var inferencePauseReason: String? = nil
 }
 
 public struct LocalUsageTopFile: Codable, Sendable {
@@ -217,6 +222,8 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public let display: LocalUsageDisplay?
     public var todayCredits: UsageCreditEstimate? = nil
     public var accountContext: CodexAccountContext? = nil
+    public var diagnostics: UsageScanDiagnostics? = nil
+    public var billingAssumptions: UsageBillingAssumptions? = nil
 }
 
 public struct RuntimeError: Error, LocalizedError {

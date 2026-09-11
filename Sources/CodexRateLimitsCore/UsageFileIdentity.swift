@@ -24,14 +24,15 @@ enum UsageFileIdentity {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var line = Data()
-        while line.count < 1_048_576 {
+        while line.count <= 8 * 1_048_576 {
             guard let chunk = try? handle.read(upToCount: 4096), !chunk.isEmpty else { return nil }
             if let end = chunk.firstIndex(of: 0x0A) {
                 line.append(chunk.prefix(upTo: end))
                 guard let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
                       event["type"] as? String == "session_meta", let payload = event["payload"] as? [String: Any]
                 else { return nil }
-                return ((payload["id"] as? String) ?? (payload["session_id"] as? String)).flatMap { $0.isEmpty ? nil : $0 }
+                let id = ((payload["id"] as? String) ?? (payload["session_id"] as? String))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return id.flatMap { $0.isEmpty ? nil : $0 }
             }
             line.append(chunk)
         }

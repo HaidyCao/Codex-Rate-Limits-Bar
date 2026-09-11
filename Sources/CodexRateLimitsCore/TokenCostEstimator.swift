@@ -14,6 +14,10 @@ struct TokenUsage: Codable, Equatable, Sendable {
 
     static func from(_ value: Any?) -> TokenUsage? {
         guard let object = value as? [String: Any] else { return nil }
+        guard nonnegativeInteger(object["total_tokens"]) != nil else { return nil }
+        for key in ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens"] {
+            if let value = object[key], nonnegativeInteger(value) == nil { return nil }
+        }
         return TokenUsage(
             inputTokens: parseInt64(object["input_tokens"]),
             cachedInputTokens: parseInt64(object["cached_input_tokens"]),
@@ -24,14 +28,18 @@ struct TokenUsage: Codable, Equatable, Sendable {
         )
     }
 
+    static func nonnegativeInteger(_ value: Any?) -> Int64? {
+        if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  let result = Int64(number.stringValue) ?? Int64(exactly: number.doubleValue), result >= 0 else { return nil }
+            return result
+        }
+        if let string = value as? String, let result = Int64(string), result >= 0 { return result }
+        return nil
+    }
+
     private static func parseInt64(_ rawValue: Any?) -> Int64 {
-        guard let rawValue, !(rawValue is NSNull) else { return 0 }
-        if let rawValue = rawValue as? Int64 { return rawValue }
-        if let rawValue = rawValue as? Int { return Int64(rawValue) }
-        if let rawValue = rawValue as? Double { return Int64(rawValue) }
-        if let rawValue = rawValue as? NSNumber { return rawValue.int64Value }
-        if let rawValue = rawValue as? String { return Int64(rawValue) ?? 0 }
-        return 0
+        nonnegativeInteger(rawValue) ?? 0
     }
 
     mutating func add(_ other: TokenUsage) {
@@ -143,6 +151,10 @@ enum TokenCostEstimator {
         return "raw-model-v1|\(canonical)|\(api)|\(CodexCreditEstimator.signature(for: canonical))"
     }
 
+    static func needsRequestContext(_ model: String?) -> Bool {
+        canonicalModel(model).flatMap { prices[$0]?.usesLongContextTier } == true
+    }
+
     static func estimateUSD(
         usage: TokenUsage,
         model: String?,
@@ -167,6 +179,7 @@ struct TokenCostAccumulator: Codable {
         var estimatedCostUSD: Double?
         var pricingSignature: String?
         var credits: CreditTotals?
+        var assumptions: UsageBillingAssumptions?
     }
 
     private struct CreditTotals: Codable {
@@ -193,7 +206,7 @@ struct TokenCostAccumulator: Codable {
 
     var requiresRepricing: Bool {
         hasNewlyPricedModels || buckets.contains { model, bucket in
-            bucket.pricingSignature != TokenCostEstimator.pricingSignature(for: model)
+            bucket.pricingSignature != TokenCostEstimator.pricingSignature(for: model) || bucket.assumptions == nil
         }
     }
 
@@ -202,10 +215,16 @@ struct TokenCostAccumulator: Codable {
         let label = raw.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
         let signature = TokenCostEstimator.pricingSignature(for: label)
         let existing = buckets[label]
-        var bucket = existing ?? Bucket(pricingSignature: signature, credits: CreditTotals())
+        var bucket = existing ?? Bucket(pricingSignature: signature, credits: CreditTotals(), assumptions: UsageBillingAssumptions())
         let eventCost = TokenCostEstimator.estimateUSD(usage: usage, model: label, requestInputTokens: requestInputTokens)
         let hadUnpricedUsage = existing != nil && bucket.estimatedCostUSD == nil
         bucket.usage.add(usage)
+        bucket.assumptions?.totalTokens += usage.totalTokens
+        if serviceTier == nil { bucket.assumptions?.missingServiceTierTokens += usage.totalTokens }
+        if requestInputTokens == nil { bucket.assumptions?.missingRequestContextTokens += usage.totalTokens }
+        if requestInputTokens == nil, TokenCostEstimator.needsRequestContext(label) {
+            bucket.assumptions?.assumedAPITokens += usage.totalTokens
+        }
         if bucket.pricingSignature == signature {
             if let eventCost, !hadUnpricedUsage {
                 bucket.estimatedCostUSD = (bucket.estimatedCostUSD ?? 0) + eventCost
@@ -216,6 +235,9 @@ struct TokenCostAccumulator: Codable {
                 bucket.credits?.pricedTokens += usage.totalTokens
                 if serviceTier == nil {
                     bucket.credits?.assumedStandardTokens += usage.totalTokens
+                }
+                if serviceTier == nil || (requestInputTokens == nil && CodexCreditEstimator.needsRequestContext(label)) {
+                    bucket.assumptions?.assumedCreditTokens += usage.totalTokens
                 }
             } else {
                 bucket.credits?.unpricedTokens += usage.totalTokens
@@ -233,6 +255,8 @@ struct TokenCostAccumulator: Codable {
                 continue
             }
             bucket.usage.add(otherBucket.usage)
+            if let assumptions = otherBucket.assumptions { bucket.assumptions?.merge(assumptions) }
+            else { bucket.assumptions = nil }
             if bucket.pricingSignature == otherBucket.pricingSignature {
                 if let cost = bucket.estimatedCostUSD, let otherCost = otherBucket.estimatedCostUSD {
                     bucket.estimatedCostUSD = cost + otherCost
@@ -279,6 +303,15 @@ struct TokenCostAccumulator: Codable {
             coveragePercent: total > 0 ? Double(pricedTokens) / Double(total) * 100 : 100,
             pricedTokens: pricedTokens, unpricedTokens: unpricedTokens, models: models
         )
+    }
+
+    func billingAssumptions() -> UsageBillingAssumptions {
+        buckets.values.reduce(into: UsageBillingAssumptions()) { result, bucket in
+            result.merge(bucket.assumptions ?? UsageBillingAssumptions(
+                totalTokens: bucket.usage.totalTokens, missingServiceTierTokens: bucket.usage.totalTokens,
+                missingRequestContextTokens: bucket.usage.totalTokens,
+                assumedAPITokens: bucket.usage.totalTokens, assumedCreditTokens: bucket.usage.totalTokens))
+        }
     }
 
     func creditEstimate() -> UsageCreditEstimate {

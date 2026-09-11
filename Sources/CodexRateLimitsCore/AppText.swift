@@ -1,6 +1,94 @@
 import Foundation
 
 public enum AppText {
+    public static func scanStatus(_ diagnostics: UsageScanDiagnostics?) -> String {
+        guard let diagnostics else { return localUsageStatusTooltip }
+        switch language {
+        case .simplifiedChinese:
+            switch diagnostics.status {
+            case .complete: return "扫描完整"
+            case .empty: return "暂无会话日志"
+            case .noUsage: return "暂无今日用量记录"
+            case .partial: return "统计不完整 · 已保留可用数据"
+            case .unavailable: return "统计不可用 · 无法确认用量"
+            }
+        case .traditionalChinese:
+            switch diagnostics.status {
+            case .complete: return "掃描完整"
+            case .empty: return "暫無會話日誌"
+            case .noUsage: return "暫無今日用量記錄"
+            case .partial: return "統計不完整 · 已保留可用資料"
+            case .unavailable: return "統計不可用 · 無法確認用量"
+            }
+        case .japanese:
+            switch diagnostics.status {
+            case .complete: return "スキャン完了"
+            case .empty: return "セッションログなし"
+            case .noUsage: return "本日の使用記録なし"
+            case .partial: return "統計は不完全 · 取得済みデータを保持"
+            case .unavailable: return "統計を取得できません"
+            }
+        case .korean:
+            switch diagnostics.status {
+            case .complete: return "스캔 완료"
+            case .empty: return "세션 로그 없음"
+            case .noUsage: return "오늘 사용 기록 없음"
+            case .partial: return "불완전한 통계 · 확인된 데이터 유지"
+            case .unavailable: return "사용량을 확인할 수 없음"
+            }
+        case .english:
+            switch diagnostics.status {
+            case .complete: return "Scan complete"
+            case .empty: return "No session logs"
+            case .noUsage: return "No usage records today"
+            case .partial: return "Statistics incomplete · available data retained"
+            case .unavailable: return "Statistics unavailable · usage unconfirmed"
+            }
+        }
+    }
+
+    public static func billingAssumptions(_ assumptions: UsageBillingAssumptions?) -> String? {
+        guard let assumptions, assumptions.totalTokens > 0 else { return nil }
+        let values = "API \(CreditFormatter.string(assumptions.apiPercent))% · credits \(CreditFormatter.string(assumptions.creditPercent))%"
+        switch language {
+        case .simplifiedChinese: return "默认费率占比：\(values)"
+        case .traditionalChinese: return "預設費率占比：\(values)"
+        case .japanese: return "既定料金を仮定：\(values)"
+        case .korean: return "기본 요율 가정: \(values)"
+        case .english: return "Assumed pricing: \(values)"
+        }
+    }
+
+    public static func scanDetails(_ snapshot: LocalUsageSnapshot) -> String {
+        let diagnostics = snapshot.diagnostics
+        var lines = [scanStatus(diagnostics)]
+        if let diagnostics {
+            let counts: String
+            switch language {
+            case .simplifiedChinese: counts = "目录失败 \(diagnostics.directoryFailureCount) · 读取失败 \(diagnostics.readFailureCount) · 文件缺失 \(diagnostics.missingFileCount) · 解析失败 \(diagnostics.parseErrorCount) · 跳过记录 \(diagnostics.skippedRecordCount) · 待写完 \(diagnostics.pendingRecordCount)"
+            case .traditionalChinese: counts = "目錄失敗 \(diagnostics.directoryFailureCount) · 讀取失敗 \(diagnostics.readFailureCount) · 檔案缺失 \(diagnostics.missingFileCount) · 解析失敗 \(diagnostics.parseErrorCount) · 跳過記錄 \(diagnostics.skippedRecordCount) · 待寫完 \(diagnostics.pendingRecordCount)"
+            case .japanese: counts = "ディレクトリ失敗 \(diagnostics.directoryFailureCount) · 読取失敗 \(diagnostics.readFailureCount) · 欠落 \(diagnostics.missingFileCount) · 解析失敗 \(diagnostics.parseErrorCount) · スキップ \(diagnostics.skippedRecordCount) · 書込待ち \(diagnostics.pendingRecordCount)"
+            case .korean: counts = "폴더 오류 \(diagnostics.directoryFailureCount) · 읽기 실패 \(diagnostics.readFailureCount) · 파일 누락 \(diagnostics.missingFileCount) · 파싱 실패 \(diagnostics.parseErrorCount) · 건너뜀 \(diagnostics.skippedRecordCount) · 기록 대기 \(diagnostics.pendingRecordCount)"
+            case .english: counts = "Directory failures \(diagnostics.directoryFailureCount) · read failures \(diagnostics.readFailureCount) · missing files \(diagnostics.missingFileCount) · parse failures \(diagnostics.parseErrorCount) · skipped records \(diagnostics.skippedRecordCount) · pending records \(diagnostics.pendingRecordCount)"
+            }
+            lines.append(counts)
+            lines += diagnostics.issues.prefix(8).map { "\($0.path ?? "cache"): \($0.message) (\($0.count))" }
+        }
+        if let assumptions = snapshot.billingAssumptions {
+            if let label = billingAssumptions(assumptions) { lines.append(label) }
+            let tier = TokenAmountFormatter.compact(assumptions.missingServiceTierTokens)
+            let context = TokenAmountFormatter.compact(assumptions.missingRequestContextTokens)
+            switch language {
+            case .simplifiedChinese: lines.append("缺少模式：\(tier) tokens；缺少请求上下文：\(context) tokens。两项可能重叠。")
+            case .traditionalChinese: lines.append("缺少模式：\(tier) tokens；缺少請求上下文：\(context) tokens。兩項可能重疊。")
+            case .japanese: lines.append("モード不明：\(tier) tokens、リクエストコンテキスト不明：\(context) tokens。重複あり。")
+            case .korean: lines.append("모드 누락: \(tier) tokens, 요청 컨텍스트 누락: \(context) tokens. 중복 가능.")
+            case .english: lines.append("Missing mode: \(tier) tokens; missing request context: \(context) tokens. Counts may overlap.")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     public static var rebuildLocalUsage: String {
         switch language {
         case .simplifiedChinese: return "重建本机统计"
@@ -193,6 +281,16 @@ public enum AppText {
     }
 
     public static func weeklyQuotaEstimatedCost(_ estimate: WeeklyQuotaCostEstimate?) -> String {
+        if let reason = estimate?.inferencePauseReason {
+            let scan = reason == "incompleteScan"
+            switch language {
+            case .simplifiedChinese: return scan ? "周金额暂停推算 · 统计不完整" : "周金额暂停推算 · 计费条件缺失"
+            case .traditionalChinese: return scan ? "週金額暫停推算 · 統計不完整" : "週金額暫停推算 · 計費條件缺失"
+            case .japanese: return scan ? "週間金額の推定を停止 · 不完全な統計" : "週間金額の推定を停止 · 料金情報不足"
+            case .korean: return scan ? "주간 금액 추정 중지 · 불완전한 통계" : "주간 금액 추정 중지 · 요율 정보 누락"
+            case .english: return scan ? "Weekly estimate paused · incomplete scan" : "Weekly estimate paused · billing assumptions"
+            }
+        }
         guard let estimate else {
             switch language {
             case .simplifiedChinese: return "正在计算周额度金额"

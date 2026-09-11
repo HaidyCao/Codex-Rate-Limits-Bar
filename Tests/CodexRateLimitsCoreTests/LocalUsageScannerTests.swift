@@ -642,7 +642,9 @@ final class LocalUsageScannerTests: XCTestCase {
         let restarted = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                        now: { now }, cacheFileURL: cache)
         XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_250)
-        try appendEvent(turnContext(model: "gpt-6-astra", timestamp: "2026-09-11T00:03:00Z"), to: file, modifiedAt: now)
+        var missingTier = turnContext(model: "gpt-6-astra", timestamp: "2026-09-11T00:03:00Z")
+        missingTier["payload"] = ["model": "gpt-6-astra"]
+        try appendEvent(missingTier, to: file, modifiedAt: now)
         try appendEvent(tokenCount(input: 3_000_000, total: 3_000_000, lastInput: 100_000,
                                    timestamp: "2026-09-11T00:04:00Z"), to: file, modifiedAt: now)
         let standard = try restarted.snapshot()
@@ -774,7 +776,8 @@ final class LocalUsageScannerTests: XCTestCase {
         let alias = temporaryDirectory.appendingPathComponent("custom-home")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: cli.deletingLastPathComponent())
         let roots = CodexBackend.localUsageRootURLs(environment: ["CODEX_HOME": alias.path], home: temporaryDirectory)
-        XCTAssertEqual(Set(roots.map(\.path)), Set([desktop, cli, archive].map { $0.resolvingSymlinksInPath().path }))
+        let optionalArchive = desktop.deletingLastPathComponent().appendingPathComponent("archived_sessions")
+        XCTAssertEqual(Set(roots.map(\.path)), Set([desktop, optionalArchive, cli, archive].map { $0.resolvingSymlinksInPath().path }))
         let override = CodexBackend.localUsageRootURLs(environment: ["CODEX_SESSIONS_DIR": desktop.path], home: temporaryDirectory)
         XCTAssertEqual(override, [desktop.resolvingSymlinksInPath()])
     }
@@ -898,7 +901,7 @@ final class LocalUsageScannerTests: XCTestCase {
         [
             "timestamp": timestamp,
             "type": "turn_context",
-            "payload": ["model": model],
+            "payload": ["model": model, "service_tier": "standard"],
         ]
     }
 
@@ -913,7 +916,7 @@ final class LocalUsageScannerTests: XCTestCase {
         output: Int64 = 0,
         reasoningOutput: Int64 = 0,
         total: Int64,
-        lastInput: Int64? = nil,
+        lastInput: Int64? = 1000,
         timestamp: String
     ) -> [String: Any] {
         var info: [String: Any] = [
