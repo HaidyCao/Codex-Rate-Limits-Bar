@@ -25,7 +25,7 @@ public struct RateLimitWindow: Codable, Sendable {
     }
 }
 
-public struct CreditsSnapshot: Codable {
+public struct CreditsSnapshot: Codable, Sendable {
     public let hasCredits: Bool
     public let unlimited: Bool
     public let balance: String?
@@ -99,12 +99,79 @@ public struct ResetCreditsSnapshot: Codable {
     public let display: ResetCreditsDisplay?
 }
 
-public struct LocalUsageDisplay: Codable {
+public struct LocalUsageDisplay: Codable, Sendable {
     public let consumptionLabel: String?
     public let cacheHitLabel: String?
+    public let estimatedCostLabel: String?
+    public let weeklyQuotaCostLabel: String?
+    public var estimatedCreditsLabel: String? = nil
+    public var pricingCoverageLabel: String? = nil
 }
 
-public struct LocalUsageTopFile: Codable {
+public struct UsageModelCost: Codable, Sendable {
+    public let model: String
+    public let inputTokens: Int64
+    public let cachedInputTokens: Int64
+    public let cacheWriteInputTokens: Int64
+    public let outputTokens: Int64
+    public let totalTokens: Int64
+    public let estimatedCostUSD: Double?
+}
+
+public struct UsageCostEstimate: Codable, Sendable {
+    public let estimatedCostUSD: Double?
+    public let coveragePercent: Double
+    public let pricedTokens: Int64
+    public let unpricedTokens: Int64
+    public let models: [UsageModelCost]
+
+    public var isPartial: Bool {
+        unpricedTokens > 0
+    }
+
+    public var unpricedModels: [String] {
+        models.filter { $0.estimatedCostUSD == nil && $0.totalTokens > 0 }.map(\.model)
+    }
+}
+
+public struct UsageModelCredits: Codable, Sendable {
+    public let model: String
+    public let totalTokens: Int64
+    public let estimatedCredits: Double?
+    public let unpricedTokens: Int64
+}
+
+public struct UsageCreditEstimate: Codable, Sendable {
+    public let estimatedCredits: Double?
+    public let coveragePercent: Double
+    public let pricedTokens: Int64
+    public let unpricedTokens: Int64
+    public let assumedStandardTokens: Int64
+    public let models: [UsageModelCredits]
+
+    public var isPartial: Bool { unpricedTokens > 0 }
+    public var unpricedModels: [String] {
+        models.filter { $0.unpricedTokens > 0 }.map(\.model)
+    }
+}
+
+public struct WeeklyQuotaCostEstimate: Codable, Sendable {
+    public let windowStartIso: String
+    public let windowEndIso: String
+    public let observationStartIso: String
+    public let baselineUsedPercent: Int
+    public let usedPercent: Int
+    public let usedDeltaPercent: Int
+    public let observedCostUSD: Double?
+    public let estimatedQuotaUSD: Double?
+    public let coveragePercent: Double
+    public let pricedTokens: Int64
+    public let unpricedTokens: Int64
+    public var unpricedModels: [String]? = nil
+    public var source: String? = nil
+}
+
+public struct LocalUsageTopFile: Codable, Sendable {
     public let file: String
     public let eventCount: Int
     public let duplicateEventCount: Int
@@ -115,13 +182,14 @@ public struct LocalUsageTopFile: Codable {
     public let lastEventAtIso: String?
 }
 
-public struct LocalUsageSnapshot: Codable {
+public struct LocalUsageSnapshot: Codable, Sendable {
     public let fetchedAtIso: String
     public let source: String?
     public let timezone: String?
     public let localDate: String
     public let inputTokens: Int64
     public let cachedInputTokens: Int64
+    public let cacheWriteInputTokens: Int64
     public let outputTokens: Int64
     public let reasoningOutputTokens: Int64
     public let totalTokens: Int64
@@ -135,7 +203,10 @@ public struct LocalUsageSnapshot: Codable {
     public let parseErrorCount: Int
     public let error: String?
     public let topFiles: [LocalUsageTopFile]?
+    public let todayCost: UsageCostEstimate?
+    public let weeklyQuotaCost: WeeklyQuotaCostEstimate?
     public let display: LocalUsageDisplay?
+    public var todayCredits: UsageCreditEstimate? = nil
 }
 
 public struct RuntimeError: Error, LocalizedError {

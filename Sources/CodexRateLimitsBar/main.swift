@@ -136,6 +136,7 @@ struct QuotaAlertPreferences {
 private struct RateLimitUIUpdate: Sendable {
     let weekly: RateLimitWindow?
     let error: String?
+    let credits: CreditsSnapshot?
 }
 
 final class RateLimitsMenuView: NSView {
@@ -156,22 +157,38 @@ final class RateLimitsMenuView: NSView {
         addSubview(cardView)
     }
 
-    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
-        cardView.update(weekly: weekly, forecast: forecast)
+    func update(
+        weekly: RateLimitWindow?,
+        forecast: QuotaForecast?,
+        weeklyQuotaCost: WeeklyQuotaCostEstimate?,
+        credits: CreditsSnapshot?
+    ) {
+        cardView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits)
     }
 }
 
 class RateLimitsDrawingView: NSView {
     private var weekly: RateLimitWindow?
     private var forecast: QuotaForecast?
+    private var weeklyQuotaCost: WeeklyQuotaCostEstimate?
+    private var credits: CreditsSnapshot?
 
     override var isFlipped: Bool {
         true
     }
 
-    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
+    func update(
+        weekly: RateLimitWindow?,
+        forecast: QuotaForecast?,
+        weeklyQuotaCost: WeeklyQuotaCostEstimate?,
+        credits: CreditsSnapshot?
+    ) {
         self.weekly = weekly
         self.forecast = forecast
+        self.weeklyQuotaCost = weeklyQuotaCost
+        self.credits = credits
+        toolTip = AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
+            + ((weeklyQuotaCost?.unpricedModels?.isEmpty == false) ? "\n" + (weeklyQuotaCost?.unpricedModels?.joined(separator: ", ") ?? "") : "")
         needsDisplay = true
     }
 
@@ -186,6 +203,8 @@ class RateLimitsDrawingView: NSView {
 
         drawQuotaRow(label: AppText.weeklyLimit, window: weekly, y: 36)
         drawForecast(forecast, y: 72)
+        drawWeeklyQuotaCost(weeklyQuotaCost, y: 94)
+        drawText(AppText.officialCreditsBalance(credits), in: NSRect(x: 32, y: 115, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: labelColor)
     }
 
     private func drawQuotaRow(label: String, window: RateLimitWindow?, y: CGFloat) {
@@ -253,6 +272,17 @@ class RateLimitsDrawingView: NSView {
         }
         drawSymbol(symbol, in: NSRect(x: 12, y: y, width: 14, height: 14), color: color)
         drawText(AppText.quotaForecastLabel(forecast), in: NSRect(x: 32, y: y - 1, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: color)
+    }
+
+    private func drawWeeklyQuotaCost(_ estimate: WeeklyQuotaCostEstimate?, y: CGFloat) {
+        let color: NSColor = estimate?.estimatedQuotaUSD == nil ? .secondaryLabelColor : .labelColor
+        drawSymbol("dollarsign.circle.fill", in: NSRect(x: 12, y: y, width: 14, height: 14), color: .systemTeal)
+        drawText(
+            AppText.weeklyQuotaEstimatedCost(estimate),
+            in: NSRect(x: 32, y: y - 1, width: bounds.width - 44, height: 16),
+            font: .systemFont(ofSize: 10.5, weight: .medium),
+            color: color
+        )
     }
 
     private func gradientColors(for remaining: Int?) -> (start: NSColor, end: NSColor) {
@@ -358,8 +388,13 @@ class RateLimitsCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.08).cgColor
     }
 
-    func update(weekly: RateLimitWindow?, forecast: QuotaForecast?) {
-        drawingView.update(weekly: weekly, forecast: forecast)
+    func update(
+        weekly: RateLimitWindow?,
+        forecast: QuotaForecast?,
+        weeklyQuotaCost: WeeklyQuotaCostEstimate?,
+        credits: CreditsSnapshot?
+    ) {
+        drawingView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits)
     }
 }
 
@@ -714,6 +749,11 @@ class LocalUsageDrawingView: NSView {
 
     func update(_ snapshot: LocalUsageSnapshot) {
         self.snapshot = snapshot
+        toolTip = [AppText.todayEstimatedCredits(snapshot.todayCredits),
+                   AppText.pricingCoverage(cost: snapshot.todayCost, credits: snapshot.todayCredits),
+                   AppText.unpricedModels(cost: snapshot.todayCost, credits: snapshot.todayCredits),
+                   AppText.creditAssumptions(snapshot.todayCredits), AppText.creditsEstimateDetails]
+            .compactMap { $0 }.joined(separator: "\n")
         needsDisplay = true
     }
 
@@ -734,7 +774,8 @@ class LocalUsageDrawingView: NSView {
         let totalTokens = snapshot?.totalTokens ?? 0
         let inputTokens = snapshot?.inputTokens ?? 0
         let cachedInputTokens = snapshot?.cachedInputTokens ?? 0
-        let newInputTokens = max(0, inputTokens - cachedInputTokens)
+        let cacheWriteInputTokens = snapshot?.cacheWriteInputTokens ?? 0
+        let newInputTokens = max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens)
         let outputTokens = snapshot?.outputTokens ?? 0
         let eventCount = snapshot?.eventCount ?? 0
         let cacheHitPercent = snapshot?.cacheHitPercent
@@ -745,12 +786,14 @@ class LocalUsageDrawingView: NSView {
         let rawTotal = formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
-        drawText(rawTotal, in: NSRect(x: 12, y: 32, width: min(rawWidth + 4, 250), height: 42), font: rawFont, color: labelColor)
+        drawText(rawTotal, in: NSRect(x: 12, y: 32, width: min(rawWidth + 4, bounds.width - 176), height: 42), font: rawFont, color: labelColor)
 
-        let requestRect = NSRect(x: bounds.width - 120, y: 12, width: 108, height: 58)
+        let requestRect = NSRect(x: bounds.width - 152, y: 12, width: 140, height: 58)
         drawSubCard(requestRect, fill: subCardFill, stroke: subCardStroke)
-        drawText(AppText.totalRequests, in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 6, width: requestRect.width - 20, height: 16), font: .systemFont(ofSize: 10.5, weight: .semibold), color: secondaryColor)
-        drawText(formatRawNumber(Int64(eventCount)), in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 24, width: requestRect.width - 20, height: 24), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: labelColor)
+        drawText(AppText.todayEstimatedCostCardTitle(requests: eventCount), in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 6, width: requestRect.width - 20, height: 16), font: .systemFont(ofSize: 10.5, weight: .semibold), color: secondaryColor)
+        let cost = USDFormatter.string(snapshot?.todayCost?.estimatedCostUSD)
+        let costSuffix = snapshot?.todayCost?.isPartial == true ? "+" : ""
+        drawText("\(cost)\(costSuffix)", in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 24, width: requestRect.width - 20, height: 24), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: labelColor)
 
         let padding: CGFloat = 12
         let gap: CGFloat = 8
@@ -772,6 +815,13 @@ class LocalUsageDrawingView: NSView {
 
         let rect4 = NSRect(x: padding + cardWidth + gap, y: rowTwoY, width: cardWidth, height: cardHeight)
         drawCacheHitCard(rect4, percent: cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
+
+        drawText(AppText.todayEstimatedCredits(snapshot?.todayCredits), in: NSRect(x: 12, y: 210, width: bounds.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold), color: labelColor)
+        drawText(AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits), in: NSRect(x: 12, y: 234, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        let detail = AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits)
+            ?? AppText.creditAssumptions(snapshot?.todayCredits) ?? ""
+        drawText(detail, in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {
@@ -925,11 +975,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let quotaMonitor = QuotaMonitor()
     private let rateLimitsQueue = DispatchQueue(
         label: "local.codex.rate-limits-bar.rate-limits",
-        qos: .utility
+        qos: .utility,
+        autoreleaseFrequency: .workItem
+    )
+    private let localUsageQueue = DispatchQueue(
+        label: "local.codex.rate-limits-bar.local-usage",
+        qos: .utility,
+        autoreleaseFrequency: .workItem
+    )
+    private let resetCreditsQueue = DispatchQueue(
+        label: "local.codex.rate-limits-bar.reset-credits",
+        qos: .utility,
+        autoreleaseFrequency: .workItem
     )
     private let menu = NSMenu()
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 112))
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 156))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -937,7 +998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let localCacheHitItem = NSMenuItem(title: "命中 --", action: nil, keyEquivalent: "")
     private let localUsageDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 224))
+    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 308))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
@@ -947,6 +1008,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var isRefreshingRateLimits = false
     private var isRefreshingLocalUsage = false
     private var isRefreshingResetCredits = false
+    private var pendingLocalUsageRefresh = false
+    private var currentWeeklyWindow: RateLimitWindow?
+    private var currentCredits: CreditsSnapshot?
+    private var currentLocalUsage: LocalUsageSnapshot?
     private var currentWeeklyRemaining: Int?
     private var currentQuotaForecast: QuotaForecast?
     private var currentResetAvailableCount: Int?
@@ -1204,7 +1269,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .success(let payload):
             let update = RateLimitUIUpdate(
                 weekly: payload.rateLimits?.weeklyWindow,
-                error: payload.rateLimitError
+                error: payload.rateLimitError,
+                credits: payload.rateLimits?.credits ?? payload.rateLimitsByLimitId?["codex"]?.credits
             )
             guard let weekly = update.weekly else {
                 isRefreshingRateLimits = false
@@ -1228,22 +1294,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func refreshLocalUsage() {
-        guard !isRefreshingLocalUsage else { return }
+        guard !isRefreshingLocalUsage else {
+            pendingLocalUsageRefresh = true
+            return
+        }
         isRefreshingLocalUsage = true
+        pendingLocalUsageRefresh = false
+        let weeklyWindow = currentWeeklyWindow
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = Self.fetchLocalUsage()
+        localUsageQueue.async { [weak self] in
+            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow)
             DispatchQueue.main.async {
-                self?.isRefreshingLocalUsage = false
-                switch result {
-                case .success(let localUsage):
-                    self?.currentLocalUsageError = localUsage.error
-                    self?.apply(localUsage)
-                    self?.updateCombinedError()
-                case .failure(let error):
-                    self?.applyLocalUsageError(error)
-                }
+                self?.completeLocalUsageRefresh(result)
             }
+        }
+    }
+
+    private func completeLocalUsageRefresh(_ result: Result<LocalUsageSnapshot, Error>) {
+        isRefreshingLocalUsage = false
+        switch result {
+        case .success(let localUsage):
+            currentLocalUsageError = localUsage.error
+            apply(localUsage)
+            updateCombinedError()
+        case .failure(let error):
+            applyLocalUsageError(error)
+        }
+        if pendingLocalUsageRefresh {
+            pendingLocalUsageRefresh = false
+            refreshLocalUsage()
         }
     }
 
@@ -1251,7 +1330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard !isRefreshingResetCredits else { return }
         isRefreshingResetCredits = true
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        resetCreditsQueue.async { [weak self] in
             let result = Self.fetchResetCredits()
             DispatchQueue.main.async {
                 self?.isRefreshingResetCredits = false
@@ -1268,6 +1347,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func applyRateLimits(_ update: RateLimitUIUpdate, monitor: QuotaMonitorSnapshot?) {
         let weekly = update.weekly
+        let previousWindowID = currentWeeklyWindow.flatMap(QuotaWindowID.init)?.rawValue
+        let nextWindowID = weekly.flatMap(QuotaWindowID.init)?.rawValue
+        currentWeeklyWindow = weekly
+        currentCredits = update.credits
         let weeklyRemaining = weekly?.remainingPercent
         currentWeeklyRemaining = weeklyRemaining
         currentRateLimitError = update.error
@@ -1285,8 +1368,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let reset = weekly?.resetDate.map(AppText.statusBarResetDate)
         updateStatusImage(status, reset: reset)
 
-        rateLimitsView.update(weekly: weekly, forecast: currentQuotaForecast)
+        rateLimitsView.update(
+            weekly: weekly,
+            forecast: currentQuotaForecast,
+            weeklyQuotaCost: matchingWeeklyQuotaCost(for: weekly),
+            credits: currentCredits
+        )
         updateRateLimitTooltip()
+        if previousWindowID != nextWindowID {
+            refreshLocalUsage()
+        }
     }
 
     private func deliverQuotaAlert(_ event: QuotaAlertEvent) {
@@ -1313,20 +1404,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func apply(_ localUsage: LocalUsageSnapshot) {
+        currentLocalUsage = localUsage
         let consumption = localUsage.display?.consumptionLabel ?? AppText.consumption(TokenAmountFormatter.compact(localUsage.totalTokens))
         let cacheHit = AppText.cacheHit(formatPercent(localUsage.cacheHitPercent))
         tokenStatusItem.button?.image = makeStatusImage(top: consumption, bottom: cacheHit)
-        tokenStatusItem.button?.toolTip = AppText.localUsageTooltip(tokens: TokenAmountFormatter.compact(localUsage.totalTokens), cacheHit: formatPercent(localUsage.cacheHitPercent))
+        tokenStatusItem.button?.toolTip = AppText.localUsageTooltip(
+            tokens: TokenAmountFormatter.compact(localUsage.totalTokens),
+            cacheHit: formatPercent(localUsage.cacheHitPercent),
+            estimatedCost: localUsage.display?.estimatedCostLabel
+        ) + "\n" + [localUsage.display?.estimatedCreditsLabel, localUsage.display?.pricingCoverageLabel,
+                     AppText.unpricedModels(cost: localUsage.todayCost, credits: localUsage.todayCredits)]
+            .compactMap { $0 }.joined(separator: "\n")
 
         localConsumptionItem.title = consumption
         localCacheHitItem.title = cacheHit
         localUsageDetailItem.title = AppText.localUsageDetail(events: localUsage.eventCount, filesWithEvents: localUsage.filesWithEvents, filesScanned: localUsage.filesScanned)
         localUsageDetailItem.isHidden = true
         localUsagePanelView.update(localUsage)
+        rateLimitsView.update(
+            weekly: currentWeeklyWindow,
+            forecast: currentQuotaForecast,
+            weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow),
+            credits: currentCredits
+        )
+        updateRateLimitTooltip()
+    }
+
+    private func matchingWeeklyQuotaCost(for window: RateLimitWindow?) -> WeeklyQuotaCostEstimate? {
+        guard let resetDate = window?.resetDate,
+              let estimate = currentLocalUsage?.weeklyQuotaCost
+        else {
+            return nil
+        }
+        return estimate.windowEndIso == ISO8601DateFormatter().string(from: resetDate) ? estimate : nil
     }
 
     private func applyRateLimitsError(_ error: Error) {
         currentRateLimitError = Self.normalizedErrorText(error)
+        currentCredits = nil
+        rateLimitsView.update(weekly: currentWeeklyWindow, forecast: currentQuotaForecast,
+                              weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow), credits: nil)
         statusItem.button?.toolTip = AppText.rateLimitRefreshFailedTooltip
         updateCombinedError()
         Self.appendLog("rate limit refresh failed: \(Self.normalizedErrorText(error))")
@@ -1350,8 +1467,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         statusItem.button?.toolTip = AppText.rateLimitTooltip(
             weekly: currentWeeklyRemaining.map { "\($0)%" } ?? "--",
             resetCount: currentResetAvailableCount,
-            forecast: currentQuotaForecast
-        )
+            forecast: currentQuotaForecast,
+            weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow)
+        ) + "\n" + AppText.officialCreditsBalance(currentCredits)
     }
 
     private func updateCombinedError() {
@@ -1417,8 +1535,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         Result { try CodexBackend.readRateLimits() }
     }
 
-    nonisolated private static func fetchLocalUsage() -> Result<LocalUsageSnapshot, Error> {
-        Result { try CodexBackend.readLocalTokenUsage() }
+    nonisolated private static func fetchLocalUsage(
+        weeklyWindow: RateLimitWindow?
+    ) -> Result<LocalUsageSnapshot, Error> {
+        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow) }
     }
 
     nonisolated private static func fetchResetCredits() -> Result<ResetCreditsSnapshot, Error> {

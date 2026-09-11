@@ -98,6 +98,99 @@ public enum AppText {
         }
     }
 
+    public static func todayEstimatedCostCardTitle(requests: Int) -> String {
+        switch language {
+        case .simplifiedChinese: return "API 等价 · \(requests) 次"
+        case .traditionalChinese: return "API 等價 · \(requests) 次"
+        case .japanese: return "API 相当 · \(requests)件"
+        case .korean: return "API 상당 · \(requests)회"
+        case .english: return "API equiv. · \(requests)"
+        }
+    }
+
+    public static func todayEstimatedCost(_ estimate: UsageCostEstimate?) -> String {
+        guard let estimate, let amount = estimate.estimatedCostUSD else {
+            switch language {
+            case .simplifiedChinese: return "今日 API 等价金额暂不可估算"
+            case .traditionalChinese: return "今日 API 等價金額暫無法估算"
+            case .japanese: return "今日の API 相当額は推定できません"
+            case .korean: return "오늘 API 상당 금액을 추정할 수 없음"
+            case .english: return "Today's API-equivalent cost is unavailable"
+            }
+        }
+        let value = USDFormatter.string(amount)
+        if estimate.isPartial {
+            switch language {
+            case .simplifiedChinese: return "今日已知部分约 \(value)"
+            case .traditionalChinese: return "今日已知部分約 \(value)"
+            case .japanese: return "今日の既知分は約 \(value)"
+            case .korean: return "오늘 확인된 부분 약 \(value)"
+            case .english: return "Known usage today about \(value)"
+            }
+        }
+        switch language {
+        case .simplifiedChinese: return "今日 API 等价约 \(value)"
+        case .traditionalChinese: return "今日 API 等價約 \(value)"
+        case .japanese: return "今日の API 相当額は約 \(value)"
+        case .korean: return "오늘 API 상당 금액 약 \(value)"
+        case .english: return "API equivalent today about \(value)"
+        }
+    }
+
+    public static func weeklyQuotaEstimatedCost(_ estimate: WeeklyQuotaCostEstimate?) -> String {
+        guard let estimate else {
+            switch language {
+            case .simplifiedChinese: return "正在计算周额度金额"
+            case .traditionalChinese: return "正在計算週額度金額"
+            case .japanese: return "週間上限の金額を計算中"
+            case .korean: return "주간 한도 금액 계산 중"
+            case .english: return "Calculating weekly quota value"
+            }
+        }
+        guard let amount = estimate.estimatedQuotaUSD else {
+            if estimate.unpricedTokens > 0 && estimate.coveragePercent < 95 {
+                let coverage = CreditFormatter.string(estimate.coveragePercent)
+                switch language {
+                case .simplifiedChinese: return "周金额待补价 · 覆盖 \(coverage)%"
+                case .traditionalChinese: return "週金額待補價 · 覆蓋 \(coverage)%"
+                case .japanese: return "週間金額の価格不足 · \(coverage)%"
+                case .korean: return "주간 금액 가격 누락 · \(coverage)%"
+                case .english: return "Weekly prices incomplete · \(coverage)% covered"
+                }
+            }
+            switch language {
+            case .simplifiedChinese: return "正在积累周额度金额样本"
+            case .traditionalChinese: return "正在累積週額度金額樣本"
+            case .japanese: return "週間上限の金額サンプルを収集中"
+            case .korean: return "주간 한도 금액 표본 수집 중"
+            case .english: return "Learning weekly quota value"
+            }
+        }
+        let value = USDFormatter.string(amount)
+        switch language {
+        case .simplifiedChinese: return "本机推算周额度约 \(value)"
+        case .traditionalChinese: return "本機推算週額度約 \(value)"
+        case .japanese: return "ローカル推定の週間上限は約 \(value)"
+        case .korean: return "로컬 추정 주간 한도 약 \(value)"
+        case .english: return "Local weekly quota estimate about \(value)"
+        }
+    }
+
+    public static var costEstimateDisclaimer: String {
+        switch language {
+        case .simplifiedChinese:
+            return "按公开 API 标准价格估算，并非实际账单。周额度金额由本机观察期间的金额和额度变化反推，跨设备或云端用量会影响准确性。"
+        case .traditionalChinese:
+            return "依公開 API 標準價格估算，並非實際帳單。週額度金額由本機觀察期間的金額與額度變化反推，跨裝置或雲端用量會影響準確性。"
+        case .japanese:
+            return "公開 API の標準価格による概算で、実際の請求額ではありません。週間上限額は観測期間のローカル使用額と消費率の変化から推定され、他端末やクラウドの使用により精度が変わります。"
+        case .korean:
+            return "공개 API 표준 가격 기준 추정치이며 실제 청구액이 아닙니다. 주간 한도 금액은 관찰 기간의 로컬 금액과 사용률 변화로 역산하므로 다른 기기나 클라우드 사용량에 따라 정확도가 달라집니다."
+        case .english:
+            return "Estimated from public standard API prices, not an actual bill. Weekly value is inferred from this Mac's cost and quota change during the observation period; other devices or cloud usage reduce accuracy."
+        }
+    }
+
     public static var launchTitle: String {
         switch language {
         case .simplifiedChinese: return "启动"
@@ -410,34 +503,43 @@ public enum AppText {
         }
     }
 
-    public static func localUsageTooltip(tokens: String, cacheHit: String) -> String {
+    public static func localUsageTooltip(tokens: String, cacheHit: String, estimatedCost: String? = nil) -> String {
+        let costSuffix = estimatedCost.map { "\n\($0)\n\(costEstimateDisclaimer)" } ?? ""
         switch language {
-        case .simplifiedChinese: return "Codex 本机今日 \(tokens)，缓存命中 \(cacheHit)"
-        case .traditionalChinese: return "Codex 本機今日 \(tokens)，快取命中 \(cacheHit)"
-        case .japanese: return "Codex 今日のローカル使用量 \(tokens)、キャッシュヒット \(cacheHit)"
-        case .korean: return "Codex 오늘 로컬 사용량 \(tokens), 캐시 적중 \(cacheHit)"
-        case .english: return "Codex local today \(tokens), cache hit \(cacheHit)"
+        case .simplifiedChinese: return "Codex 本机今日 \(tokens)，缓存命中 \(cacheHit)\(costSuffix)"
+        case .traditionalChinese: return "Codex 本機今日 \(tokens)，快取命中 \(cacheHit)\(costSuffix)"
+        case .japanese: return "Codex 今日のローカル使用量 \(tokens)、キャッシュヒット \(cacheHit)\(costSuffix)"
+        case .korean: return "Codex 오늘 로컬 사용량 \(tokens), 캐시 적중 \(cacheHit)\(costSuffix)"
+        case .english: return "Codex local today \(tokens), cache hit \(cacheHit)\(costSuffix)"
         }
     }
 
-    public static func rateLimitTooltip(weekly: String, resetCount: Int?, forecast: QuotaForecast? = nil) -> String {
+    public static func rateLimitTooltip(
+        weekly: String,
+        resetCount: Int?,
+        forecast: QuotaForecast? = nil,
+        weeklyQuotaCost: WeeklyQuotaCostEstimate? = nil
+    ) -> String {
         let forecastSuffix = forecast.map { "\n\(quotaForecastLabel($0))" } ?? ""
+        let costSuffix = weeklyQuotaCost.map {
+            "\n\(weeklyQuotaEstimatedCost($0))\n\(costEstimateDisclaimer)"
+        } ?? ""
         switch language {
         case .simplifiedChinese:
             let suffix = resetCount.map { "，重置券 \($0)" } ?? ""
-            return "Codex 1 周 \(weekly)\(suffix)\(forecastSuffix)"
+            return "Codex 1 周 \(weekly)\(suffix)\(forecastSuffix)\(costSuffix)"
         case .traditionalChinese:
             let suffix = resetCount.map { "，重置券 \($0)" } ?? ""
-            return "Codex 1 週 \(weekly)\(suffix)\(forecastSuffix)"
+            return "Codex 1 週 \(weekly)\(suffix)\(forecastSuffix)\(costSuffix)"
         case .japanese:
             let suffix = resetCount.map { "、リセット券 \($0)" } ?? ""
-            return "Codex 1週間 \(weekly)\(suffix)\(forecastSuffix)"
+            return "Codex 1週間 \(weekly)\(suffix)\(forecastSuffix)\(costSuffix)"
         case .korean:
             let suffix = resetCount.map { ", 초기화권 \($0)" } ?? ""
-            return "Codex 1주 \(weekly)\(suffix)\(forecastSuffix)"
+            return "Codex 1주 \(weekly)\(suffix)\(forecastSuffix)\(costSuffix)"
         case .english:
             let suffix = resetCount.map { ", resets \($0)" } ?? ""
-            return "Codex week \(weekly)\(suffix)\(forecastSuffix)"
+            return "Codex week \(weekly)\(suffix)\(forecastSuffix)\(costSuffix)"
         }
     }
 
@@ -742,5 +844,88 @@ public enum AppText {
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]
         return plain.date(from: iso)
+    }
+}
+
+
+extension AppText {
+    public static func todayEstimatedCredits(_ estimate: UsageCreditEstimate?) -> String {
+        let amount = CreditFormatter.string(estimate?.estimatedCredits)
+        let value = amount + (estimate?.isPartial == true && estimate?.estimatedCredits != nil ? "+" : "")
+        switch language {
+        case .simplifiedChinese: return "今日 credits 估算：\(value)"
+        case .traditionalChinese: return "今日 credits 估算：\(value)"
+        case .japanese: return "今日の推定 credits：\(value)"
+        case .korean: return "오늘 credits 추정: \(value)"
+        case .english: return "Estimated credits today: \(value)"
+        }
+    }
+
+    public static func officialCreditsBalance(_ credits: CreditsSnapshot?) -> String {
+        let value = credits?.unlimited == true ? "∞"
+            : CreditFormatter.string(credits?.balance.flatMap(Double.init))
+        switch language {
+        case .simplifiedChinese: return "官方 credits 余额：\(value)"
+        case .traditionalChinese: return "官方 credits 餘額：\(value)"
+        case .japanese: return "公式 credits 残高：\(value)"
+        case .korean: return "공식 credits 잔액: \(value)"
+        case .english: return "Official credits balance: \(value)"
+        }
+    }
+
+    public static func pricingCoverage(cost: UsageCostEstimate?, credits: UsageCreditEstimate?) -> String {
+        let values = "API \(CreditFormatter.string(cost?.coveragePercent))% · credits \(CreditFormatter.string(credits?.coveragePercent))%"
+        switch language {
+        case .simplifiedChinese: return "定价覆盖：\(values)"
+        case .traditionalChinese: return "定價覆蓋：\(values)"
+        case .japanese: return "価格カバー率：\(values)"
+        case .korean: return "가격 적용률: \(values)"
+        case .english: return "Price coverage: \(values)"
+        }
+    }
+
+    public static func unpricedModels(cost: UsageCostEstimate?, credits: UsageCreditEstimate?) -> String? {
+        let models = Set((cost?.unpricedModels ?? []) + (credits?.unpricedModels ?? [])).sorted()
+        guard !models.isEmpty else { return nil }
+        let names = models.joined(separator: ", ")
+        switch language {
+        case .simplifiedChinese: return "未定价模型/模式：\(names)"
+        case .traditionalChinese: return "未定價模型/模式：\(names)"
+        case .japanese: return "価格不明のモデル/モード：\(names)"
+        case .korean: return "가격 미확인 모델/모드: \(names)"
+        case .english: return "Unpriced models/modes: \(names)"
+        }
+    }
+
+    public static var creditsEstimateNote: String {
+        switch language {
+        case .simplifiedChinese: return "本机用量折算，并非实际扣费"
+        case .traditionalChinese: return "本機用量折算，並非實際扣費"
+        case .japanese: return "ローカル使用量の換算で、実際の請求ではありません"
+        case .korean: return "로컬 사용량 환산이며 실제 청구가 아닙니다"
+        case .english: return "Local usage equivalent, not actual credits deducted"
+        }
+    }
+
+    public static var creditsEstimateDetails: String {
+        switch language {
+        case .simplifiedChinese: return "按当前 token-based credits 费率估算。套餐内使用不等于扣除购买的 credits；云端、其他设备及工具费用不在本机统计内。缺少模式或单次上下文记录时按标准费率估算，旧版企业费率不适用。"
+        case .traditionalChinese: return "依目前 token-based credits 費率估算。方案內使用不等於扣除購買的 credits；雲端、其他裝置及工具費用不在本機統計內。缺少模式或單次上下文記錄時依標準費率估算，舊版企業費率不適用。"
+        case .japanese: return "現在のトークンベース credits 料金による概算です。プラン内利用は購入 credits の消費とは異なります。クラウド、他端末、ツール料金は含みません。モードやコンテキスト記録がない場合は標準料金を仮定します。旧企業料金は対象外です。"
+        case .korean: return "현재 토큰 기반 credits 요금으로 추정합니다. 플랜 내 사용은 구매 credits 차감과 다릅니다. 클라우드, 다른 기기 및 도구 요금은 제외됩니다. 모드나 컨텍스트 기록이 없으면 표준 요금을 가정합니다. 기존 기업 요금에는 적용되지 않습니다."
+        case .english: return "Estimated at current token-based credit rates. Included plan usage is not purchased-credit deduction. Cloud, other devices and tool fees are excluded. Missing mode or per-request context records use standard rates. Legacy Enterprise rates are not covered."
+        }
+    }
+
+    public static func creditAssumptions(_ estimate: UsageCreditEstimate?) -> String? {
+        guard let count = estimate?.assumedStandardTokens, count > 0 else { return nil }
+        let tokens = TokenAmountFormatter.compact(count)
+        switch language {
+        case .simplifiedChinese: return "\(tokens) tokens 缺少模式记录，按标准模式估算"
+        case .traditionalChinese: return "\(tokens) tokens 缺少模式記錄，依標準模式估算"
+        case .japanese: return "\(tokens) tokens はモード記録がないため標準で推定"
+        case .korean: return "\(tokens) tokens: 모드 기록이 없어 표준으로 추정"
+        case .english: return "\(tokens) tokens lack a mode record; standard mode assumed"
+        }
     }
 }

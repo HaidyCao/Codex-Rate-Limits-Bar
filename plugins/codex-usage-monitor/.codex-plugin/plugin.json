@@ -1,14 +1,14 @@
 {
   "name": "codex-usage-monitor",
   "version": "0.4.0",
-  "description": "Read local Codex usage, rate-limit snapshots, and reset credits.",
+  "description": "Read local Codex usage and cost estimates, rate-limit snapshots, and reset credits.",
   "author": {
     "name": "Local developer"
   },
   "interface": {
     "displayName": "Codex Usage Monitor",
-    "shortDescription": "Read Codex usage and quota snapshots.",
-    "longDescription": "Codex Usage Monitor exposes local read-only MCP tools backed by the Codex Rate Limits Bar app. It queries Codex rate limits, reset credits, account usage, and machine-local token usage without requiring Node.js.",
+    "shortDescription": "Read Codex usage, costs, and quota snapshots.",
+    "longDescription": "Codex Usage Monitor exposes local read-only MCP tools backed by the Codex Rate Limits Bar app. It queries Codex rate limits, reset credits, account usage, machine-local token usage, and API-equivalent cost estimates without requiring Node.js.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [
