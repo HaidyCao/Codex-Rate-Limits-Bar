@@ -15,8 +15,8 @@ Planned fixes and improvements: [Project TODO](TODO.md).
   - Bottom line: cache hit rate, calculated as cached input tokens divided by input tokens.
   - The expanded panel shows today's API-equivalent estimated cost in USD, a separate Codex credit estimate, price coverage, and unpriced models/modes.
   - Visible by default and can be hidden from the menu settings.
-  - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Canonical paths and copied rollout filenames are deduplicated; `CODEX_SESSIONS_DIR` explicitly selects one directory.
-  - Session files are read incrementally with a reusable 1 MB buffer. Per-file cursors, daily baselines, and compact model cost buckets are persisted for up to eight days so app restarts and local-midnight rollover do not rescan complete histories.
+  - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories; `CODEX_SESSIONS_DIR` explicitly selects one directory.
+  - Session files are read incrementally with a reusable 1 MB buffer. Per-file identities, content fingerprints, cursors, daily baselines, and compact model cost buckets are persisted for up to eight days. Unchanged files reuse the cache; changed prefixes and relevant session copies trigger replay.
 - The Usage card learns the API-equivalent USD value of the weekly quota from this Mac's incremental cost and the matching change in Codex's used percentage. It waits for at least two observed percentage points and 95% known-price coverage before showing a value.
 - The app, command-line data reader, and bundled MCP server are implemented in
   one Swift executable. Node.js is not required.
@@ -50,6 +50,35 @@ observation starts fresh. Tagged observations survive same-account restarts.
 Switching accounts or quota buckets starts a new weekly cost observation so
 events from the previous login cannot carry over. Forecast and alert history
 for a known account is restored when returning to its scope.
+
+## Local Usage Cache and Rebuild
+
+File identity includes the device, inode and change time. Before reading an
+appended tail, the scanner verifies SHA-256 of the previously consumed bytes.
+Same-size edits, atomic replacements and truncation/rewrite therefore invalidate
+the affected statistics, including edits in the middle of a growing file.
+Verified moves into archives transfer the cached entry without counting it twice.
+
+Files with the same session ID share an event ledger during replay: matching
+timestamps, cumulative usage and billing context count once; distinct branch
+tails contribute their own increments. When a copy omits intermediate cumulative
+samples, the smallest observed delta for the matching event is used. Different
+session IDs remain separate even when filenames match. Existing fork-import and
+midnight-baseline rules still apply. The ledger is temporary and is not persisted.
+
+Daily and weekly contributions retain separate source ownership, so a copy in
+another home cannot remove the active account's weekly usage. `topFiles` entries
+include `sourceFiles` listing all known copies. If an unreadable or missing copy
+prevents a safe replay, the affected group retains its previous totals and reports
+an error; restoring the file allows the next refresh to recover. Missing legacy
+entries with no current daily or weekly contribution can be retired safely.
+
+Use **Rebuild Local Usage** in the menu or `CodexRateLimitsBar local-usage --rebuild`
+to replay available session files modified within the retained eight-day range,
+including today's logs. Rebuild recalculates tokens and price equivalents while
+preserving the account and a still-valid weekly observation baseline. The first
+upgrade also verifies retained files that lack identity metadata. Large histories
+can take tens of seconds to rebuild; the menu scan runs in the background.
 
 ## Cost Estimates
 
@@ -182,6 +211,7 @@ app:
 CodexRateLimitsBar status
 CodexRateLimitsBar rate-limits
 CodexRateLimitsBar local-usage
+CodexRateLimitsBar local-usage --rebuild
 CodexRateLimitsBar reset-credits
 CodexRateLimitsBar usage
 CodexRateLimitsBar mcp

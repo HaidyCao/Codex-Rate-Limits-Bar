@@ -188,6 +188,7 @@ public struct LocalUsageTopFile: Codable, Sendable {
     public let primarySessionId: String?
     public let totalTokens: Int64
     public let lastEventAtIso: String?
+    public var sourceFiles: [String]? = nil
 }
 
 public struct LocalUsageSnapshot: Codable, Sendable {

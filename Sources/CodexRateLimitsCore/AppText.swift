@@ -1,6 +1,26 @@
 import Foundation
 
 public enum AppText {
+    public static var rebuildLocalUsage: String {
+        switch language {
+        case .simplifiedChinese: return "重建本机统计"
+        case .traditionalChinese: return "重建本機統計"
+        case .japanese: return "ローカル統計を再構築"
+        case .korean: return "로컬 통계 다시 계산"
+        case .english: return "Rebuild Local Usage"
+        }
+    }
+
+    public static var rebuildLocalUsageDetail: String {
+        switch language {
+        case .simplifiedChinese: return "重新读取今日及保留的近 8 天会话，重算用量和等价金额，保留有效的账户与周观察基线。"
+        case .traditionalChinese: return "重新讀取今日及保留的近 8 天會話，重算用量與等價金額，保留有效的帳戶及週觀察基線。"
+        case .japanese: return "今日と保持された過去 8 日間のログを再読込します。アカウントと有効な週間観測の基準は保持されます。"
+        case .korean: return "오늘 및 보관된 최근 8일간의 로그를 다시 읽습니다. 계정과 유효한 주간 관측 기준은 유지됩니다."
+        case .english: return "Replay today’s and retained eight-day session logs. Preserve the account and valid weekly observation baseline."
+        }
+    }
+
     public static var resetCreditDetailsUnavailable: String {
         switch language {
         case .simplifiedChinese: return "可用数量已确认，暂未提供明细"

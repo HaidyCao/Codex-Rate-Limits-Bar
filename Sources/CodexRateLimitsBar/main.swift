@@ -1006,6 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var isRefreshingRateLimits = false
     private var isRefreshingLocalUsage = false
     private var pendingLocalUsageRefresh = false
+    private var pendingLocalUsageRebuild = false
     private var currentWeeklyWindow: RateLimitWindow?
     private var currentAccountContext: CodexAccountContext?
     private var currentCredits: CreditsSnapshot?
@@ -1101,6 +1102,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let refreshItem = NSMenuItem(title: AppText.refreshNow, action: #selector(refreshFromMenu), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
+        let rebuildItem = NSMenuItem(title: AppText.rebuildLocalUsage, action: #selector(rebuildLocalUsage), keyEquivalent: "")
+        rebuildItem.target = self
+        rebuildItem.toolTip = AppText.rebuildLocalUsageDetail
+        menu.addItem(rebuildItem)
 
         let quitItem = NSMenuItem(title: AppText.quit, action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
@@ -1110,6 +1115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc private func refreshFromMenu() {
         refreshRateLimits()
         refreshLocalUsage()
+    }
+
+    @objc private func rebuildLocalUsage() {
+        refreshLocalUsage(rebuild: true)
     }
 
     @objc private func timerRefreshRateLimits() {
@@ -1289,7 +1298,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private func refreshLocalUsage() {
+    private func refreshLocalUsage(rebuild: Bool = false) {
+        pendingLocalUsageRebuild = pendingLocalUsageRebuild || rebuild
         guard !isRefreshingLocalUsage else {
             pendingLocalUsageRefresh = true
             return
@@ -1298,9 +1308,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         pendingLocalUsageRefresh = false
         let weeklyWindow = currentWeeklyWindow
         let accountContext = currentAccountContext
+        let shouldRebuild = pendingLocalUsageRebuild
+        pendingLocalUsageRebuild = false
 
         localUsageQueue.async { [weak self] in
-            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext)
+            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext, rebuild: shouldRebuild)
             DispatchQueue.main.async {
                 self?.completeLocalUsageRefresh(result)
             }
@@ -1514,9 +1526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated private static func fetchLocalUsage(
-        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?
+        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?, rebuild: Bool
     ) -> Result<LocalUsageSnapshot, Error> {
-        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext) }
+        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext, rebuild: rebuild) }
     }
 
     nonisolated private static func appendLog(_ message: String) {

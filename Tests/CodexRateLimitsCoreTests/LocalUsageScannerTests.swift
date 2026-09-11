@@ -369,14 +369,6 @@ final class LocalUsageScannerTests: XCTestCase {
         )
         XCTAssertEqual(try firstScanner.snapshot().totalTokens, 100)
 
-        let originalSize = try XCTUnwrap(
-            FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber
-        ).intValue
-        var replacement = Data(repeating: 0x23, count: originalSize)
-        replacement[replacement.index(before: replacement.endIndex)] = 0x0A
-        try replacement.write(to: file)
-        try setModificationDate(now, for: file)
-
         let restartedScanner = CodexBackend.LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,

@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 public enum JSONValue: Codable {
@@ -452,13 +453,15 @@ public enum CodexBackend {
     }
 
     public static func readLocalTokenUsage(weeklyWindow: RateLimitWindow? = nil,
-                                           accountContext: CodexAccountContext? = nil) throws -> LocalUsageSnapshot {
+                                           accountContext: CodexAccountContext? = nil,
+                                           rebuild: Bool = false) throws -> LocalUsageSnapshot {
         let current = CodexAccountSource()
         let matches = accountContext?.accountKey != nil && accountContext?.accountKey == current.identityKey
             && accountContext?.codexHome == current.codexHome.path
         return try localUsageScanner.snapshot(weeklyWindow: matches ? weeklyWindow : nil,
                                               accountContext: accountContext,
-                                              invalidateWeeklyObservation: accountContext != nil && !matches)
+                                              invalidateWeeklyObservation: accountContext != nil && !matches,
+                                              rebuild: rebuild)
     }
 
     static func localUsageRootURLs(
@@ -538,6 +541,8 @@ public enum CodexBackend {
         private var cache: LocalUsageScanCache?
         private var persistentCacheSignature: LocalUsageCacheFileSignature?
         private var readBuffer = Data()
+        private var copyLedger: UsageCopyLedger?
+        private var copyReplayErrors: [String] = []
 
         init() {
             rootURLsProvider = { CodexBackend.localUsageRootURLs() }
@@ -570,17 +575,17 @@ public enum CodexBackend {
         }
 
         func snapshot(weeklyWindow: RateLimitWindow? = nil, accountContext: CodexAccountContext? = nil,
-                      invalidateWeeklyObservation: Bool = false) throws -> LocalUsageSnapshot {
+                      invalidateWeeklyObservation: Bool = false, rebuild: Bool = false) throws -> LocalUsageSnapshot {
             lock.lock()
             defer { lock.unlock() }
             defer { _ = malloc_zone_pressure_relief(nil, 0) }
             return try autoreleasepool {
-                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation)
+                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation, rebuild: rebuild)
             }
         }
 
         private func scanLocked(weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?,
-                                invalidateWeeklyObservation: Bool) throws -> LocalUsageSnapshot {
+                                invalidateWeeklyObservation: Bool, rebuild: Bool) throws -> LocalUsageSnapshot {
             let persistentLockFD = acquirePersistentCacheLock()
             defer { releasePersistentCacheLock(persistentLockFD) }
 
@@ -648,11 +653,23 @@ public enum CodexBackend {
                 cache.rootPaths = rootURLs.map(\.path)
                 cacheChanged = true
             }
-            let files = CodexBackend.deduplicatedJsonlFileInfos(rootURLs.flatMap { root in
-                let start = canReuseBaseline && !previousRoots.contains(root.path)
-                    ? max(historyStart, cache.weeklyCostObservation?.startedAt ?? dayStart) : dayStart
-                return CodexBackend.walkJsonlFileInfos(root: root, dayStart: start)
-            })
+            copyReplayErrors = []
+            let discoveryStart = max(historyStart, min(dayStart, cache.weeklyCostObservation?.startedAt ?? dayStart))
+            var byPath: [String: JsonlFileInfo] = [:]
+            for root in rootURLs {
+                for var file in CodexBackend.walkJsonlFileInfos(root: root, dayStart: historyStart) {
+                    guard rebuild || file.modifiedAt >= discoveryStart || cache.files[file.url.path] != nil else { continue }
+                    let state = cache.files[file.url.path]
+                    file.sessionID = state?.fileStamp == file.stamp ? state?.primarySessionId : UsageFileIdentity.sessionID(at: file.url)
+                    // An unreadable replacement must remain in its old copy
+                    // transaction until its new session identity is available.
+                    if file.sessionID == nil {
+                        file.sessionID = state?.primarySessionId
+                    }
+                    byPath[file.url.path] = file
+                }
+            }
+            let files = byPath.values.sorted { $0.url.path < $1.url.path }
             var stats = LocalUsageScanStats()
             stats.filesScanned = files.count
 
@@ -662,40 +679,75 @@ public enum CodexBackend {
                 cacheChanged = true
             }
             cacheChanged = updateWeeklyCostObservation(
-                cache: &cache,
-                window: weeklyWindow,
-                now: now,
-                rootPaths: weeklyRoots,
-                accountContext: accountContext
+                cache: &cache, window: weeklyWindow, now: now, rootPaths: weeklyRoots, accountContext: accountContext
             ) || cacheChanged
+            cacheChanged = reconcileCachedFiles(files, cache: &cache, historyStart: historyStart) || cacheChanged
 
-            cacheChanged = reconcileCachedFiles(
-                files,
-                cache: &cache,
-                historyStart: historyStart
-            ) || cacheChanged
-
-            // Reprice retained weekly files too, even if they have not changed today.
-            let currentPaths = Set(files.map(\.url.path))
-            let repricingFiles = cache.files.compactMap { path, state -> JsonlFileInfo? in
-                guard !currentPaths.contains(path), state.requiresCostRebuild else { return nil }
-                let url = URL(fileURLWithPath: path)
-                guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
-                      values.isRegularFile == true,
-                      let modifiedAt = values.contentModificationDate,
-                      let size = values.fileSize
-                else { return nil }
-                return JsonlFileInfo(url: url, modifiedAt: modifiedAt, size: UInt64(size))
+            let groups = Dictionary(grouping: files) { file in
+                file.sessionID.map { "session:" + $0 } ?? "file:" + file.url.path
             }
-            stats.filesScanned += repricingFiles.count
-            for file in files + repricingFiles {
-                cacheChanged = scan(
-                    file,
-                    cache: &cache,
-                    historyStart: historyStart,
-                    now: now,
-                    stats: &stats
-                ) || cacheChanged
+            let missingSessions = Set(cache.files.compactMap { path, state in byPath[path] == nil ? state.primarySessionId : nil })
+            for key in groups.keys.sorted() {
+                let members = groups[key]!.sorted { $0.url.path < $1.url.path }
+                let paths = members.map(\.url.path)
+                let hasCopies = members.count > 1
+                let replayCopies = hasCopies && (rebuild || members.contains { file in
+                    guard let state = cache.files[file.url.path] else { return true }
+                    return state.fileStamp != file.stamp || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
+                        || state.copyMembers != paths || state.copyDay != localDate
+                })
+                let lostCopy = members.first?.sessionID.map { missingSessions.contains($0) } ?? false
+                if lostCopy {
+                    copyReplayErrors.append("A session copy is missing; retained its last verified totals: " + (members.first?.sessionID ?? key))
+                    continue
+                }
+                if hasCopies && !replayCopies { continue }
+                // Unchanged copies entirely before the active day/observation
+                // cannot overlap any newly counted event. Keep this common case
+                // incremental even when their old histories diverge.
+                let activityStart = min(dayStart, cache.weeklyCostObservation?.startedAt ?? dayStart)
+                let changedMembers = members.filter { cache.files[$0.url.path]?.fileStamp != $0.stamp }
+                if hasCopies, !rebuild, changedMembers.count == 1,
+                   members.allSatisfy({ file in
+                       guard let state = cache.files[file.url.path] else { return false }
+                       return state.copyMembers == paths && state.copyDay == localDate && state.hasUsageBounds == true
+                           && state.prefixDigest != nil && !state.requiresCostRebuild
+                   }),
+                   members.filter({ $0.url.path != changedMembers[0].url.path }).allSatisfy({ file in
+                       (cache.files[file.url.path]?.latestUsageAt ?? .distantPast) < activityStart
+                   }) {
+                    let file = changedMembers[0]
+                    let previousFailures = stats.readFailureCount
+                    cacheChanged = scan(file, cache: &cache, historyStart: historyStart, now: now, stats: &stats) || cacheChanged
+                    cache.files[file.url.path]?.copyMembers = paths
+                    cache.files[file.url.path]?.copyDay = localDate
+                    if stats.readFailureCount > previousFailures {
+                        copyReplayErrors.append("Could not refresh session copies; retained their previous totals: " + key)
+                    }
+                    continue
+                }
+                let previousStates = Dictionary(uniqueKeysWithValues: paths.compactMap { path in cache.files[path].map { (path, $0) } })
+                let previousFailures = stats.readFailureCount
+                if replayCopies { copyLedger = UsageCopyLedger() }
+                for file in members {
+                    copyLedger?.path = file.url.path
+                    copyLedger?.isWeeklySource = weeklyRoots.contains { file.url.path.hasPrefix($0 + "/") }
+                    let wasCopy = (cache.files[file.url.path]?.copyMembers?.count ?? 0) > 1
+                    cacheChanged = scan(file, cache: &cache, historyStart: historyStart, now: now, stats: &stats,
+                                        force: rebuild || replayCopies || (wasCopy && !hasCopies)) || cacheChanged
+                    if hasCopies {
+                        cache.files[file.url.path]?.copyMembers = paths
+                        cache.files[file.url.path]?.copyDay = localDate
+                    }
+                }
+                let completedLedger = copyLedger
+                copyLedger = nil
+                if replayCopies && stats.readFailureCount > previousFailures {
+                    for path in paths { cache.files[path] = previousStates[path] }
+                    copyReplayErrors.append("Could not rebuild session copies; retained their previous totals: " + key)
+                } else if let completedLedger {
+                    applyCopyContributions(completedLedger, cache: &cache)
+                }
             }
 
             self.cache = cache
@@ -712,6 +764,28 @@ public enum CodexBackend {
             stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             log(stats: stats, coldScan: isColdScan)
             return snapshot
+        }
+
+        private func applyCopyContributions(_ ledger: UsageCopyLedger, cache: inout LocalUsageScanCache) {
+            for key in ledger.contributions.keys.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
+                let event = ledger.contributions[key]!
+                if let path = event.dailyOwner, var state = cache.files[path] {
+                    state.totals.add(event.usage)
+                    var cost = state.dailyCost ?? TokenCostAccumulator()
+                    cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
+                    state.dailyCost = cost
+                    state.eventCount += 1
+                    if (parseIsoDate(state.lastEventAtIso) ?? .distantPast) < (parseIsoDate(event.timestamp) ?? .distantPast) {
+                        state.lastEventAtIso = event.timestamp
+                    }
+                    cache.files[path] = state
+                }
+                if let path = event.weeklyOwner {
+                    var cost = cache.files[path]?.weeklyCost ?? TokenCostAccumulator()
+                    cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
+                    cache.files[path]?.weeklyCost = cost
+                }
+            }
         }
 
         private func loadPersistentCache() {
@@ -803,21 +877,38 @@ public enum CodexBackend {
             historyStart: Date
         ) -> Bool {
             var changed = false
-            var cachedPathByName: [String: String] = [:]
-            for path in cache.files.keys {
-                cachedPathByName[URL(fileURLWithPath: path).lastPathComponent] = path
-            }
-
-            for file in files where cache.files[file.url.path] == nil {
-                guard let previousPath = cachedPathByName[file.url.lastPathComponent],
-                      previousPath != file.url.path,
-                      let state = cache.files.removeValue(forKey: previousPath)
-                else {
+            let currentPaths = Set(files.map(\.url.path))
+            let filesBySession = Dictionary(grouping: files.filter { $0.sessionID != nil }) { $0.sessionID! }
+            for path in Array(cache.files.keys).sorted() where !currentPaths.contains(path) {
+                guard let old = cache.files[path] else { continue }
+                // Legacy caches may retain a moved path without a fingerprint.
+                // An entry with no current contribution cannot cause overlap;
+                // retire it so it cannot block replay of the archived history.
+                if old.totals.totalTokens == 0, old.eventCount == 0, old.importedEventCount == 0,
+                   old.parseErrorCount == 0, old.weeklyCost == nil {
+                    cache.files.removeValue(forKey: path)
+                    changed = true
                     continue
                 }
-                cache.files[file.url.path] = state
-                cachedPathByName[file.url.lastPathComponent] = file.url.path
-                changed = true
+                for file in old.primarySessionId.flatMap({ filesBySession[$0] }) ?? [] {
+                    var sameContent = old.fileStamp?.identity == file.stamp.identity
+                    if !sameContent, file.size >= old.offset, let expected = old.prefixDigest,
+                       let handle = try? FileHandle(forReadingFrom: file.url) {
+                        defer { try? handle.close() }
+                        sameContent = (try? UsageFileIdentity.digest(UsageFileIdentity.prefixHasher(handle, count: old.offset))) == expected
+                    }
+                    guard sameContent else { continue }
+                    if cache.files[file.url.path] == nil {
+                        cache.files[file.url.path] = old
+                    } else {
+                        // A copy can own zero daily contributions while another
+                        // copy owns the shared prefix. Replay before retiring it.
+                        cache.files[file.url.path]?.prefixDigest = nil
+                    }
+                    cache.files.removeValue(forKey: path)
+                    changed = true
+                    break
+                }
             }
 
             let livePaths = Set(files.map(\.url.path))
@@ -882,85 +973,70 @@ public enum CodexBackend {
         }
 
         private func scan(
-            _ file: JsonlFileInfo,
-            cache: inout LocalUsageScanCache,
-            historyStart: Date,
-            now: Date,
-            stats: inout LocalUsageScanStats
+            _ file: JsonlFileInfo, cache: inout LocalUsageScanCache, historyStart: Date,
+            now: Date, stats: inout LocalUsageScanStats, force: Bool = false
         ) -> Bool {
             let path = file.url.path
             let previousState = cache.files[path]
-            let hadState = previousState != nil
             var state = previousState ?? LocalUsageFileState()
-            let isRepricing = state.requiresCostRebuild && file.size >= state.offset
-            var changed = !hadState
-            if !hadState {
-                stats.fullRescanFiles += 1
-            }
-            if file.size < state.offset || isRepricing {
-                state = LocalUsageFileState()
-                stats.fullRescanFiles += 1
-                changed = true
-            }
-            defer {
-                state.size = max(file.size, state.offset)
-                state.modifiedAt = file.modifiedAt
-                cache.files[path] = state
-            }
-
-            guard file.size > state.offset else {
-                return changed
-            }
-
+            var replay = force || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
+                || file.size < state.offset || state.fileStamp?.identity != file.stamp.identity
+            if !replay, state.fileStamp == file.stamp, file.size == state.offset { return false }
             do {
                 let handle = try FileHandle(forReadingFrom: file.url)
                 defer { try? handle.close() }
+                var hasher = SHA256()
+                if !replay {
+                    hasher = try UsageFileIdentity.prefixHasher(handle, count: state.offset)
+                    stats.verificationBytes += state.offset
+                    if UsageFileIdentity.digest(hasher) != state.prefixDigest { replay = true }
+                }
+                if replay {
+                    state = LocalUsageFileState()
+                    hasher = SHA256()
+                    stats.fullRescanFiles += 1
+                }
                 try handle.seek(toOffset: state.offset)
                 var remaining = file.size - state.offset
                 while remaining > 0 {
                     let count = min(Self.readChunkSize, Int(remaining))
-                    if readBuffer.count != Self.readChunkSize {
-                        readBuffer = Data(count: Self.readChunkSize)
-                    }
+                    if readBuffer.count != Self.readChunkSize { readBuffer = Data(count: Self.readChunkSize) }
                     let bytesRead = readBuffer.withUnsafeMutableBytes { buffer -> Int in
                         guard let baseAddress = buffer.baseAddress else { return 0 }
                         var result: Int
-                        repeat {
-                            result = Darwin.read(handle.fileDescriptor, baseAddress, count)
-                        } while result < 0 && errno == EINTR
+                        repeat { result = Darwin.read(handle.fileDescriptor, baseAddress, count) } while result < 0 && errno == EINTR
                         return result
                     }
-                    guard bytesRead >= 0 else {
-                        throw RuntimeError("local usage read failed: errno=\(errno)")
-                    }
-                    guard bytesRead > 0 else { break }
+                    guard bytesRead > 0 else { throw RuntimeError("Session file changed or could not be read") }
+                    let chunk = readBuffer.prefix(bytesRead)
+                    hasher.update(data: chunk)
                     state.offset += UInt64(bytesRead)
                     remaining -= UInt64(bytesRead)
                     stats.bytesRead += UInt64(bytesRead)
-                    process(
-                        data: readBuffer.prefix(bytesRead),
-                        state: &state,
-                        dayStart: cache.dayStart,
-                        dayEnd: cache.dayEnd,
-                        historyStart: historyStart,
-                        weeklyObservationStart: cache.weeklyCostObservation?.startedAt,
-                        now: now
-                    )
+                    process(data: chunk, state: &state, dayStart: cache.dayStart, dayEnd: cache.dayEnd,
+                            historyStart: historyStart, weeklyObservationStart: cache.weeklyCostObservation?.startedAt, now: now)
                 }
-                guard remaining == 0 else {
-                    throw RuntimeError("local usage file ended before the expected offset")
+                if UsageFileStamp.read(file.url) != file.stamp {
+                    guard let current = UsageFileStamp.read(file.url), current.identity == file.stamp.identity,
+                          current.size >= file.size,
+                          UsageFileIdentity.digest(try UsageFileIdentity.prefixHasher(handle, count: file.size)) == UsageFileIdentity.digest(hasher)
+                    else { throw RuntimeError("Session file changed during scanning; retrying on the next refresh") }
+                    stats.verificationBytes += file.size
                 }
+                state.size = file.size
+                state.modifiedAt = file.modifiedAt
+                state.fileStamp = file.stamp
+                state.hasUsageBounds = true
+                state.prefixDigest = UsageFileIdentity.digest(hasher)
+                cache.files[path] = state
                 stats.filesRead += 1
-                changed = true
+                return true
             } catch {
                 stats.readFailureCount += 1
                 appendSharedLog("local usage scan read failure: \(path): \(errorMessage(error))")
-                if isRepricing, let previousState {
-                    state = previousState
-                    return false
-                }
+                // Commit the cursor and totals together only after a verified read.
+                return false
             }
-            return changed
         }
 
         private func process(
@@ -1141,6 +1217,7 @@ public enum CodexBackend {
             }
 
             let timestamp = parseIsoDate(stringValue(object["timestamp"]))
+            if let timestamp, timestamp > (state.latestUsageAt ?? .distantPast) { state.latestUsageAt = timestamp }
             let isToday = timestamp.map { $0 >= dayStart && $0 < dayEnd } ?? false
             let isInHistory = timestamp.map { $0 >= historyStart && $0 < dayEnd } ?? false
             let isImportedForkEvent = state.primarySessionId != nil
@@ -1151,46 +1228,55 @@ public enum CodexBackend {
             let regressed = sameSession && CodexBackend.usageRegressed(baseline, currentTotalUsage)
             let delta = CodexBackend.positiveDelta(baseline, currentTotalUsage, sameSession: sameSession)
 
+            let model = CodexBackend.modelFromPayload(info) ?? CodexBackend.modelFromPayload(payload) ?? state.currentModel
+            let requestInputTokens = TokenUsage.from(info["last_token_usage"])?.inputTokens
+            let serviceTier = CodexBackend.serviceTierFromPayload(info)
+                ?? CodexBackend.serviceTierFromPayload(payload) ?? state.currentServiceTier
+            let eventKey = (isInHistory ? copyLedger : nil).map { _ in
+                UsageCopyLedger.eventKey(session: state.primarySessionId, activeSession: state.activeSessionId,
+                                         timestamp: timestamp, usage: currentTotalUsage, model: model, tier: serviceTier,
+                                         requestInput: requestInputTokens, imported: isImportedForkEvent)
+            }
+            let countToday = isToday && (eventKey.map { copyLedger!.claimDaily($0) } ?? true)
             if isInHistory {
                 if isImportedForkEvent {
-                    if isToday {
+                    if countToday {
                         state.importedEventCount += 1
                     }
                 } else if let delta {
-                    let model = CodexBackend.modelFromPayload(info)
-                        ?? CodexBackend.modelFromPayload(payload)
-                        ?? state.currentModel
-                    let requestInputTokens = TokenUsage.from(info["last_token_usage"])?.inputTokens
-                    let serviceTier = CodexBackend.serviceTierFromPayload(info)
-                        ?? CodexBackend.serviceTierFromPayload(payload)
-                        ?? state.currentServiceTier
-                    if isToday {
-                        state.totals.add(delta)
-                        var dailyCost = state.dailyCost ?? TokenCostAccumulator()
-                        dailyCost.add(
-                            usage: delta,
-                            model: model,
-                            requestInputTokens: requestInputTokens,
-                            serviceTier: serviceTier
-                        )
-                        state.dailyCost = dailyCost
-                        state.eventCount += 1
-                        state.lastEventAtIso = stringValue(object["timestamp"])
+                    let countWeekly = timestamp.map { time in
+                        weeklyObservationStart.map { time > $0 && time <= now } ?? false
+                    } ?? false
+                    if let copyLedger, let eventKey {
+                        copyLedger.record(key: eventKey, usage: delta, model: model, tier: serviceTier,
+                                          requestInput: requestInputTokens, timestamp: stringValue(object["timestamp"]),
+                                          today: isToday, weekly: countWeekly)
+                    } else {
+                        if countToday {
+                            state.totals.add(delta)
+                            var dailyCost = state.dailyCost ?? TokenCostAccumulator()
+                            dailyCost.add(
+                                usage: delta,
+                                model: model,
+                                requestInputTokens: requestInputTokens,
+                                serviceTier: serviceTier
+                            )
+                            state.dailyCost = dailyCost
+                            state.eventCount += 1
+                            state.lastEventAtIso = stringValue(object["timestamp"])
+                        }
+                        if countWeekly {
+                            var weeklyCost = state.weeklyCost ?? TokenCostAccumulator()
+                            weeklyCost.add(
+                                usage: delta,
+                                model: model,
+                                requestInputTokens: requestInputTokens,
+                                serviceTier: serviceTier
+                            )
+                            state.weeklyCost = weeklyCost
+                        }
                     }
-                    if let timestamp,
-                       let weeklyObservationStart,
-                       timestamp > weeklyObservationStart,
-                       timestamp <= now {
-                        var weeklyCost = state.weeklyCost ?? TokenCostAccumulator()
-                        weeklyCost.add(
-                            usage: delta,
-                            model: model,
-                            requestInputTokens: requestInputTokens,
-                            serviceTier: serviceTier
-                        )
-                        state.weeklyCost = weeklyCost
-                    }
-                } else if isToday {
+                } else if countToday {
                     state.duplicateEventCount += 1
                     if regressed {
                         state.regressionEventCount += 1
@@ -1257,7 +1343,8 @@ public enum CodexBackend {
                     regressionEventCount: state.regressionEventCount,
                     primarySessionId: state.primarySessionId,
                     totalTokens: state.totals.totalTokens,
-                    lastEventAtIso: state.lastEventAtIso
+                    lastEventAtIso: state.lastEventAtIso,
+                    sourceFiles: state.copyMembers ?? [path]
                 ))
             }
 
@@ -1293,7 +1380,7 @@ public enum CodexBackend {
                 filesScanned: filesScanned,
                 filesWithEvents: filesWithEvents,
                 parseErrorCount: parseErrorCount,
-                error: nil,
+                error: copyReplayErrors.isEmpty ? nil : copyReplayErrors.joined(separator: "\n"),
                 topFiles: Array(topFiles.prefix(8)),
                 todayCost: todayCost,
                 weeklyQuotaCost: weeklyQuotaCost,
@@ -1365,7 +1452,7 @@ public enum CodexBackend {
             guard stats.bytesRead > 0 || stats.fullRescanFiles > 0 || stats.readFailureCount > 0 || stats.durationMs > 1000 else {
                 return
             }
-            appendSharedLog("local usage scan files=\(stats.filesScanned) readFiles=\(stats.filesRead) bytes=\(stats.bytesRead) durationMs=\(stats.durationMs) fullRescanFiles=\(stats.fullRescanFiles) cold=\(coldScan) readFailures=\(stats.readFailureCount)")
+            appendSharedLog("local usage scan files=\(stats.filesScanned) readFiles=\(stats.filesRead) bytes=\(stats.bytesRead) verificationBytes=\(stats.verificationBytes) durationMs=\(stats.durationMs) fullRescanFiles=\(stats.fullRescanFiles) cold=\(coldScan) readFailures=\(stats.readFailureCount)")
         }
     }
 
@@ -1399,6 +1486,12 @@ public enum CodexBackend {
         var offset: UInt64 = 0
         var size: UInt64 = 0
         var modifiedAt: Date?
+        var fileStamp: UsageFileStamp?
+        var prefixDigest: String?
+        var copyMembers: [String]?
+        var copyDay: String?
+        var latestUsageAt: Date?
+        var hasUsageBounds: Bool?
         var pendingData = Data()
         var isSkippingOversizedLine: Bool?
         var previousTotalUsage: TokenUsage?
@@ -1446,6 +1539,7 @@ public enum CodexBackend {
         var filesScanned = 0
         var filesRead = 0
         var bytesRead: UInt64 = 0
+        var verificationBytes: UInt64 = 0
         var fullRescanFiles = 0
         var readFailureCount = 0
         var durationMs = 0
@@ -1775,47 +1869,22 @@ public enum CodexBackend {
 
     private struct JsonlFileInfo {
         let url: URL
-        let modifiedAt: Date
-        let size: UInt64
+        let stamp: UsageFileStamp
+        var sessionID: String?
+        var modifiedAt: Date { stamp.modifiedAt }
+        var size: UInt64 { stamp.size }
     }
 
     private static func walkJsonlFileInfos(root: URL, dayStart: Date) -> [JsonlFileInfo] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
+                                                              options: [.skipsHiddenFiles]) else { return [] }
         var files: [JsonlFileInfo] = []
         for case let file as URL in enumerator where file.pathExtension == "jsonl" {
-            guard let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
-                  values.isRegularFile == true,
-                  let modifiedAt = values.contentModificationDate,
-                  modifiedAt >= dayStart
-            else {
-                continue
-            }
-            files.append(JsonlFileInfo(url: file, modifiedAt: modifiedAt, size: UInt64(values.fileSize ?? 0)))
+            let canonical = file.standardizedFileURL.resolvingSymlinksInPath()
+            guard let stamp = UsageFileStamp.read(canonical), stamp.modifiedAt >= dayStart else { continue }
+            files.append(JsonlFileInfo(url: canonical, stamp: stamp))
         }
         return files
-    }
-
-    private static func deduplicatedJsonlFileInfos(_ files: [JsonlFileInfo]) -> [JsonlFileInfo] {
-        var byFileName: [String: JsonlFileInfo] = [:]
-        for file in files {
-            let key = file.url.lastPathComponent
-            guard let existing = byFileName[key] else {
-                byFileName[key] = file
-                continue
-            }
-
-            if file.size > existing.size
-                || (file.size == existing.size && file.url.path < existing.url.path) {
-                byFileName[key] = file
-            }
-        }
-        return byFileName.values.sorted { $0.url.path < $1.url.path }
     }
 
     private static func sessionIdFromMeta(_ event: [String: Any]) -> String? {
@@ -2292,7 +2361,7 @@ public enum CodexCommandLine {
             case "combined":
                 try writeJSON(CodexBackend.readCombined())
             case "local-usage":
-                try writeJSON(CodexBackend.readLocalTokenUsage())
+                try writeJSON(CodexBackend.readLocalTokenUsage(rebuild: arguments.dropFirst().contains("--rebuild")))
             case "status":
                 try writeJSON(CodexBackend.readStatus())
             case "mcp":
