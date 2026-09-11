@@ -182,6 +182,7 @@ public struct WeeklyQuotaCostEstimate: Codable, Sendable {
     public var scanStatus: UsageScanStatus? = nil
     public var billingAssumptions: UsageBillingAssumptions? = nil
     public var inferencePauseReason: String? = nil
+    public var valuation: WeeklyQuotaValuation? = nil
 }
 
 public struct LocalUsageTopFile: Codable, Sendable {

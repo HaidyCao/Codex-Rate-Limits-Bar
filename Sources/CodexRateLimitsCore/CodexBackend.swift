@@ -431,7 +431,8 @@ public enum CodexBackend {
         let localUsage: LocalUsageSnapshot
         let localUsageError: String?
         do {
-            localUsage = try readLocalTokenUsage(weeklyWindow: ratePayload.selectedRateLimit?.weeklyWindow, accountContext: ratePayload.accountContext)
+            localUsage = try readLocalTokenUsage(weeklyWindow: ratePayload.selectedRateLimit?.weeklyWindow, accountContext: ratePayload.accountContext,
+                                                quotaSampleAt: parseIsoDate(ratePayload.fetchedAtIso))
             localUsageError = localUsage.error
         } catch {
             localUsage = emptyLocalUsageSnapshot(error)
@@ -454,14 +455,14 @@ public enum CodexBackend {
 
     public static func readLocalTokenUsage(weeklyWindow: RateLimitWindow? = nil,
                                            accountContext: CodexAccountContext? = nil,
-                                           rebuild: Bool = false) throws -> LocalUsageSnapshot {
+                                           rebuild: Bool = false, quotaSampleAt: Date? = nil) throws -> LocalUsageSnapshot {
         let current = CodexAccountSource()
         let matches = accountContext?.accountKey != nil && accountContext?.accountKey == current.identityKey
             && accountContext?.codexHome == current.codexHome.path
         return try localUsageScanner.snapshot(weeklyWindow: matches ? weeklyWindow : nil,
                                               accountContext: accountContext,
                                               invalidateWeeklyObservation: accountContext != nil && !matches,
-                                              rebuild: rebuild)
+                                              rebuild: rebuild, quotaSampleAt: matches ? quotaSampleAt : nil)
     }
 
     static func localUsageRootURLs(
@@ -536,6 +537,7 @@ public enum CodexBackend {
         private var copyLedger: UsageCopyLedger?
         private var scanIssues: [UsageScanIssue] = []
         private var rootStatuses: [UsageRootStatus] = []
+        private var timelineStartedAt: Date?
         private let allowMissingRoots: Bool
 
         init() {
@@ -572,17 +574,18 @@ public enum CodexBackend {
         }
 
         func snapshot(weeklyWindow: RateLimitWindow? = nil, accountContext: CodexAccountContext? = nil,
-                      invalidateWeeklyObservation: Bool = false, rebuild: Bool = false) throws -> LocalUsageSnapshot {
+                      invalidateWeeklyObservation: Bool = false, rebuild: Bool = false, quotaSampleAt: Date? = nil) throws -> LocalUsageSnapshot {
             lock.lock()
             defer { lock.unlock() }
             defer { _ = malloc_zone_pressure_relief(nil, 0) }
             return try autoreleasepool {
-                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation, rebuild: rebuild)
+                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation,
+                               rebuild: rebuild, quotaSampleAt: quotaSampleAt)
             }
         }
 
         private func scanLocked(weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?,
-                                invalidateWeeklyObservation: Bool, rebuild: Bool) throws -> LocalUsageSnapshot {
+                                invalidateWeeklyObservation: Bool, rebuild: Bool, quotaSampleAt: Date?) throws -> LocalUsageSnapshot {
             scanIssues = []
             rootStatuses = []
             let persistentLockFD = acquirePersistentCacheLock()
@@ -678,12 +681,31 @@ public enum CodexBackend {
 
             if invalidateWeeklyObservation, cache.weeklyCostObservation != nil {
                 cache.weeklyCostObservation = nil
-                for path in Array(cache.files.keys) { cache.files[path]?.weeklyCost = nil }
+                for path in Array(cache.files.keys) {
+                    cache.files[path]?.weeklyCost = nil
+                    cache.files[path]?.weeklyTimeline = nil
+                }
                 cacheChanged = true
             }
-            cacheChanged = updateWeeklyCostObservation(
-                cache: &cache, window: weeklyWindow, now: now, rootPaths: weeklyRoots, accountContext: accountContext
-            ) || cacheChanged
+            let canUpdateObservation = quotaSampleAt.map {
+                $0 <= now.addingTimeInterval(5) && now.timeIntervalSince($0) <= WeeklyQuotaEstimator.freshness
+                    && $0 >= (cache.weeklyCostObservation?.history?.samples.last?.timestamp ?? .distantPast)
+            } ?? true
+            if canUpdateObservation {
+                cacheChanged = updateWeeklyCostObservation(
+                    cache: &cache, window: weeklyWindow, now: now, rootPaths: weeklyRoots, accountContext: accountContext
+                ) || cacheChanged
+            }
+            if cache.weeklyCostObservation != nil, cache.weeklyCostObservation?.timelineStartedAt == nil {
+                // Keep the original observation. Fine-grained evidence begins
+                // now; old aggregate totals cannot reconstruct timed samples.
+                cache.weeklyCostObservation?.timelineStartedAt = now
+                cacheChanged = true
+            }
+            timelineStartedAt = cache.weeklyCostObservation?.timelineStartedAt.map {
+                max($0, now.addingTimeInterval(-WeeklyQuotaEstimator.historyDuration
+                    - WeeklyQuotaEstimator.alignmentAllowance - WeeklyQuotaEstimator.bucketDuration))
+            }
             cacheChanged = reconcileCachedFiles(files, cache: &cache, historyStart: historyStart) || cacheChanged
 
             let groups = Dictionary(grouping: files) { file in
@@ -767,17 +789,36 @@ public enum CodexBackend {
                                                 message: "A previously scanned file is missing or inaccessible; cached totals are retained."))
             }
 
-            self.cache = cache
-            if cacheChanged {
-                persist(cache)
+            let cutoffMinute = WeeklyQuotaEstimator.minute(now.addingTimeInterval(-WeeklyQuotaEstimator.historyDuration
+                - WeeklyQuotaEstimator.alignmentAllowance - WeeklyQuotaEstimator.bucketDuration))
+            for path in cache.files.keys {
+                if cache.files[path]?.weeklyTimeline?.keys.contains(where: { $0 < cutoffMinute }) == true {
+                    let retained = cache.files[path]?.weeklyTimeline?.filter { $0.key >= cutoffMinute }
+                    cache.files[path]?.weeklyTimeline = retained
+                    cacheChanged = true
+                }
+            }
+            if let window = weeklyWindow, let sampledAt = quotaSampleAt,
+               let observation = cache.weeklyCostObservation, observation.windowID == QuotaWindowID(window: window),
+               sampledAt >= observation.startedAt.addingTimeInterval(-WeeklyQuotaEstimator.freshness) {
+                var history = observation.history ?? WeeklyQuotaHistory()
+                let previous = history.samples
+                history.observe(usedPercent: window.usedPercent, at: sampledAt, now: now)
+                if previous != history.samples {
+                    cache.weeklyCostObservation?.history = history
+                    cacheChanged = true
+                }
             }
             let snapshot = makeSnapshot(
                 cache: cache,
                 filesScanned: files.count,
                 now: now,
                 weeklyWindow: weeklyWindow,
-                accountContext: accountContext
+                accountContext: accountContext,
+                quotaSampleAt: quotaSampleAt
             )
+            self.cache = cache
+            if cacheChanged { persist(cache) }
             stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             log(stats: stats, coldScan: isColdScan)
             return snapshot
@@ -801,8 +842,20 @@ public enum CodexBackend {
                     var cost = cache.files[path]?.weeklyCost ?? TokenCostAccumulator()
                     cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
                     cache.files[path]?.weeklyCost = cost
+                    if let timestamp = parseIsoDate(event.timestamp) {
+                        addTimeline(usage: event.usage, model: event.model, requestInput: event.requestInput, tier: event.tier,
+                                    at: timestamp, state: &cache.files[path]!)
+                    }
                 }
             }
+        }
+
+        private func addTimeline(usage: TokenUsage, model: String?, requestInput: Int64?, tier: String?,
+                                 at timestamp: Date, state: inout LocalUsageFileState) {
+            guard let timelineStartedAt, timestamp >= timelineStartedAt else { return }
+            let minute = WeeklyQuotaEstimator.minute(timestamp)
+            if state.weeklyTimeline == nil { state.weeklyTimeline = [:] }
+            state.weeklyTimeline?[minute, default: WeeklyCostBucket()].add(usage: usage, model: model, requestInput: requestInput, tier: tier)
         }
 
         private func loadPersistentCache() {
@@ -982,10 +1035,12 @@ public enum CodexBackend {
                 startedAt: now,
                 baselineUsedPercent: usedPercent,
                 rootPaths: rootPaths,
-                accountScopeKey: accountContext?.scopeKey
+                accountScopeKey: accountContext?.scopeKey,
+                timelineStartedAt: now
             )
             for path in Array(cache.files.keys) {
                 cache.files[path]?.weeklyCost = nil
+                cache.files[path]?.weeklyTimeline = nil
             }
             return true
         }
@@ -1304,6 +1359,10 @@ public enum CodexBackend {
                                 serviceTier: serviceTier
                             )
                             state.weeklyCost = weeklyCost
+                            if let timestamp {
+                                addTimeline(usage: delta, model: model, requestInput: requestInputTokens, tier: serviceTier,
+                                            at: timestamp, state: &state)
+                            }
                         }
                     }
                 } else if countToday {
@@ -1330,7 +1389,7 @@ public enum CodexBackend {
             filesScanned: Int,
             now: Date,
             weeklyWindow: RateLimitWindow?,
-            accountContext: CodexAccountContext?
+            accountContext: CodexAccountContext?, quotaSampleAt: Date?
         ) -> LocalUsageSnapshot {
             var totals = TokenUsage()
             var topFiles: [LocalUsageTopFile] = []
@@ -1342,6 +1401,7 @@ public enum CodexBackend {
             var parseErrorCount = 0
             var todayCostAccumulator = TokenCostAccumulator()
             var weeklyCostAccumulator = TokenCostAccumulator()
+            var weeklyTimeline: [Int: WeeklyCostBucket] = [:]
             let weeklyRoots = cache.weeklyCostObservation?.rootPaths ?? weeklyRootURLsProvider().map(\.path)
 
             for (path, state) in cache.files {
@@ -1360,6 +1420,9 @@ public enum CodexBackend {
                     let canonicalPath = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
                     if weeklyRoots.contains(where: { canonicalPath.hasPrefix($0 + "/") }) {
                         weeklyCostAccumulator.merge(weeklyCost)
+                        for (minute, bucket) in state.weeklyTimeline ?? [:] {
+                            weeklyTimeline[minute, default: WeeklyCostBucket()].merge(bucket)
+                        }
                     }
                 }
 
@@ -1393,7 +1456,8 @@ public enum CodexBackend {
                 observation: cache.weeklyCostObservation,
                 now: now,
                 diagnostics: weeklyDiagnostics,
-                assumptions: weeklyCostAccumulator.billingAssumptions()
+                assumptions: weeklyCostAccumulator.billingAssumptions(),
+                timeline: weeklyTimeline, quotaSampleAt: quotaSampleAt
             )
 
             return LocalUsageSnapshot(
@@ -1475,7 +1539,8 @@ public enum CodexBackend {
             observation: LocalUsageWeeklyCostObservation?,
             now: Date,
             diagnostics: UsageScanDiagnostics,
-            assumptions: UsageBillingAssumptions
+            assumptions: UsageBillingAssumptions,
+            timeline: [Int: WeeklyCostBucket], quotaSampleAt: Date?
         ) -> WeeklyQuotaCostEstimate? {
             guard let window,
                   let windowID = QuotaWindowID(window: window),
@@ -1492,17 +1557,9 @@ public enum CodexBackend {
 
             let usedPercent = max(0, min(100, max(window.usedPercent, 100 - window.remainingPercent)))
             let usedDeltaPercent = max(0, usedPercent - observation.baselineUsedPercent)
-            let pauseReason = diagnostics.status.isIncomplete ? "incompleteScan"
-                : (assumptions.assumedAPITokens > 0 || assumptions.assumedCreditTokens > 0) ? "billingAssumptions" : nil
-            let estimatedQuotaUSD: Double?
-            if pauseReason == nil, usedDeltaPercent >= 2,
-               observed.coveragePercent >= 95,
-               observed.pricedTokens > 0,
-               let observedCostUSD = observed.estimatedCostUSD {
-                estimatedQuotaUSD = observedCostUSD * 100 / Double(usedDeltaPercent)
-            } else {
-                estimatedQuotaUSD = nil
-            }
+            let valuation = WeeklyQuotaEstimator.evaluate(history: observation.history ?? WeeklyQuotaHistory(), buckets: timeline,
+                coverageStart: observation.timelineStartedAt ?? now, quotaSampleAt: quotaSampleAt,
+                scanIncomplete: diagnostics.status.isIncomplete, now: now)
             let formatter = ISO8601DateFormatter()
             return WeeklyQuotaCostEstimate(
                 windowStartIso: formatter.string(from: windowStart),
@@ -1512,7 +1569,7 @@ public enum CodexBackend {
                 usedPercent: usedPercent,
                 usedDeltaPercent: usedDeltaPercent,
                 observedCostUSD: observed.estimatedCostUSD,
-                estimatedQuotaUSD: estimatedQuotaUSD,
+                estimatedQuotaUSD: valuation.estimatedUSD,
                 coveragePercent: observed.coveragePercent,
                 pricedTokens: observed.pricedTokens,
                 unpricedTokens: observed.unpricedTokens,
@@ -1521,7 +1578,8 @@ public enum CodexBackend {
                 accountScopeKey: observation.accountScopeKey,
                 scanStatus: diagnostics.status,
                 billingAssumptions: assumptions,
-                inferencePauseReason: pauseReason
+                inferencePauseReason: valuation.reason,
+                valuation: valuation
             )
         }
 
@@ -1557,6 +1615,8 @@ public enum CodexBackend {
         let baselineUsedPercent: Int
         var rootPaths: [String]?
         var accountScopeKey: String?
+        var timelineStartedAt: Date?
+        var history: WeeklyQuotaHistory?
     }
 
     private struct LocalUsageFileState: Codable {
@@ -1582,6 +1642,7 @@ public enum CodexBackend {
         var totals = TokenUsage()
         var dailyCost: TokenCostAccumulator?
         var weeklyCost: TokenCostAccumulator?
+        var weeklyTimeline: [Int: WeeklyCostBucket]?
         var eventCount = 0
         var duplicateEventCount = 0
         var importedEventCount = 0

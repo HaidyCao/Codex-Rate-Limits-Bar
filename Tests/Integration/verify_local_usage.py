@@ -86,6 +86,12 @@ for line in sys.stdin:
             assert status["accountContext"] == status["localUsage"]["accountContext"]
             assert status["resetCredits"]["availableCount"] == 3
             assert status["rateLimits"]["credits"]["balance"] == "12.5"
+            valuation = status["localUsage"]["weeklyQuotaCost"]["valuation"]
+            assert valuation["method"] == "local-api-intervals-v1"
+            assert valuation["lastQuotaSampleAtIso"] == status["fetchedAtIso"]
+            assert valuation["effectiveIntervalCount"] == 0
+            assert valuation["status"] == ("paused" if expected in ("partial", "unavailable") else "collecting")
+            assert status["localUsage"]["weeklyQuotaCost"].get("estimatedQuotaUSD") is None
             return direct
 
         write_usage()
@@ -113,7 +119,7 @@ for line in sys.stdin:
         bad.write_text("{broken json}\n")
         unavailable = check_shared_status("unavailable")
         assert "--" in unavailable["display"]["consumptionLabel"]
-    print("CLI/MCP integration passed: whitespace, copies, completeness, assumptions, read recovery and account attribution.")
+    print("CLI/MCP integration passed: completeness, assumptions, recovery, account attribution and timestamped weekly evidence.")
 
 
 if __name__ == "__main__":

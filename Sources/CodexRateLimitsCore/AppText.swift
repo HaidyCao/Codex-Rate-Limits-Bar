@@ -281,6 +281,20 @@ public enum AppText {
     }
 
     public static func weeklyQuotaEstimatedCost(_ estimate: WeeklyQuotaCostEstimate?) -> String {
+        if let valuation = estimate?.valuation {
+            if valuation.status == .ready, let lower = valuation.lowerUSD, let upper = valuation.upperUSD {
+                let range = weeklyValueRange(lower: lower, upper: upper)
+                return weeklyText("本机周额度 API 等价 \(range)", "本機週額度 API 等價 \(range)",
+                                  "ローカル週間 API 相当額 \(range)", "로컬 주간 API 상당액 \(range)", "Local weekly API equivalent \(range)")
+            }
+            let reason = weeklyValuationReason(valuation.reason)
+            if valuation.status == .collecting {
+                return weeklyText("周金额观察中 · \(reason)", "週金額觀察中 · \(reason)", "週間金額を観測中 · \(reason)",
+                                  "주간 금액 관측 중 · \(reason)", "Learning weekly value · \(reason)")
+            }
+            return weeklyText("周金额暂停 · \(reason)", "週金額暫停 · \(reason)", "週間金額の推定停止 · \(reason)",
+                              "주간 금액 추정 중지 · \(reason)", "Weekly estimate paused · \(reason)")
+        }
         if let reason = estimate?.inferencePauseReason {
             let scan = reason == "incompleteScan"
             switch language {
@@ -326,6 +340,89 @@ public enum AppText {
         case .japanese: return "ローカル推定の週間上限は約 \(value)"
         case .korean: return "로컬 추정 주간 한도 약 \(value)"
         case .english: return "Local weekly quota estimate about \(value)"
+        }
+    }
+
+    public static func weeklyValuationSummary(_ value: WeeklyQuotaValuation?) -> String {
+        guard let value else { return "" }
+        let confidence: String
+        switch value.confidence {
+        case .low: confidence = weeklyText("低", "低", "低", "낮음", "low")
+        case .medium: confidence = weeklyText("中", "中", "中", "보통", "medium")
+        case .high: confidence = weeklyText("高", "高", "高", "높음", "high")
+        }
+        let span = value.observationSpanSeconds >= 3600
+            ? String(format: "%.1f h", value.observationSpanSeconds / 3600) : "\(Int(value.observationSpanSeconds / 60)) min"
+        return weeklyText("样本置信度\(confidence) · \(value.effectiveIntervalCount) 区间 · \(span)",
+                          "樣本信心度\(confidence) · \(value.effectiveIntervalCount) 區間 · \(span)",
+                          "標本の信頼度 \(confidence) · \(value.effectiveIntervalCount) 区間 · \(span)",
+                          "표본 신뢰도 \(confidence) · \(value.effectiveIntervalCount) 구간 · \(span)",
+                          "Sample confidence \(confidence) · \(value.effectiveIntervalCount) intervals · \(span)")
+    }
+
+    public static func weeklyValuationDetails(_ value: WeeklyQuotaValuation?) -> String {
+        guard let value else { return "" }
+        var lines = [weeklyValuationSummary(value)]
+        lines.append(weeklyText("官方样本 \(value.sampleCount) 次；排除 \(value.rejectedIntervalCount) 区间；有效额度变化 \(value.effectiveUsedPercent) 个百分点。",
+                                "官方樣本 \(value.sampleCount) 次；排除 \(value.rejectedIntervalCount) 區間；有效額度變化 \(value.effectiveUsedPercent) 個百分點。",
+                                "公式標本 \(value.sampleCount) 回、除外 \(value.rejectedIntervalCount) 区間、有効変化 \(value.effectiveUsedPercent) ポイント。",
+                                "공식 표본 \(value.sampleCount)개, 제외 \(value.rejectedIntervalCount)구간, 유효 한도 변화 \(value.effectiveUsedPercent)%p.",
+                                "\(value.sampleCount) official samples; \(value.rejectedIntervalCount) intervals excluded; \(value.effectiveUsedPercent) effective percentage points."))
+        if let start = value.sampleStartIso, let end = value.sampleEndIso { lines.append("\(start) → \(end)") }
+        if value.creditAssumptionsPresent {
+            lines.append(weeklyText("部分 credits 计费条件不明，样本置信度最高为中。", "部分 credits 計費條件不明，樣本信心度最高為中。",
+                                    "credits 料金条件に不明点があり、信頼度は最大「中」です。", "일부 credits 요율 조건 누락으로 신뢰도는 보통 이하입니다.",
+                                    "Some credit billing conditions are uncertain; sample confidence is capped at medium."))
+        }
+        lines.append(weeklyText("范围反映本机区间差异及时间对齐误差，并非统计置信区间；其他设备、云端用量不在本机金额内。",
+                                "範圍反映本機區間差異及時間對齊誤差，並非統計信賴區間；其他裝置、雲端用量不在本機金額內。",
+                                "範囲はローカル区間差と時刻誤差を表し、統計的信頼区間ではありません。他端末・クラウドは対象外です。",
+                                "범위는 로컬 구간 차이와 시간 오차를 반영하며 통계적 신뢰구간이 아닙니다. 다른 기기와 클라우드는 제외됩니다.",
+                                "The range reflects local interval variation and timing uncertainty, not a statistical confidence interval. Other devices and cloud costs are excluded."))
+        return lines.joined(separator: "\n")
+    }
+
+    static func weeklyValueRange(lower: Double, upper: Double) -> String {
+        guard lower.isFinite, upper.isFinite, lower >= 0, upper >= lower, upper > 0 else { return "--" }
+        if upper < 0.01 { return "<$0.01" }
+        let step = max(0.01, pow(10, floor(log10(upper)) - 1))
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = min(2, max(0, -Int(floor(log10(step)))))
+        let low = floor(lower / step) * step, high = ceil(upper / step) * step
+        return "$\(formatter.string(from: NSNumber(value: low)) ?? "--")–$\(formatter.string(from: NSNumber(value: high)) ?? "--")"
+    }
+
+    private static func weeklyValuationReason(_ reason: String?) -> String {
+        switch reason {
+        case "incompleteScan": return weeklyText("统计不完整", "統計不完整", "不完全な統計", "불완전한 통계", "incomplete scan")
+        case "billingAssumptions": return weeklyText("API 计费条件缺失", "API 計費條件缺失", "API 料金条件が不足", "API 요율 조건 누락", "API billing assumptions")
+        case "unpricedUsage": return weeklyText("存在未知 API 价格", "存在未知 API 價格", "不明な API 価格", "알 수 없는 API 가격", "unknown API prices")
+        case "staleQuota": return weeklyText("额度样本已过期", "額度樣本已過期", "上限標本が古い", "한도 표본 만료", "quota sample expired")
+        case "quotaTimestampUnavailable": return weeklyText("缺少额度采样时间", "缺少額度取樣時間", "上限の取得時刻が不明", "한도 표본 시간 누락", "missing quota timestamp")
+        case "supersededSample": return weeklyText("等待最新额度样本", "等待最新額度樣本", "最新の上限標本を待機", "최신 한도 표본 대기", "waiting for latest quota sample")
+        case "samplingGap": return weeklyText("采样中断，重新积累", "取樣中斷，重新累積", "標本の中断後に再学習", "표본 중단 후 다시 수집", "relearning after a sampling gap")
+        case "quotaRegression": return weeklyText("额度回退，重新积累", "額度回退，重新累積", "上限の戻り後に再学習", "한도 감소 후 다시 수집", "relearning after quota regression")
+        case "quotaExhausted": return weeklyText("额度已耗尽", "額度已耗盡", "上限に到達", "한도 소진", "quota exhausted")
+        case "noLocalUsage": return weeklyText("额度与本机用量不匹配", "額度與本機用量不符", "上限とローカル使用量が不一致", "한도와 로컬 사용량 불일치", "quota/local usage mismatch")
+        case "alignmentUncertain": return weeklyText("时间边界误差过大", "時間邊界誤差過大", "時刻境界の誤差が大きい", "시간 경계 오차가 큼", "timing uncertainty too large")
+        case "unstableSamples": return weeklyText("区间波动过大", "區間波動過大", "区間の変動が大きい", "구간 변동이 큼", "intervals vary too much")
+        case "insufficientDuration": return weeklyText("观察时间不足", "觀察時間不足", "観測時間が不足", "관측 시간 부족", "observation too short")
+        case "insufficientSignal": return weeklyText("额度变化不足", "額度變化不足", "上限変化が不足", "한도 변화 부족", "quota change too small")
+        case "aligningSamples": return weeklyText("正在对齐样本", "正在對齊樣本", "標本時刻を調整中", "표본 시간 정렬 중", "aligning samples")
+        default: return weeklyText("有效区间不足", "有效區間不足", "有効区間が不足", "유효 구간 부족", "not enough valid intervals")
+        }
+    }
+
+    private static func weeklyText(_ zh: String, _ traditional: String, _ ja: String, _ ko: String, _ en: String) -> String {
+        switch language {
+        case .simplifiedChinese: return zh
+        case .traditionalChinese: return traditional
+        case .japanese: return ja
+        case .korean: return ko
+        case .english: return en
         }
     }
 
@@ -675,7 +772,7 @@ public enum AppText {
     ) -> String {
         let forecastSuffix = forecast.map { "\n\(quotaForecastLabel($0))" } ?? ""
         let costSuffix = weeklyQuotaCost.map {
-            "\n\(weeklyQuotaEstimatedCost($0))\n\(costEstimateDisclaimer)"
+            "\n\(weeklyQuotaEstimatedCost($0))\n\(weeklyValuationDetails($0.valuation))\n\(costEstimateDisclaimer)"
         } ?? ""
         switch language {
         case .simplifiedChinese:

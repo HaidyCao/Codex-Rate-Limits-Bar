@@ -213,7 +213,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(snapshot.todayCost?.estimatedCostUSD), 0.10, accuracy: 0.000_001)
         XCTAssertEqual(snapshot.weeklyQuotaCost?.usedDeltaPercent, 10)
         XCTAssertEqual(try XCTUnwrap(snapshot.weeklyQuotaCost?.observedCostUSD), 0.10, accuracy: 0.000_001)
-        XCTAssertEqual(try XCTUnwrap(snapshot.weeklyQuotaCost?.estimatedQuotaUSD), 1.00, accuracy: 0.000_001)
+        XCTAssertNil(snapshot.weeklyQuotaCost?.estimatedQuotaUSD)
     }
 
     func testWeeklyQuotaEstimateWaitsForEnoughPercentageSignal() throws {
@@ -429,7 +429,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(nextDay.todayCost?.estimatedCostUSD), 0.000_01, accuracy: 0.000_000_001)
         XCTAssertEqual(nextDay.weeklyQuotaCost?.usedDeltaPercent, 10)
         XCTAssertEqual(try XCTUnwrap(nextDay.weeklyQuotaCost?.observedCostUSD), 0.000_01, accuracy: 0.000_000_001)
-        XCTAssertEqual(try XCTUnwrap(nextDay.weeklyQuotaCost?.estimatedQuotaUSD), 0.000_10, accuracy: 0.000_000_001)
+        XCTAssertNil(nextDay.weeklyQuotaCost?.estimatedQuotaUSD)
     }
 
     func testNewModelPriceRebuildsDailyAndWeeklyCostWithoutResettingObservation() throws {
@@ -462,7 +462,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(rebuilt.todayCost?.coveragePercent, 100)
         XCTAssertEqual(try XCTUnwrap(rebuilt.todayCost?.estimatedCostUSD), 8.25, accuracy: 0.000_001)
         XCTAssertEqual(try XCTUnwrap(rebuilt.weeklyQuotaCost?.observedCostUSD), 4.25, accuracy: 0.000_001)
-        XCTAssertEqual(try XCTUnwrap(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD), 212.5, accuracy: 0.000_001)
+        XCTAssertNil(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.observationStartIso, first.weeklyQuotaCost?.observationStartIso)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.baselineUsedPercent, 10)
 
@@ -501,7 +501,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(rebuilt.todayCost?.estimatedCostUSD, 0)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.coveragePercent, 100)
         XCTAssertEqual(try XCTUnwrap(rebuilt.weeklyQuotaCost?.observedCostUSD), 2.75, accuracy: 0.000_001)
-        XCTAssertEqual(try XCTUnwrap(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD), 137.5, accuracy: 0.000_001)
+        XCTAssertNil(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.observationStartIso, first.weeklyQuotaCost?.observationStartIso)
     }
 
@@ -764,7 +764,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(result.todayCost?.estimatedCostUSD, 8)
         XCTAssertEqual(result.todayCredits?.estimatedCredits, 200)
         XCTAssertEqual(result.weeklyQuotaCost?.observedCostUSD, 4)
-        XCTAssertEqual(result.weeklyQuotaCost?.estimatedQuotaUSD, 200)
+        XCTAssertNil(result.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(result.weeklyQuotaCost?.source, desktop.resolvingSymlinksInPath().path)
     }
 

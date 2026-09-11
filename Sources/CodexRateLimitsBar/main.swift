@@ -139,6 +139,7 @@ private struct RateLimitUIUpdate: Sendable {
     let credits: CreditsSnapshot?
     let accountContext: CodexAccountContext?
     let resetCredits: ResetCreditsSnapshot?
+    let sampledAt: Date?
 }
 
 final class RateLimitsMenuView: NSView {
@@ -190,6 +191,7 @@ class RateLimitsDrawingView: NSView {
         self.weeklyQuotaCost = weeklyQuotaCost
         self.credits = credits
         toolTip = AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
+            + "\n" + AppText.weeklyValuationDetails(weeklyQuotaCost?.valuation)
             + ((weeklyQuotaCost?.unpricedModels?.isEmpty == false) ? "\n" + (weeklyQuotaCost?.unpricedModels?.joined(separator: ", ") ?? "") : "")
         needsDisplay = true
     }
@@ -206,7 +208,8 @@ class RateLimitsDrawingView: NSView {
         drawQuotaRow(label: AppText.weeklyLimit, window: weekly, y: 36)
         drawForecast(forecast, y: 72)
         drawWeeklyQuotaCost(weeklyQuotaCost, y: 94)
-        drawText(AppText.officialCreditsBalance(credits), in: NSRect(x: 32, y: 115, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: labelColor)
+        drawText(AppText.weeklyValuationSummary(weeklyQuotaCost?.valuation), in: NSRect(x: 32, y: 115, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(AppText.officialCreditsBalance(credits), in: NSRect(x: 32, y: 137, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: labelColor)
     }
 
     private func drawQuotaRow(label: String, window: RateLimitWindow?, y: CGFloat) {
@@ -990,7 +993,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let menu = NSMenu()
     private let accountItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 156))
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 178))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -1009,6 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var pendingLocalUsageRefresh = false
     private var pendingLocalUsageRebuild = false
     private var currentWeeklyWindow: RateLimitWindow?
+    private var currentQuotaSampleAt: Date?
     private var currentAccountContext: CodexAccountContext?
     private var currentCredits: CreditsSnapshot?
     private var currentLocalUsage: LocalUsageSnapshot?
@@ -1276,7 +1280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 error: payload.rateLimitError,
                 credits: payload.selectedRateLimit?.credits,
                 accountContext: payload.accountContext,
-                resetCredits: payload.resetCredits
+                resetCredits: payload.resetCredits,
+                sampledAt: ISO8601DateFormatter().date(from: payload.fetchedAtIso)
             )
             guard let weekly = update.weekly else {
                 isRefreshingRateLimits = false
@@ -1309,11 +1314,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         pendingLocalUsageRefresh = false
         let weeklyWindow = currentWeeklyWindow
         let accountContext = currentAccountContext
+        let quotaSampleAt = currentQuotaSampleAt
         let shouldRebuild = pendingLocalUsageRebuild
         pendingLocalUsageRebuild = false
 
         localUsageQueue.async { [weak self] in
-            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext, rebuild: shouldRebuild)
+            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext,
+                                             rebuild: shouldRebuild, quotaSampleAt: quotaSampleAt)
             DispatchQueue.main.async {
                 self?.completeLocalUsageRefresh(result)
             }
@@ -1339,6 +1346,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func applyRateLimits(_ update: RateLimitUIUpdate, monitor: QuotaMonitorSnapshot?) {
         let weekly = update.weekly
         let previousAccountScope = currentAccountContext?.scopeKey
+        let previousSampleAt = currentQuotaSampleAt
+        currentQuotaSampleAt = update.sampledAt
         currentAccountContext = update.accountContext
         accountItem.title = AppText.accountSource(update.accountContext)
         accountItem.toolTip = AppText.accountSourceDetail(update.accountContext)
@@ -1371,7 +1380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             credits: currentCredits
         )
         updateRateLimitTooltip()
-        if previousWindowID != nextWindowID || previousAccountScope != currentAccountContext?.scopeKey {
+        if previousWindowID != nextWindowID || previousAccountScope != currentAccountContext?.scopeKey || previousSampleAt != currentQuotaSampleAt {
             refreshLocalUsage()
         }
     }
@@ -1528,9 +1537,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated private static func fetchLocalUsage(
-        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?, rebuild: Bool
+        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?, rebuild: Bool, quotaSampleAt: Date?
     ) -> Result<LocalUsageSnapshot, Error> {
-        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext, rebuild: rebuild) }
+        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext,
+                                                     rebuild: rebuild, quotaSampleAt: quotaSampleAt) }
     }
 
     nonisolated private static func appendLog(_ message: String) {

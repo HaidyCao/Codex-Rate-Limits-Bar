@@ -17,7 +17,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
   - Visible by default and can be hidden from the menu settings.
   - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories; `CODEX_SESSIONS_DIR` explicitly selects one directory.
   - Session files are read incrementally with a reusable 1 MB buffer. Per-file identities, content fingerprints, cursors, daily baselines, and compact model cost buckets are persisted for up to eight days. Unchanged files reuse the cache; changed prefixes and relevant session copies trigger replay.
-- The Usage card learns the API-equivalent USD value of the weekly quota from this Mac's incremental cost and the matching change in Codex's used percentage. It waits for at least two observed percentage points and 95% known-price coverage, and pauses when the relevant scan is incomplete or billing conditions had to be assumed.
+- The Usage card learns a range for the weekly quota's local API-equivalent USD value from timestamped quota reads and this Mac's usage. It requires at least three independent intervals, each lasting 30 minutes with a change of five percentage points, and shows sample confidence, interval count and observation span.
 - The app, command-line data reader, and bundled MCP server are implemented in
   one Swift executable. Node.js is not required.
 - If Codex was installed via npm, the app looks for the native Codex vendor
@@ -115,10 +115,12 @@ File access recovery or repaired records are checked on the next refresh.
 The menu shows incomplete statistics in orange with details in the tooltip;
 unavailable totals display `--`. `status.localUsageError` carries the same error
 as `localUsage.error`. Daily amounts remain estimates over available data.
-Weekly amounts expose `scanStatus`, `billingAssumptions` and
-`inferencePauseReason` (`incompleteScan` or `billingAssumptions`); inference resumes
-when the relevant data is complete, without resetting its valid observation
-baseline. A failure in an unrelated home's independent session does not block
+Weekly amounts expose `scanStatus`, `billingAssumptions`, `inferencePauseReason`
+and a structured `valuation`. Inference pauses for incomplete relevant scans;
+intervals containing any unknown API price or assumed API billing condition are
+excluded. Credit-only uncertainty caps sample confidence at medium. Recovery
+preserves the valid observation baseline, but a value still needs enough clean
+intervals. A failure in an unrelated home's independent session does not block
 the active account's weekly estimate.
 
 ## Cost Estimates
@@ -177,16 +179,61 @@ not covered. Official balances come directly from `account/rateLimits/read` and
 are never inferred from local token counts or subtracted by this app. Personal
 plans generally use included allowances before deducting purchased credits.
 
-These values are API-price equivalents, not ChatGPT subscription charges or an
-actual bill. The weekly quota value is inferred as
-`local cost since observation began * 100 / observed used-percentage change`;
-activity on other devices or in cloud tasks can reduce its accuracy. Daily totals
-span local homes; weekly observations only use the active `CODEX_HOME` (or
-`~/.codex` by default) that supplies the official quota, so separate CLI and
-desktop logins do not mix their costs. The source is included in `weeklyQuotaCost.source`. This
-incremental approach avoids rescanning a full week of large session logs at
-startup. Unknown model prices are exposed as partial coverage instead of
-silently being treated as free.
+### Weekly quota valuation
+
+Weekly values are **this Mac's API-price equivalents**, not subscription charges,
+official credit deductions or an actual bill. Daily totals span local homes;
+weekly observations use only the active `CODEX_HOME` (or `~/.codex` by default)
+that supplies the official quota. `weeklyQuotaCost.source` identifies that scope.
+Other devices and cloud tasks can consume the same quota without contributing
+to the local cost numerator; even high sample confidence cannot establish their
+cost or the full account's monetary allowance.
+
+The estimator pairs official read timestamps with minute buckets of local usage
+over the latest 24 hours. Reusing a cached quota read does not create a new sample
+or add later costs to an earlier interval. Each nonoverlapping interval needs
+at least 30 minutes and five percentage points of consumption; at least three
+valid intervals are required before showing a value. This means at least
+90 minutes and 15 percentage points of usable evidence, after initial alignment.
+
+For each interval, the estimator applies `local API cost * 100 / percentage change`.
+It uses a two-minute delay allowance and whole-minute cost bounds, plus ±1
+percentage point for the difference between integer quota readings. The delay
+allowance is a local modeling assumption, not a guaranteed server update delay.
+The displayed range spans accepted interval bounds and rounds outward to avoid
+false cent precision. It describes observed variation and modeled timing error;
+it is **not a statistical confidence interval**.
+
+Values begin at medium sample confidence. High requires at least six intervals,
+a six-hour span, 30 percentage points, median relative deviation no greater than
+10%, a range width no greater than 40% of the median estimate, and no excluded
+intervals or uncertain credit conditions. An interval more than threefold from
+the median is excluded; a newly outlying interval pauses the estimate. Remaining
+deviation above 25% or range width above 85% also pauses it.
+
+Unknown API prices block the affected interval even when their token share is
+tiny; token coverage alone cannot bound the missing monetary cost. Missing
+context that affects API pricing also blocks that interval. Conditions affecting
+only credit prices are reported separately and cap confidence at medium.
+Incomplete scans, unmatched quota consumption and exhausted quota produce a
+pause reason. Samples older than five minutes cannot support a current value;
+gaps longer than ten minutes or percentage regression restart the sample series.
+Account or quota-window changes start separate evidence. Subsequent clean,
+stable intervals can restore the estimate.
+
+`weeklyQuotaCost.valuation` exposes `status` (`collecting`, `ready`, `paused` or
+`unstable`), `confidence`, the estimate and bounds, sample/interval/rejection
+counts, observation span, effective percentage change and sample timestamps.
+`estimatedQuotaUSD` remains available for compatibility and is null until ready.
+The menu, CLI and MCP use the same estimator and explanations.
+
+The v4 cache gains optional minute totals and quota samples, without retaining
+every usage event. Minute totals keep 24 hours plus the alignment boundary;
+quota samples keep at most 24 hours and 1,500 entries. Upgrading preserves the
+existing account, weekly observation start and baseline percentage; timed
+evidence begins at upgrade because earlier samples cannot be reconstructed from
+aggregate costs. Restarting, rebuilding or repricing preserves those samples
+and recalculates affected local costs. No full-week startup replay is required.
 
 ## Build and Run
 

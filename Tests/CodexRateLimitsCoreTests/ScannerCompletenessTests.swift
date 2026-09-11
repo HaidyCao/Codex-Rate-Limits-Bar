@@ -211,28 +211,45 @@ final class ScannerCompletenessTests: XCTestCase {
             RateLimitWindow(usedPercent: used, remainingPercent: 100 - used, windowDurationMins: 10080,
                             resetsAt: 1_789_632_000, resetsAtIso: nil)
         }
-        let before = try scanner.snapshot(weeklyWindow: window(10))
-        now.addTimeInterval(120)
+        let before = try scanner.snapshot(weeklyWindow: window(10), quotaSampleAt: now)
+        now.addTimeInterval(300)
+        _ = try scanner.snapshot(weeklyWindow: window(10), quotaSampleAt: now)
+        now.addTimeInterval(300)
         var lines = events(total: 100_000)
-        lines[2]["timestamp"] = "2026-09-11T08:01:00Z"
+        lines[2]["timestamp"] = "2026-09-11T08:09:00Z"
         try write(lines)
-        XCTAssertNotNil(try scanner.snapshot(weeklyWindow: window(15)).weeklyQuotaCost?.estimatedQuotaUSD)
+        XCTAssertEqual(try scanner.snapshot(weeklyWindow: window(15), quotaSampleAt: now).weeklyQuotaCost?.valuation?.status, .collecting)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
-        let failed = try scanner.snapshot(weeklyWindow: window(15))
+        let failed = try scanner.snapshot(weeklyWindow: window(15), quotaSampleAt: now)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         XCTAssertNil(failed.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(failed.weeklyQuotaCost?.inferencePauseReason, "incompleteScan")
-        let recovered = try scanner.snapshot(weeklyWindow: window(15))
-        XCTAssertNotNil(recovered.weeklyQuotaCost?.estimatedQuotaUSD)
+        let recovered = try scanner.snapshot(weeklyWindow: window(15), quotaSampleAt: now)
+        XCTAssertEqual(recovered.weeklyQuotaCost?.valuation?.status, .collecting)
         XCTAssertEqual(recovered.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
         var missing = events(total: 100_000, complete: false)
-        missing[2]["timestamp"] = "2026-09-11T08:01:00Z"
+        missing[2]["timestamp"] = "2026-09-11T08:09:00Z"
         try write(missing)
-        let assumed = try scanner.snapshot(weeklyWindow: window(15))
+        let assumed = try scanner.snapshot(weeklyWindow: window(15), quotaSampleAt: now)
         XCTAssertEqual(assumed.weeklyQuotaCost?.inferencePauseReason, "billingAssumptions")
         XCTAssertEqual(assumed.weeklyQuotaCost?.coveragePercent, 100)
         XCTAssertNil(assumed.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(assumed.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
+    }
+
+    func testTwoPointChangeOverTwoMinutesDoesNotProduceAWeeklyValue() throws {
+        try write(Array(events().prefix(2)))
+        let scanner = scanner()
+        let initial = RateLimitWindow(usedPercent: 10, remainingPercent: 90, windowDurationMins: 10080,
+                                      resetsAt: 1_789_632_000, resetsAtIso: nil)
+        _ = try scanner.snapshot(weeklyWindow: initial)
+        now.addTimeInterval(120)
+        var lines = events(total: 100_000)
+        lines[2]["timestamp"] = "2026-09-11T08:01:00Z"
+        try write(lines)
+        let changed = RateLimitWindow(usedPercent: 12, remainingPercent: 88, windowDurationMins: 10080,
+                                      resetsAt: 1_789_632_000, resetsAtIso: nil)
+        XCTAssertNil(try scanner.snapshot(weeklyWindow: changed).weeklyQuotaCost?.estimatedQuotaUSD)
     }
 
     func testOtherHomesReadFailureDoesNotBlockAnIndependentWeeklyEstimate() throws {
@@ -254,10 +271,10 @@ final class ScannerCompletenessTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otherFile.path) }
         window = RateLimitWindow(usedPercent: 15, remainingPercent: 85, windowDurationMins: 10080,
                                  resetsAt: 1_789_632_000, resetsAtIso: nil)
-        let result = try scanner.snapshot(weeklyWindow: window)
+        let result = try scanner.snapshot(weeklyWindow: window, quotaSampleAt: now)
         XCTAssertEqual(result.diagnostics?.status, .partial)
         XCTAssertEqual(result.weeklyQuotaCost?.scanStatus, .complete)
-        XCTAssertNotNil(result.weeklyQuotaCost?.estimatedQuotaUSD)
+        XCTAssertEqual(result.weeklyQuotaCost?.valuation?.status, .collecting)
     }
 
     func testLargeMetadataCopiesAndEscapedJSONKeysAreRecognizedOnTheFirstScan() throws {
