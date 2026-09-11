@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import CodexRateLimitsCore
 import Darwin
 import Foundation
@@ -140,6 +141,17 @@ private struct RateLimitUIUpdate: Sendable {
     let accountContext: CodexAccountContext?
     let resetCredits: ResetCreditsSnapshot?
     let sampledAt: Date?
+    let outcomes: [RefreshSource: RefreshOutcome]
+
+    init(_ payload: RateLimitPayload) {
+        weekly = payload.selectedRateLimit?.weeklyWindow
+        error = payload.rateLimitError
+        credits = payload.selectedRateLimit?.credits
+        accountContext = payload.accountContext
+        resetCredits = payload.resetCredits
+        sampledAt = RefreshOutcome.date(payload.fetchedAtIso)
+        outcomes = RefreshOutcome.official(payload)
+    }
 }
 
 final class RateLimitsMenuView: NSView {
@@ -164,9 +176,10 @@ final class RateLimitsMenuView: NSView {
         weekly: RateLimitWindow?,
         forecast: QuotaForecast?,
         weeklyQuotaCost: WeeklyQuotaCostEstimate?,
-        credits: CreditsSnapshot?
+        credits: CreditsSnapshot?,
+        freshness: RefreshSnapshot
     ) {
-        cardView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits)
+        cardView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits, freshness: freshness)
     }
 }
 
@@ -175,6 +188,7 @@ class RateLimitsDrawingView: NSView {
     private var forecast: QuotaForecast?
     private var weeklyQuotaCost: WeeklyQuotaCostEstimate?
     private var credits: CreditsSnapshot?
+    private var freshness: RefreshSnapshot?
 
     override var isFlipped: Bool {
         true
@@ -184,13 +198,15 @@ class RateLimitsDrawingView: NSView {
         weekly: RateLimitWindow?,
         forecast: QuotaForecast?,
         weeklyQuotaCost: WeeklyQuotaCostEstimate?,
-        credits: CreditsSnapshot?
+        credits: CreditsSnapshot?,
+        freshness: RefreshSnapshot
     ) {
         self.weekly = weekly
         self.forecast = forecast
         self.weeklyQuotaCost = weeklyQuotaCost
         self.credits = credits
-        toolTip = AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
+        self.freshness = freshness
+        toolTip = AppText.refreshDetails(freshness) + "\n" + AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
             + "\n" + AppText.weeklyValuationDetails(weeklyQuotaCost?.valuation)
             + (AppText.unpricedUsageDetails(weeklyQuotaCost?.unpricedUsage).map { "\n" + $0 } ?? "")
             + ((weeklyQuotaCost?.unpricedModels?.isEmpty == false) ? "\n" + (weeklyQuotaCost?.unpricedModels?.joined(separator: ", ") ?? "") : "")
@@ -208,14 +224,21 @@ class RateLimitsDrawingView: NSView {
 
         drawQuotaRow(label: AppText.weeklyLimit, window: weekly, y: 36)
         drawForecast(forecast, y: 72)
-        drawWeeklyQuotaCost(weeklyQuotaCost, y: 94)
+        if freshness?.quota.isStale == true || freshness?.localUsage.isStale == true {
+            drawText(AppText.staleWeeklyValue, in: NSRect(x: 32, y: 93, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        } else {
+            drawWeeklyQuotaCost(weeklyQuotaCost, y: 94)
+        }
         drawText(AppText.weeklyValuationSummary(weeklyQuotaCost?.valuation), in: NSRect(x: 32, y: 115, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        drawText(AppText.officialCreditsBalance(credits), in: NSRect(x: 32, y: 137, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: labelColor)
+        drawText(AppText.officialCreditsBalance(credits), in: NSRect(x: 32, y: 137, width: bounds.width - 44, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: freshness?.credits.isStale == true || freshness?.credits.error != nil ? secondaryColor : labelColor)
+        drawText(AppText.freshnessSummary(freshness?.quota, source: .quota), in: NSRect(x: 12, y: 158, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(AppText.freshnessSummary(freshness?.credits, source: .credits), in: NSRect(x: 12, y: 178, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawQuotaRow(label: String, window: RateLimitWindow?, y: CGFloat) {
         let remaining = window?.remainingPercent
-        let colors = gradientColors(for: remaining)
+        let colors = freshness?.quota.isStale == true || freshness?.quota.error != nil
+            ? (start: NSColor.tertiaryLabelColor, end: NSColor.tertiaryLabelColor) : gradientColors(for: remaining)
         let value = remaining.map { "\($0)%" } ?? "--"
         let reset = formatResetDisplay(window)
         let rightLabel = reset.isEmpty ? value : "\(value) · \(reset)"
@@ -398,9 +421,10 @@ class RateLimitsCardView: NSVisualEffectView {
         weekly: RateLimitWindow?,
         forecast: QuotaForecast?,
         weeklyQuotaCost: WeeklyQuotaCostEstimate?,
-        credits: CreditsSnapshot?
+        credits: CreditsSnapshot?,
+        freshness: RefreshSnapshot
     ) {
-        drawingView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits)
+        drawingView.update(weekly: weekly, forecast: forecast, weeklyQuotaCost: weeklyQuotaCost, credits: credits, freshness: freshness)
     }
 }
 
@@ -422,31 +446,34 @@ final class ResetCreditsMenuView: NSView {
         addSubview(cardView)
     }
 
-    func update(_ snapshot: ResetCreditsSnapshot?) {
+    func update(_ snapshot: ResetCreditsSnapshot?, freshness: DataFreshness) {
         let h = Self.height(for: snapshot)
         setFrameSize(NSSize(width: frame.width, height: h))
         cardView.frame = NSRect(x: 16, y: 4, width: bounds.width - 32, height: h - 8)
-        cardView.update(snapshot)
+        cardView.update(snapshot, freshness: freshness)
     }
 
     static func height(for snapshot: ResetCreditsSnapshot?) -> CGFloat {
         let rows = min(snapshot?.display?.detailLabels?.count ?? 0, 4)
         if rows == 0 {
-            return 66
+            return 88
         }
-        return CGFloat(50 + rows * 18)
+        return CGFloat(72 + rows * 18)
     }
 }
 
 class ResetCreditsDrawingView: NSView {
+    private var freshness: DataFreshness?
     private var snapshot: ResetCreditsSnapshot?
 
     override var isFlipped: Bool {
         true
     }
 
-    func update(_ snapshot: ResetCreditsSnapshot?) {
+    func update(_ snapshot: ResetCreditsSnapshot?, freshness: DataFreshness) {
         self.snapshot = snapshot
+        self.freshness = freshness
+        toolTip = AppText.freshnessDetails(freshness, source: .resetCredits)
         needsDisplay = true
     }
 
@@ -462,8 +489,9 @@ class ResetCreditsDrawingView: NSView {
         drawText(AppText.resetCreditsTitle, in: NSRect(x: 32, y: 10, width: 88, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
         let summary = snapshot?.display?.summaryLabel ?? AppText.availableCount(nil)
-        drawText(summary, in: NSRect(x: 120, y: 10, width: bounds.width - 132, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: accent, alignment: .right)
+        drawText(summary, in: NSRect(x: 120, y: 10, width: bounds.width - 132, height: 17), font: .systemFont(ofSize: 12, weight: .bold), color: freshness?.isStale == true || freshness?.error != nil ? secondaryColor : accent, alignment: .right)
 
+        drawText(AppText.freshnessSummary(freshness, source: .resetCredits), in: NSRect(x: 12, y: bounds.height - 20, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
         let rows = Array((snapshot?.display?.detailLabels ?? []).prefix(4))
         if rows.isEmpty {
             let placeholder = snapshot?.availableCount == 0 ? AppText.noResetCredits : AppText.resetCreditsUnavailable
@@ -550,8 +578,8 @@ class ResetCreditsCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.08).cgColor
     }
 
-    func update(_ snapshot: ResetCreditsSnapshot?) {
-        drawingView.update(snapshot)
+    func update(_ snapshot: ResetCreditsSnapshot?, freshness: DataFreshness) {
+        drawingView.update(snapshot, freshness: freshness)
     }
 }
 
@@ -742,24 +770,26 @@ final class LocalUsageMenuView: NSView {
         addSubview(cardView)
     }
 
-    func update(_ snapshot: LocalUsageSnapshot) {
-        cardView.update(snapshot)
+    func update(_ snapshot: LocalUsageSnapshot?, freshness: DataFreshness) {
+        cardView.update(snapshot, freshness: freshness)
     }
 }
 
 class LocalUsageDrawingView: NSView {
+    private var freshness: DataFreshness?
     private var snapshot: LocalUsageSnapshot?
 
     override var isFlipped: Bool {
         true
     }
 
-    func update(_ snapshot: LocalUsageSnapshot) {
+    func update(_ snapshot: LocalUsageSnapshot?, freshness: DataFreshness) {
         self.snapshot = snapshot
-        toolTip = [AppText.todayEstimatedCredits(snapshot.todayCredits),
-                   AppText.pricingCoverage(cost: snapshot.todayCost, credits: snapshot.todayCredits),
-                   AppText.unpricedUsageDetails(snapshot.unpricedUsage), AppText.pricingDetails(snapshot.pricing),
-                   AppText.scanDetails(snapshot), AppText.creditsEstimateDetails]
+        self.freshness = freshness
+        toolTip = [AppText.todayEstimatedCredits(snapshot?.todayCredits),
+                   AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits),
+                   AppText.unpricedUsageDetails(snapshot?.unpricedUsage), AppText.pricingDetails(snapshot?.pricing),
+                   snapshot.map(AppText.scanDetails), AppText.creditsEstimateDetails, AppText.freshnessDetails(freshness, source: .localUsage)]
             .compactMap { $0 }.joined(separator: "\n")
         needsDisplay = true
     }
@@ -768,7 +798,7 @@ class LocalUsageDrawingView: NSView {
         super.draw(dirtyRect)
 
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let labelColor = NSColor.labelColor
+        let labelColor = freshness?.isStale == true || freshness?.error != nil ? NSColor.secondaryLabelColor : NSColor.labelColor
         let secondaryColor = NSColor.secondaryLabelColor
 
         let blue = NSColor.systemBlue
@@ -790,7 +820,7 @@ class LocalUsageDrawingView: NSView {
         drawSymbol("cpu.fill", in: NSRect(x: 12, y: 12, width: 14, height: 14), color: secondaryColor)
         drawText(AppText.localUsageTitle, in: NSRect(x: 32, y: 10, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
-        let unavailable = snapshot?.diagnostics?.status == .unavailable
+        let unavailable = snapshot == nil || snapshot?.diagnostics?.status == .unavailable
         let rawTotal = unavailable ? "--" : formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
@@ -813,13 +843,13 @@ class LocalUsageDrawingView: NSView {
         let rowTwoY: CGFloat = 144
 
         let rect1 = NSRect(x: padding, y: rowOneY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect1, title: AppText.newInput, value: TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect1, title: AppText.newInput, value: unavailable ? "--" : TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: subCardFill, stroke: subCardStroke)
 
         let rect2 = NSRect(x: padding + cardWidth + gap, y: rowOneY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect2, title: AppText.output, value: TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect2, title: AppText.output, value: unavailable ? "--" : TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: subCardFill, stroke: subCardStroke)
 
         let rect3 = NSRect(x: padding, y: rowTwoY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect3, title: AppText.hit, value: TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect3, title: AppText.hit, value: unavailable ? "--" : TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: subCardFill, stroke: subCardStroke)
 
         let rect4 = NSRect(x: padding + cardWidth + gap, y: rowTwoY, width: cardWidth, height: cardHeight)
         drawCacheHitCard(rect4, percent: cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
@@ -831,6 +861,7 @@ class LocalUsageDrawingView: NSView {
         drawText(AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? "", in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         drawText(AppText.pricingVersion(snapshot?.pricing), in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: snapshot?.pricing?.configurationError == nil ? secondaryColor : .systemOrange)
         drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 342, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(AppText.freshnessSummary(freshness, source: .localUsage), in: NSRect(x: 12, y: 364, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {
@@ -971,13 +1002,13 @@ class LocalUsageCardView: NSVisualEffectView {
             : NSColor(white: 0.0, alpha: 0.08).cgColor
     }
 
-    func update(_ snapshot: LocalUsageSnapshot) {
-        drawingView.update(snapshot)
+    func update(_ snapshot: LocalUsageSnapshot?, freshness: DataFreshness) {
+        drawingView.update(snapshot, freshness: freshness)
     }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let tokenStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let notificationCenter = UNUserNotificationCenter.current()
@@ -995,7 +1026,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let menu = NSMenu()
     private let accountItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let rateLimitsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 178))
+    private let rateLimitsView = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 220))
     private let resetCreditsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let resetCreditsView = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 86))
     private let localUsageHeaderItem = NSMenuItem(title: "Local Today", action: nil, keyEquivalent: "")
@@ -1003,16 +1034,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let localCacheHitItem = NSMenuItem(title: "命中 --", action: nil, keyEquivalent: "")
     private let localUsageDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 374))
+    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 398))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
-    private var rateLimitsTimer: Timer?
-    private var localUsageTimer: Timer?
-    private var isRefreshingRateLimits = false
-    private var isRefreshingLocalUsage = false
-    private var pendingLocalUsageRefresh = false
-    private var pendingLocalUsageRebuild = false
+    private var refreshCoordinator = RefreshCoordinator(accountIdentity: CodexBackend.currentRefreshIdentity())
+    private var refreshOperations: [Int: RefreshCancellation] = [:]
+    private var heartbeatTimer: Timer?
+    private let networkMonitor = NWPathMonitor()
+    private var suspended = false
+    private var currentResetCredits: ResetCreditsSnapshot?
+    private var currentAutoLaunchError: String?
     private var currentWeeklyWindow: RateLimitWindow?
     private var currentQuotaSampleAt: Date?
     private var currentAccountContext: CodexAccountContext?
@@ -1021,9 +1053,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var currentWeeklyRemaining: Int?
     private var currentQuotaForecast: QuotaForecast?
     private var currentResetAvailableCount: Int?
-    private var currentRateLimitError: String?
-    private var currentResetCreditsError: String?
-    private var currentLocalUsageError: String?
     private var currentQuotaMonitorError: String?
     private var currentNotificationError: String?
     private var quotaAlertsAuthorized = false
@@ -1039,8 +1068,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         configureQuotaAlerts()
         refreshRateLimits()
         refreshLocalUsage()
-        localUsageTimer = Timer.scheduledTimer(timeInterval: 30, target: self, selector: #selector(timerRefreshLocalUsage), userInfo: nil, repeats: true)
-        rateLimitsTimer = Timer.scheduledTimer(timeInterval: 60, target: self, selector: #selector(timerRefreshRateLimits), userInfo: nil, repeats: true)
+        let timer = Timer(timeInterval: 5, target: self, selector: #selector(refreshHeartbeat), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatTimer = timer
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(self, selector: #selector(willSleep), name: NSWorkspace.willSleepNotification, object: nil)
+        workspace.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            let available = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let restored = self.refreshCoordinator.setNetworkAvailable(available)
+                if restored { self.refreshRateLimits(reason: .recovery) }
+                self.renderRefreshState()
+            }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "local.codex.network"))
     }
 
     private func setupStatusItem() {
@@ -1061,6 +1104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func setupMenu() {
+        menu.delegate = self
         rateLimitsItem.isEnabled = false
         resetCreditsItem.isEnabled = false
         localUsageHeaderItem.isEnabled = false
@@ -1125,15 +1169,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func rebuildLocalUsage() {
-        refreshLocalUsage(rebuild: true)
+        refreshLocalUsage(reason: .rebuild)
     }
 
-    @objc private func timerRefreshRateLimits() {
-        refreshRateLimits()
+    @objc private func refreshHeartbeat() {
+        synchronizeAccount()
+        for ticket in refreshCoordinator.expire(now: Date()) { refreshOperations[ticket.id]?.cancel() }
+        refreshRateLimits(reason: .timer)
+        refreshLocalUsage(reason: .timer)
+        renderRefreshState()
     }
 
-    @objc private func timerRefreshLocalUsage() {
-        refreshLocalUsage()
+    func menuWillOpen(_ menu: NSMenu) { refreshHeartbeat() }
+
+    @objc private func willSleep() {
+        suspended = true
+        for lane in RefreshLane.allCases {
+            if let ticket = refreshCoordinator.invalidate(lane, now: Date()) { refreshOperations[ticket.id]?.cancel() }
+        }
+        renderRefreshState()
+    }
+
+    @objc private func didWake() {
+        suspended = false
+        refreshRateLimits(reason: .recovery)
+        refreshLocalUsage(reason: .recovery)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        heartbeatTimer?.invalidate()
+        networkMonitor.cancel()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        for operation in refreshOperations.values { operation.cancel() }
     }
 
     @objc private func toggleAutoLaunch() {
@@ -1170,10 +1237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         do {
             try AutoLaunchManager.setEnabled(enabled)
             updateAutoLaunchMenu(enabled: enabled)
-            if errorItem.title == AppText.autoLaunchFailure {
-                errorItem.title = ""
-                errorItem.isHidden = true
-            }
+            currentAutoLaunchError = nil
+            updateCombinedError()
         } catch {
             updateAutoLaunchMenu(enabled: AutoLaunchManager.preferredEnabled)
             showAutoLaunchError(error)
@@ -1254,136 +1319,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func showAutoLaunchError(_ error: Error) {
-        errorItem.title = AppText.autoLaunchFailure
-        errorItem.toolTip = Self.errorToolTip(error)
-        errorItem.isHidden = false
+        currentAutoLaunchError = Self.errorToolTip(error)
+        updateCombinedError()
     }
 
-    private func refreshRateLimits() {
-        guard !isRefreshingRateLimits else { return }
-        isRefreshingRateLimits = true
+    private func synchronizeAccount() {
+        let identity = CodexBackend.currentRefreshIdentity()
+        guard identity != refreshCoordinator.accountIdentity else { return }
+        for ticket in refreshCoordinator.changeAccount(to: identity, now: Date()) { refreshOperations[ticket.id]?.cancel() }
+        currentAccountContext = nil
+        currentWeeklyWindow = nil
+        currentQuotaSampleAt = nil
+        currentCredits = nil
+        currentResetCredits = nil
+        currentResetAvailableCount = nil
+        currentWeeklyRemaining = nil
+        currentQuotaForecast = nil
+        currentLocalUsage = nil
+        currentQuotaMonitorError = nil
+        renderRefreshState()
+    }
 
+    private func refreshRateLimits(reason: RefreshReason = .manual) {
+        synchronizeAccount()
+        guard !suspended, let ticket = refreshCoordinator.request(.official, reason: reason, now: Date()) else { return }
+        let cancellation = RefreshCancellation(deadline: ticket.deadline)
+        refreshOperations[ticket.id] = cancellation
+        let monitor = quotaMonitor
+        let alertsEnabled = QuotaAlertPreferences.isEnabled && quotaAlertsAuthorized
+        renderRefreshState()
         rateLimitsQueue.async { [weak self] in
-            let result = Self.fetchRateLimits()
+            let result = Result { () throws -> (RateLimitUIUpdate, QuotaMonitorSnapshot?) in
+                try cancellation.check()
+                guard ticket.accountIdentity == CodexBackend.currentRefreshIdentity() else { throw RuntimeError("Account changed.") }
+                let update = RateLimitUIUpdate(try CodexBackend.readRateLimits(cancellation: cancellation))
+                try cancellation.check()
+                guard ticket.accountIdentity == CodexBackend.currentRefreshIdentity() else { throw RuntimeError("Account changed.") }
+                let history = update.weekly.map { monitor.update(window: $0, alertsEnabled: alertsEnabled, accountContext: update.accountContext) }
+                return (update, history)
+            }
             DispatchQueue.main.async {
-                self?.processFetchedRateLimits(result)
-            }
-        }
-    }
-
-    private func processFetchedRateLimits(_ result: Result<RateLimitPayload, Error>) {
-        switch result {
-        case .failure(let error):
-            isRefreshingRateLimits = false
-            applyRateLimitsError(error)
-        case .success(let payload):
-            let update = RateLimitUIUpdate(
-                weekly: payload.selectedRateLimit?.weeklyWindow,
-                error: payload.rateLimitError,
-                credits: payload.selectedRateLimit?.credits,
-                accountContext: payload.accountContext,
-                resetCredits: payload.resetCredits,
-                sampledAt: ISO8601DateFormatter().date(from: payload.fetchedAtIso)
-            )
-            guard let weekly = update.weekly else {
-                isRefreshingRateLimits = false
-                applyRateLimits(update, monitor: nil)
-                updateCombinedError()
-                return
-            }
-
-            let alertsEnabled = QuotaAlertPreferences.isEnabled && quotaAlertsAuthorized
-            let quotaMonitor = quotaMonitor
-            rateLimitsQueue.async { [weak self] in
-                let monitor = quotaMonitor.update(window: weekly, alertsEnabled: alertsEnabled, accountContext: update.accountContext)
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.isRefreshingRateLimits = false
-                    self.applyRateLimits(update, monitor: monitor)
-                    self.updateCombinedError()
+                guard let self else { return }
+                self.synchronizeAccount()
+                let outcomes: [RefreshSource: RefreshOutcome]
+                switch result {
+                case .success(let value): outcomes = value.0.outcomes
+                case .failure(let error): outcomes = Dictionary(uniqueKeysWithValues: RefreshLane.official.sources.map { ($0, RefreshOutcome(.failed, error: Self.normalizedErrorText(error))) })
                 }
+                let changedContext: Bool
+                if case .success(let value) = result {
+                    changedContext = self.currentAccountContext != nil && self.currentAccountContext != value.0.accountContext
+                } else { changedContext = false }
+                let accepted = self.refreshCoordinator.complete(ticket, outcomes: outcomes, now: Date(), resetHistory: changedContext)
+                self.refreshOperations.removeValue(forKey: ticket.id)
+                if accepted, case .success(let value) = result { self.applyRateLimits(value.0, monitor: value.1) }
+                self.renderRefreshState()
+                self.refreshRateLimits(reason: .timer)
             }
         }
     }
 
-    private func refreshLocalUsage(rebuild: Bool = false) {
-        pendingLocalUsageRebuild = pendingLocalUsageRebuild || rebuild
-        guard !isRefreshingLocalUsage else {
-            pendingLocalUsageRefresh = true
-            return
-        }
-        isRefreshingLocalUsage = true
-        pendingLocalUsageRefresh = false
+    private func refreshLocalUsage(reason: RefreshReason = .manual) {
+        synchronizeAccount()
+        guard !suspended, let ticket = refreshCoordinator.request(.local, reason: reason, now: Date()) else { return }
+        let cancellation = RefreshCancellation(deadline: ticket.deadline)
+        refreshOperations[ticket.id] = cancellation
         let weeklyWindow = currentWeeklyWindow
         let accountContext = currentAccountContext
         let quotaSampleAt = currentQuotaSampleAt
-        let shouldRebuild = pendingLocalUsageRebuild
-        pendingLocalUsageRebuild = false
-
+        renderRefreshState()
         localUsageQueue.async { [weak self] in
-            let result = Self.fetchLocalUsage(weeklyWindow: weeklyWindow, accountContext: accountContext,
-                                             rebuild: shouldRebuild, quotaSampleAt: quotaSampleAt)
-            DispatchQueue.main.async {
-                self?.completeLocalUsageRefresh(result)
+            let result = Result {
+                try cancellation.check()
+                guard ticket.accountIdentity == CodexBackend.currentRefreshIdentity() else { throw RuntimeError("Account changed.") }
+                return try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext,
+                    rebuild: ticket.rebuild, quotaSampleAt: quotaSampleAt, cancellation: cancellation)
             }
-        }
-    }
-
-    private func completeLocalUsageRefresh(_ result: Result<LocalUsageSnapshot, Error>) {
-        isRefreshingLocalUsage = false
-        switch result {
-        case .success(let localUsage):
-            currentLocalUsageError = localUsage.error
-            apply(localUsage)
-            updateCombinedError()
-        case .failure(let error):
-            applyLocalUsageError(error)
-        }
-        if pendingLocalUsageRefresh {
-            pendingLocalUsageRefresh = false
-            refreshLocalUsage()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.synchronizeAccount()
+                let outcome: RefreshOutcome
+                switch result {
+                case .success(let value): outcome = RefreshOutcome.local(value)
+                case .failure(let error): outcome = RefreshOutcome(.failed, error: Self.normalizedErrorText(error))
+                }
+                let accepted = self.refreshCoordinator.complete(ticket, outcomes: [.localUsage: outcome], now: Date())
+                self.refreshOperations.removeValue(forKey: ticket.id)
+                if accepted, outcome.phase != .failed, case .success(let value) = result { self.currentLocalUsage = value }
+                self.renderRefreshState()
+                self.refreshLocalUsage(reason: .timer)
+            }
         }
     }
 
     private func applyRateLimits(_ update: RateLimitUIUpdate, monitor: QuotaMonitorSnapshot?) {
-        let weekly = update.weekly
-        let previousAccountScope = currentAccountContext?.scopeKey
+        guard update.error == nil else { return }
+        let previousContext = currentAccountContext
+        let previousWindow = currentWeeklyWindow.flatMap(QuotaWindowID.init)?.rawValue
         let previousSampleAt = currentQuotaSampleAt
-        currentQuotaSampleAt = update.sampledAt
-        currentAccountContext = update.accountContext
-        accountItem.title = AppText.accountSource(update.accountContext)
-        accountItem.toolTip = AppText.accountSourceDetail(update.accountContext)
-        if let resetCredits = update.resetCredits { apply(resetCredits) }
-        let previousWindowID = currentWeeklyWindow.flatMap(QuotaWindowID.init)?.rawValue
-        let nextWindowID = weekly.flatMap(QuotaWindowID.init)?.rawValue
-        currentWeeklyWindow = weekly
-        currentCredits = update.credits
-        let weeklyRemaining = weekly?.remainingPercent
-        currentWeeklyRemaining = weeklyRemaining
-        currentRateLimitError = update.error
-        if weekly != nil, let monitor {
-            currentQuotaForecast = monitor.forecast
-            currentQuotaMonitorError = monitor.persistenceError
-            for alert in monitor.alerts {
-                deliverQuotaAlert(alert)
-            }
-        } else {
-            currentQuotaForecast = nil
-            currentQuotaMonitorError = nil
+        if previousContext != update.accountContext {
+            if let ticket = refreshCoordinator.invalidate(.local, now: Date(), clear: true) { refreshOperations[ticket.id]?.cancel() }
+            currentLocalUsage = nil
+            currentResetCredits = nil
+            currentResetAvailableCount = nil
         }
-        let status = weeklyRemaining.map { "W \($0)%" } ?? "W --"
-        let reset = weekly?.resetDate.map(AppText.statusBarResetDate)
-        updateStatusImage(status, reset: reset)
-
-        rateLimitsView.update(
-            weekly: weekly,
-            forecast: currentQuotaForecast,
-            weeklyQuotaCost: matchingWeeklyQuotaCost(for: weekly),
-            credits: currentCredits
-        )
-        updateRateLimitTooltip()
-        if previousWindowID != nextWindowID || previousAccountScope != currentAccountContext?.scopeKey || previousSampleAt != currentQuotaSampleAt {
-            refreshLocalUsage()
+        currentAccountContext = update.accountContext
+        currentQuotaSampleAt = update.sampledAt
+        currentWeeklyWindow = update.weekly
+        currentWeeklyRemaining = update.weekly?.remainingPercent
+        currentCredits = update.credits
+        if update.outcomes[.credits]?.phase == .unavailable { currentCredits = nil }
+        if update.outcomes[.resetCredits]?.phase != .failed {
+            currentResetCredits = update.resetCredits
+            currentResetAvailableCount = update.resetCredits?.availableCount
+        }
+        currentQuotaForecast = monitor?.forecast
+        currentQuotaMonitorError = monitor?.persistenceError
+        for alert in monitor?.alerts ?? [] { deliverQuotaAlert(alert) }
+        if previousContext != currentAccountContext || previousWindow != currentWeeklyWindow.flatMap(QuotaWindowID.init)?.rawValue || previousSampleAt != currentQuotaSampleAt {
+            refreshLocalUsage(reason: .quotaChanged)
         }
     }
 
@@ -1403,39 +1457,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    private func apply(_ resetCredits: ResetCreditsSnapshot) {
-        currentResetAvailableCount = resetCredits.availableCount
-        currentResetCreditsError = resetCredits.error
-        resetCreditsView.update(resetCredits)
-        updateRateLimitTooltip()
-    }
-
-    private func apply(_ localUsage: LocalUsageSnapshot) {
-        currentLocalUsage = localUsage
-        let consumption = localUsage.display?.consumptionLabel ?? AppText.consumption(TokenAmountFormatter.compact(localUsage.totalTokens))
-        let cacheHit = AppText.cacheHit(formatPercent(localUsage.cacheHitPercent))
+    private func renderRefreshState() {
+        let freshness = refreshCoordinator.snapshot(now: Date())
+        let quotaOld = freshness.quota.isStale || freshness.quota.error != nil
+        let localOld = freshness.localUsage.isStale || freshness.localUsage.error != nil
+        accountItem.title = AppText.accountSource(currentAccountContext)
+        accountItem.toolTip = AppText.accountSourceDetail(currentAccountContext)
+        updateStatusImage(currentWeeklyRemaining.map { "W \($0)%" } ?? "W --", reset: currentWeeklyWindow?.resetDate.map(AppText.statusBarResetDate))
+        statusItem.button?.alphaValue = quotaOld ? 0.55 : 1
+        tokenStatusItem.button?.alphaValue = localOld ? 0.55 : 1
+        let forecast = quotaOld ? nil : currentQuotaForecast
+        let cost = quotaOld || localOld ? nil : matchingWeeklyQuotaCost(for: currentWeeklyWindow)
+        rateLimitsView.update(weekly: currentWeeklyWindow, forecast: forecast, weeklyQuotaCost: cost, credits: currentCredits, freshness: freshness)
+        resetCreditsView.update(currentResetCredits, freshness: freshness.resetCredits)
+        localUsagePanelView.update(currentLocalUsage, freshness: freshness.localUsage)
+        statusItem.button?.toolTip = AppText.rateLimitTooltip(
+            weekly: currentWeeklyRemaining.map { "\($0)%" } ?? "--", resetCount: currentResetAvailableCount,
+            forecast: forecast, weeklyQuotaCost: cost) + "\n" + AppText.officialCreditsBalance(currentCredits)
+            + "\n" + AppText.refreshDetails(freshness)
+        let consumption = currentLocalUsage?.display?.consumptionLabel ?? AppText.consumption(nil)
+        let cacheHit = AppText.cacheHit(formatPercent(currentLocalUsage?.cacheHitPercent))
         tokenStatusItem.button?.image = makeStatusImage(top: consumption, bottom: cacheHit)
-        tokenStatusItem.button?.toolTip = AppText.localUsageTooltip(
-            tokens: TokenAmountFormatter.compact(localUsage.totalTokens),
-            cacheHit: formatPercent(localUsage.cacheHitPercent),
-            estimatedCost: localUsage.display?.estimatedCostLabel
-        ) + "\n" + [localUsage.display?.estimatedCreditsLabel, localUsage.display?.pricingCoverageLabel,
-                     AppText.unpricedUsageDetails(localUsage.unpricedUsage), AppText.pricingDetails(localUsage.pricing),
-                     AppText.scanDetails(localUsage)]
-            .compactMap { $0 }.joined(separator: "\n")
-
-        localConsumptionItem.title = consumption
-        localCacheHitItem.title = cacheHit
-        localUsageDetailItem.title = AppText.localUsageDetail(events: localUsage.eventCount, filesWithEvents: localUsage.filesWithEvents, filesScanned: localUsage.filesScanned)
-        localUsageDetailItem.isHidden = true
-        localUsagePanelView.update(localUsage)
-        rateLimitsView.update(
-            weekly: currentWeeklyWindow,
-            forecast: currentQuotaForecast,
-            weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow),
-            credits: currentCredits
-        )
-        updateRateLimitTooltip()
+        tokenStatusItem.button?.toolTip = [currentLocalUsage?.display?.estimatedCostLabel,
+            currentLocalUsage?.display?.estimatedCreditsLabel, currentLocalUsage?.display?.pricingCoverageLabel,
+            AppText.unpricedUsageDetails(currentLocalUsage?.unpricedUsage), AppText.pricingDetails(currentLocalUsage?.pricing),
+            currentLocalUsage.map(AppText.scanDetails), AppText.refreshDetails(freshness)].compactMap { $0 }.joined(separator: "\n")
+        updateCombinedError()
     }
 
     private func matchingWeeklyQuotaCost(for window: RateLimitWindow?) -> WeeklyQuotaCostEstimate? {
@@ -1449,43 +1496,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return estimate.windowEndIso == ISO8601DateFormatter().string(from: resetDate) ? estimate : nil
     }
 
-    private func applyRateLimitsError(_ error: Error) {
-        currentRateLimitError = Self.normalizedErrorText(error)
-        currentCredits = nil
-        rateLimitsView.update(weekly: currentWeeklyWindow, forecast: currentQuotaForecast,
-                              weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow), credits: nil)
-        statusItem.button?.toolTip = AppText.rateLimitRefreshFailedTooltip
-        updateCombinedError()
-        Self.appendLog("rate limit refresh failed: \(Self.normalizedErrorText(error))")
-    }
-
-    private func applyLocalUsageError(_ error: Error) {
-        currentLocalUsageError = Self.normalizedErrorText(error)
-        tokenStatusItem.button?.toolTip = AppText.localUsageRefreshFailedTooltip
-        updateCombinedError()
-        Self.appendLog("local usage refresh failed: \(Self.normalizedErrorText(error))")
-    }
-
-    private func updateRateLimitTooltip() {
-        statusItem.button?.toolTip = AppText.rateLimitTooltip(
-            weekly: currentWeeklyRemaining.map { "\($0)%" } ?? "--",
-            resetCount: currentResetAvailableCount,
-            forecast: currentQuotaForecast,
-            weeklyQuotaCost: matchingWeeklyQuotaCost(for: currentWeeklyWindow)
-        ) + "\n" + AppText.officialCreditsBalance(currentCredits)
-    }
-
     private func updateCombinedError() {
-        var details: [String] = []
-        if let rateLimitError = currentRateLimitError, !rateLimitError.isEmpty {
-            details.append("\(AppText.rateLimitErrorLabel): \(rateLimitError)")
+        let freshness = refreshCoordinator.snapshot(now: Date())
+        var details = RefreshSource.allCases.compactMap { source in
+            freshness[source].error.map { "\(AppText.refreshSourceName(source)): \($0)" }
         }
-        if let resetCreditsError = currentResetCreditsError, !resetCreditsError.isEmpty {
-            details.append("\(AppText.resetCreditsTitle): \(resetCreditsError)")
-        }
-        if let localUsageError = currentLocalUsageError, !localUsageError.isEmpty {
-            details.append("\(AppText.localUsageErrorLabel): \(localUsageError)")
-        }
+        if let error = currentAutoLaunchError { details.append("\(AppText.autoLaunchFailure): \(error)") }
         if let quotaMonitorError = currentQuotaMonitorError, !quotaMonitorError.isEmpty {
             details.append("\(AppText.quotaForecastErrorLabel): \(quotaMonitorError)")
         }
@@ -1532,17 +1548,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // A nil tint lets AppKit choose a contrasting foreground for the current menu bar appearance.
         button.contentTintColor = nil
         button.image = makeStatusImage(top: text, bottom: reset, centerBottom: reset != nil, fontSize: 10)
-    }
-
-    nonisolated private static func fetchRateLimits() -> Result<RateLimitPayload, Error> {
-        Result { try CodexBackend.readRateLimits() }
-    }
-
-    nonisolated private static func fetchLocalUsage(
-        weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?, rebuild: Bool, quotaSampleAt: Date?
-    ) -> Result<LocalUsageSnapshot, Error> {
-        Result { try CodexBackend.readLocalTokenUsage(weeklyWindow: weeklyWindow, accountContext: accountContext,
-                                                     rebuild: rebuild, quotaSampleAt: quotaSampleAt) }
     }
 
     nonisolated private static func appendLog(_ message: String) {

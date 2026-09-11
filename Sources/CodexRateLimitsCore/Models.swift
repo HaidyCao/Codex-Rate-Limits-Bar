@@ -70,6 +70,7 @@ public struct RateLimitPayload: Codable {
     public let localUsageError: String?
     public let usage: JSONValue?
     public var accountContext: CodexAccountContext? = nil
+    public var refresh: RefreshSnapshot? = nil
 
     public var selectedRateLimit: RateLimitSnapshot? {
         rateLimitsByLimitId?["codex"] ?? rateLimits
@@ -104,6 +105,7 @@ public struct ResetCreditsSnapshot: Codable, Sendable {
     public let display: ResetCreditsDisplay?
     public var detailsAvailable: Bool? = nil
     public var accountContext: CodexAccountContext? = nil
+    public var freshness: DataFreshness? = nil
 }
 
 public struct LocalUsageDisplay: Codable, Sendable {
@@ -235,6 +237,7 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public var billingAssumptions: UsageBillingAssumptions? = nil
     public var pricing: UsagePricingMetadata? = nil
     public var unpricedUsage: [UnpricedUsage]? = nil
+    public var freshness: DataFreshness? = nil
 }
 
 public struct RuntimeError: Error, LocalizedError {

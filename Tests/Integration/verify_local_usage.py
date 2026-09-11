@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 
 
@@ -22,17 +23,29 @@ def main():
         }}))
         fake = root / "fake-codex"
         fake.write_text("""#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, signal, time
+if os.environ.get('FIXTURE_MODE') == 'hang':
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    with open(os.environ['FIXTURE_PID_FILE'], 'w') as handle:
+        handle.write(str(os.getpid()))
+    while True:
+        time.sleep(1)
 for line in sys.stdin:
     request = json.loads(line)
     method = request['method']
     if method == 'account/read':
         result = {'account': {'type': 'chatgpt', 'email': 'fixture@example.invalid', 'planType': 'pro'}}
     elif method == 'account/rateLimits/read':
+        if os.environ.get('FIXTURE_MODE') == 'failure':
+            print(json.dumps({'id': request['id'], 'error': {'code': -1, 'message': 'fixture offline'}}), flush=True)
+            continue
         result = {'rateLimits': {'limitId': 'codex', 'secondary': {'usedPercent': 30,
             'windowDurationMins': 10080, 'resetsAt': int(os.environ['FIXTURE_RESET_AT'])},
             'credits': {'hasCredits': True, 'unlimited': False, 'balance': '12.5'}},
             'rateLimitResetCredits': {'availableCount': 3, 'credits': None}}
+        if os.environ.get('FIXTURE_MODE') == 'missing':
+            del result['rateLimits']['credits']
+            result['rateLimitResetCredits'] = {}
     else:
         result = {}
     print(json.dumps({'id': request['id'], 'result': result}), flush=True)
@@ -85,9 +98,19 @@ for line in sys.stdin:
             combined = mcp("get_codex_status")
             for value in [direct, shared, status["localUsage"], combined["localUsage"]]:
                 assert value["diagnostics"]["status"] == expected, value["diagnostics"]
+                phase = "failed" if expected == "unavailable" else "partial" if expected == "partial" else "success"
+                assert value["freshness"]["status"] == phase, value["freshness"]
+                assert bool(value["freshness"].get("lastSuccessAtIso")) == (phase == "success")
+                assert bool(value["freshness"].get("dataAtIso")) == (phase != "failed")
                 for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits", "pricing", "unpricedUsage"]:
                     assert value[key] == direct[key], key
                 assert value["display"]["scanStatusLabel"] == direct["display"]["scanStatusLabel"]
+            for value in [status, combined]:
+                assert value["refresh"]["quota"]["status"] == "success"
+                assert value["refresh"]["credits"]["status"] == "success"
+                assert value["refresh"]["resetCredits"]["status"] == "partial"
+                assert value["resetCredits"]["freshness"]["status"] == "partial"
+                assert value["refresh"]["localUsage"]["status"] == direct["freshness"]["status"]
             assert status.get("localUsageError") == direct.get("error")
             assert status["accountContext"] == status["localUsage"]["accountContext"]
             assert status["resetCredits"]["availableCount"] == 3
@@ -156,7 +179,43 @@ for line in sys.stdin:
         bad.write_text("{broken json}\n")
         unavailable = check_shared_status("unavailable")
         assert "--" in unavailable["display"]["consumptionLabel"]
-    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing validation, custom aliases and unknown usage details.")
+        bad.unlink()
+        write_usage()
+        env["FIXTURE_MODE"] = "failure"
+        for value in [json.loads(run("status")), mcp("get_codex_status")]:
+            assert value["refresh"]["localUsage"]["status"] == "success"
+            for source in ["quota", "credits", "resetCredits"]:
+                freshness = value["refresh"][source]
+                assert freshness["status"] == "failed", freshness
+                assert not freshness.get("lastSuccessAtIso") and not freshness.get("dataAtIso")
+                assert freshness.get("error")
+        env["FIXTURE_MODE"] = "missing"
+        for value in [json.loads(run("status")), mcp("get_codex_status")]:
+            assert value["refresh"]["quota"]["status"] == "success"
+            for source in ["credits", "resetCredits"]:
+                assert value["refresh"][source]["status"] == "unavailable"
+                assert not value["refresh"][source].get("lastSuccessAtIso")
+            assert value["resetCredits"].get("availableCount") is None
+        env["FIXTURE_MODE"] = "hang"
+        env["FIXTURE_PID_FILE"] = str(root / "child.pid")
+        started = time.monotonic()
+        timeout = json.loads(run("status"))
+        assert 10 < time.monotonic() - started < 20
+        assert timeout["refresh"]["quota"]["status"] == "failed"
+        assert "Timed out" in timeout["refresh"]["quota"]["error"]
+        assert timeout["refresh"]["localUsage"]["status"] == "success"
+        pid = int((root / "child.pid").read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("Timed-out app-server process was left running")
+        del env["FIXTURE_MODE"]
+        recovered = json.loads(run("status"))
+        assert recovered["refresh"]["quota"]["status"] == "success"
+        assert not recovered["refresh"]["quota"].get("error")
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup and recovery.")
 
 
 if __name__ == "__main__":

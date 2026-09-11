@@ -220,8 +220,8 @@ private final class AppServerCallState: @unchecked Sendable {
     private var didSignal = false
 
     let semaphore = DispatchSemaphore(value: 0)
-    var results: [String: Any] = [:]
-    var error: Error?
+    private var results: [String: Any] = [:]
+    private var error: Error?
 
     init(labelsById: [Int: String]) {
         self.labelsById = labelsById
@@ -285,6 +285,12 @@ private final class AppServerCallState: @unchecked Sendable {
         return stderrLines.suffix(50).joined(separator: "\n")
     }
 
+    func completion() -> (results: [String: Any], error: Error?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (results, error)
+    }
+
     private func signalIfNeeded() {
         if !didSignal {
             didSignal = true
@@ -335,8 +341,10 @@ public enum CodexBackend {
     private static let resetCreditsURL = URL(string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")!
     private static let localUsageScanner = LocalUsageScanner()
 
-    public static func readRateLimits() throws -> RateLimitPayload {
-        try readAccountPayload(includeUsage: false)
+    public static func currentRefreshIdentity() -> String { CodexAccountSource().refreshIdentity }
+
+    public static func readRateLimits(cancellation: RefreshCancellation? = nil) throws -> RateLimitPayload {
+        try RefreshWork.$cancellation.withValue(cancellation) { try readAccountPayload(includeUsage: false) }
     }
 
     public static func readTokenUsage() throws -> AccountUsageSnapshot {
@@ -354,6 +362,8 @@ public enum CodexBackend {
         call: ([String], String) throws -> [String: Any] = { try callCodexAppServer(methods: $0, codexHome: $1) },
         fetchReset: (URLRequest) throws -> Data = fetchData
     ) throws -> RateLimitPayload {
+        let attemptedAt = Date()
+        try RefreshWork.check()
         let before = sourceProvider()
         let methods = ["account/read", "account/rateLimits/read"] + (includeUsage ? ["account/usage/read"] : [])
         let results = try call(methods, before.codexHome.path)
@@ -366,20 +376,24 @@ public enum CodexBackend {
         let normalized = normalizeRateLimitResponse(response)
         let context = after.context(account: account, limitID: normalized.selectedRateLimit?.limitId ?? "codex")
         let resetCredits = resolveResetCredits(response: response, source: after, context: context, fetch: fetchReset)
+        try RefreshWork.check()
         guard after.matches(sourceProvider()) else { throw RuntimeError("Codex account changed while refreshing; retry the request.") }
-        return RateLimitPayload(
+        var payload = RateLimitPayload(
             fetchedAtIso: normalized.fetchedAtIso, rateLimits: normalized.rateLimits,
             rateLimitsByLimitId: normalized.rateLimitsByLimitId, display: normalized.display,
             resetCredits: resetCredits, localUsage: nil, rateLimitError: nil, localUsageError: nil,
             usage: includeUsage ? JSONValue.from(results["account/usage/read"]) : nil,
             accountContext: context
         )
+        payload.refresh = RefreshCoordinator.oneShot(RefreshOutcome.official(payload), attemptedAt: attemptedAt, now: Date())
+        return payload
     }
 
     static func resolveResetCredits(
         response: [String: Any], source: CodexAccountSource, context: CodexAccountContext,
         fetch: (URLRequest) throws -> Data
     ) -> ResetCreditsSnapshot {
+        let attemptedAt = Date()
         var snapshot: ResetCreditsSnapshot
         if let official = dictionaryValue(response["rateLimitResetCredits"]) {
             snapshot = normalizeResetCreditsResponse(official)
@@ -405,6 +419,11 @@ public enum CodexBackend {
             }
         }
         snapshot.accountContext = context
+        let phase: RefreshPhase = snapshot.error != nil ? .failed : snapshot.availableCount == nil ? .unavailable
+            : snapshot.detailsAvailable == false ? .partial : .success
+        snapshot.freshness = RefreshCoordinator.oneShot([.resetCredits: RefreshOutcome(phase,
+            at: snapshot.error == nil && snapshot.availableCount != nil ? parseIsoDate(snapshot.fetchedAtIso) : nil,
+            error: snapshot.error ?? (snapshot.availableCount == nil ? "Reset-credit count was not returned." : nil))], attemptedAt: attemptedAt, now: Date()).resetCredits
         return snapshot
     }
 
@@ -420,6 +439,7 @@ public enum CodexBackend {
     }
 
     public static func readStatus() -> RateLimitPayload {
+        let attemptedAt = Date()
         let ratePayload: RateLimitPayload
         do {
             ratePayload = try readRateLimits()
@@ -428,6 +448,7 @@ public enum CodexBackend {
         }
 
         let resetCredits = ratePayload.resetCredits ?? emptyResetCreditsSnapshot(RuntimeError("reset credits unavailable"))
+        let localAttemptedAt = Date()
         let localUsage: LocalUsageSnapshot
         let localUsageError: String?
         do {
@@ -439,7 +460,7 @@ public enum CodexBackend {
             localUsageError = errorMessage(error)
         }
 
-        return RateLimitPayload(
+        var payload = RateLimitPayload(
             fetchedAtIso: ratePayload.fetchedAtIso,
             rateLimits: ratePayload.rateLimits,
             rateLimitsByLimitId: ratePayload.rateLimitsByLimitId,
@@ -451,18 +472,27 @@ public enum CodexBackend {
             usage: nil,
             accountContext: ratePayload.accountContext
         )
+        var outcomes = RefreshOutcome.official(ratePayload)
+        outcomes[.localUsage] = RefreshOutcome.local(localUsage)
+        let official = RefreshCoordinator.oneShot(outcomes, attemptedAt: attemptedAt, now: Date())
+        let local = RefreshCoordinator.oneShot([.localUsage: RefreshOutcome.local(localUsage)], attemptedAt: localAttemptedAt, now: Date())
+        payload.refresh = RefreshSnapshot(quota: official.quota, credits: official.credits,
+            resetCredits: official.resetCredits, localUsage: local.localUsage, networkAvailable: nil)
+        return payload
     }
 
     public static func readLocalTokenUsage(weeklyWindow: RateLimitWindow? = nil,
                                            accountContext: CodexAccountContext? = nil,
-                                           rebuild: Bool = false, quotaSampleAt: Date? = nil) throws -> LocalUsageSnapshot {
+                                           rebuild: Bool = false, quotaSampleAt: Date? = nil,
+                                           cancellation: RefreshCancellation? = nil) throws -> LocalUsageSnapshot {
         let current = CodexAccountSource()
         let matches = accountContext?.accountKey != nil && accountContext?.accountKey == current.identityKey
             && accountContext?.codexHome == current.codexHome.path
-        return try localUsageScanner.snapshot(weeklyWindow: matches ? weeklyWindow : nil,
-                                              accountContext: accountContext,
-                                              invalidateWeeklyObservation: accountContext != nil && !matches,
-                                              rebuild: rebuild, quotaSampleAt: matches ? quotaSampleAt : nil)
+        if accountContext?.accountKey != nil && !matches { throw RuntimeError("Codex account changed before scanning; retry the request.") }
+        return try localUsageScanner.snapshot(weeklyWindow: matches ? weeklyWindow : nil, accountContext: accountContext,
+            invalidateWeeklyObservation: accountContext != nil && !matches, rebuild: rebuild,
+            quotaSampleAt: matches ? quotaSampleAt : nil, cancellation: cancellation,
+            validateCommit: { current.matches(CodexAccountSource()) })
     }
 
     static func localUsageRootURLs(
@@ -578,23 +608,34 @@ public enum CodexBackend {
         }
 
         func snapshot(weeklyWindow: RateLimitWindow? = nil, accountContext: CodexAccountContext? = nil,
-                      invalidateWeeklyObservation: Bool = false, rebuild: Bool = false, quotaSampleAt: Date? = nil) throws -> LocalUsageSnapshot {
-            lock.lock()
-            defer { lock.unlock() }
-            defer { _ = malloc_zone_pressure_relief(nil, 0) }
-            return try autoreleasepool {
-                try PricingCatalog.$current.withValue(pricingProvider()) {
-                    try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation,
-                                   rebuild: rebuild, quotaSampleAt: quotaSampleAt)
+                      invalidateWeeklyObservation: Bool = false, rebuild: Bool = false, quotaSampleAt: Date? = nil,
+                      cancellation: RefreshCancellation? = nil, validateCommit: (() -> Bool)? = nil) throws -> LocalUsageSnapshot {
+            try RefreshWork.$cancellation.withValue(cancellation) {
+                while !lock.try() { try RefreshWork.check(); Thread.sleep(forTimeInterval: 0.02) }
+                defer { lock.unlock(); copyLedger = nil; _ = malloc_zone_pressure_relief(nil, 0) }
+                let previous = cache
+                let signature = persistentCacheSignature
+                do {
+                    return try autoreleasepool {
+                        try PricingCatalog.$current.withValue(pricingProvider()) {
+                            try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation,
+                                           rebuild: rebuild, quotaSampleAt: quotaSampleAt, validateCommit: validateCommit)
+                        }
+                    }
+                } catch {
+                    cache = previous
+                    persistentCacheSignature = signature
+                    throw error
                 }
             }
         }
 
         private func scanLocked(weeklyWindow: RateLimitWindow?, accountContext: CodexAccountContext?,
-                                invalidateWeeklyObservation: Bool, rebuild: Bool, quotaSampleAt: Date?) throws -> LocalUsageSnapshot {
+                                invalidateWeeklyObservation: Bool, rebuild: Bool, quotaSampleAt: Date?, validateCommit: (() -> Bool)?) throws -> LocalUsageSnapshot {
+            try RefreshWork.check()
             scanIssues = []
             rootStatuses = []
-            let persistentLockFD = acquirePersistentCacheLock()
+            let persistentLockFD = try acquirePersistentCacheLock()
             defer { releasePersistentCacheLock(persistentLockFD) }
 
             let startedAt = Date()
@@ -679,7 +720,8 @@ public enum CodexBackend {
             let discoveryStart = max(historyStart, min(dayStart, cache.weeklyCostObservation?.startedAt ?? dayStart))
             var byPath: [String: JsonlFileInfo] = [:]
             for root in rootURLs {
-                let discovery = CodexBackend.walkJsonlFileInfos(root: root, dayStart: historyStart, allowMissing: allowMissingRoots)
+                try RefreshWork.check()
+                let discovery = try CodexBackend.walkJsonlFileInfos(root: root, dayStart: historyStart, allowMissing: allowMissingRoots)
                 scanIssues.append(contentsOf: discovery.issues)
                 rootStatuses.append(discovery.root)
                 for var file in discovery.files {
@@ -734,6 +776,7 @@ public enum CodexBackend {
             }
             let missingSessions = Set(cache.files.compactMap { path, state in byPath[path] == nil ? state.primarySessionId : nil })
             for key in groups.keys.sorted() {
+                try RefreshWork.check()
                 let members = groups[key]!.sorted { $0.url.path < $1.url.path }
                 let paths = members.map(\.url.path)
                 let hasCopies = members.count > 1
@@ -838,6 +881,8 @@ public enum CodexBackend {
                 accountContext: accountContext,
                 quotaSampleAt: quotaSampleAt
             )
+            try RefreshWork.check()
+            guard validateCommit?() ?? true else { throw RuntimeError("Codex account changed while scanning; discarded the result.") }
             self.cache = cache
             if cacheChanged { persist(cache) }
             stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
@@ -913,7 +958,7 @@ public enum CodexBackend {
             )
         }
 
-        private func acquirePersistentCacheLock() -> Int32? {
+        private func acquirePersistentCacheLock() throws -> Int32? {
             guard let cacheFileURL else { return nil }
             do {
                 try FileManager.default.createDirectory(
@@ -921,20 +966,25 @@ public enum CodexBackend {
                     withIntermediateDirectories: true
                 )
             } catch {
-                appendSharedLog("local usage lock directory failed: \(errorMessage(error))")
-                return nil
+                throw RuntimeError("Local usage lock directory failed: \(errorMessage(error))")
             }
 
             let lockURL = cacheFileURL.appendingPathExtension("lock")
             let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
             guard descriptor >= 0 else {
-                appendSharedLog("local usage lock open failed: errno=\(errno)")
-                return nil
+                throw RuntimeError("Local usage lock open failed: errno=\(errno)")
             }
-            guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else {
-                appendSharedLog("local usage lock acquire failed: errno=\(errno)")
+            do {
+                let deadline = Date().addingTimeInterval(15)
+                while Darwin.lockf(descriptor, F_TLOCK, 0) != 0 {
+                    guard errno == EACCES || errno == EAGAIN || errno == EINTR else { throw RuntimeError("Local usage lock failed: errno=\(errno)") }
+                    try RefreshWork.check()
+                    guard Date() < deadline else { throw RuntimeError("Timed out waiting for the local usage cache lock.") }
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+            } catch {
                 Darwin.close(descriptor)
-                return nil
+                throw error
             }
             return descriptor
         }
@@ -1095,6 +1145,7 @@ public enum CodexBackend {
                 try handle.seek(toOffset: state.offset)
                 var remaining = file.size - state.offset
                 while remaining > 0 {
+                    try RefreshWork.check()
                     let count = min(Self.readChunkSize, Int(remaining))
                     if readBuffer.count != Self.readChunkSize { readBuffer = Data(count: Self.readChunkSize) }
                     let bytesRead = readBuffer.withUnsafeMutableBytes { buffer -> Int in
@@ -1483,7 +1534,7 @@ public enum CodexBackend {
             weeklyQuotaCost?.unpricedUsage = weeklyCostAccumulator.unpricedUsage()
             let unpricedUsage = todayCostAccumulator.unpricedUsage()
 
-            return LocalUsageSnapshot(
+            var snapshot = LocalUsageSnapshot(
                 fetchedAtIso: ISO8601DateFormatter().string(from: now),
                 source: cache.source,
                 timezone: cache.timeZone,
@@ -1528,6 +1579,8 @@ public enum CodexBackend {
                 pricing: cache.pricing,
                 unpricedUsage: unpricedUsage
             )
+            snapshot.freshness = RefreshCoordinator.oneShot([.localUsage: RefreshOutcome.local(snapshot)], attemptedAt: now, now: Date()).localUsage
+            return snapshot
         }
 
         private func makeDiagnostics(cache: LocalUsageScanCache, filesDiscovered: Int, roots: [String]? = nil) -> UsageScanDiagnostics {
@@ -1852,7 +1905,7 @@ public enum CodexBackend {
     }
 
     private static func emptyResetCreditsSnapshot(_ error: Error) -> ResetCreditsSnapshot {
-        ResetCreditsSnapshot(
+        var snapshot = ResetCreditsSnapshot(
             fetchedAtIso: isoNow(),
             availableCount: nil,
             credits: [],
@@ -1863,6 +1916,8 @@ public enum CodexBackend {
                 detailLabels: [AppText.resetCreditsUnavailable]
             )
         )
+        snapshot.freshness = RefreshCoordinator.oneShot([.resetCredits: RefreshOutcome(.failed, error: errorMessage(error))], attemptedAt: Date(), now: Date()).resetCredits
+        return snapshot
     }
 
     private static func emptyLocalUsageSnapshot(_ error: Error) -> LocalUsageSnapshot {
@@ -1871,7 +1926,7 @@ public enum CodexBackend {
         let diagnostics = UsageScanDiagnostics.make(roots: [], filesDiscovered: 0, filesVerified: 0,
             validRecords: 0, usageEvents: 0, issues: [UsageScanIssue(kind: .cacheUnavailable, path: nil, count: 1,
                                                                  message: errorMessage(error))])
-        return LocalUsageSnapshot(
+        var snapshot = LocalUsageSnapshot(
             fetchedAtIso: ISO8601DateFormatter().string(from: now),
             source: source,
             timezone: TimeZone.current.identifier,
@@ -1903,9 +1958,12 @@ public enum CodexBackend {
             ),
             diagnostics: diagnostics
         )
+        snapshot.freshness = RefreshCoordinator.oneShot([.localUsage: RefreshOutcome.local(snapshot)], attemptedAt: now, now: Date()).localUsage
+        return snapshot
     }
 
     private static func callCodexAppServer(methods: [String], codexHome: String? = nil, timeout: TimeInterval = 12) throws -> [String: Any] {
+        try RefreshWork.check()
         let spec = codexCommandSpec()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: spec.executable)
@@ -1961,24 +2019,29 @@ public enum CodexBackend {
         }
 
         try process.run()
+        defer {
+            stdout.fileHandleForReading.readabilityHandler = nil
+            stderr.fileHandleForReading.readabilityHandler = nil
+            try? stdin.fileHandleForWriting.close()
+            if process.isRunning {
+                process.terminate()
+                let exitDeadline = Date().addingTimeInterval(0.5)
+                while process.isRunning && Date() < exitDeadline { Thread.sleep(forTimeInterval: 0.01) }
+                if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+            }
+        }
         for request in requests {
-            stdin.fileHandleForWriting.write(request)
+            try stdin.fileHandleForWriting.write(contentsOf: request)
         }
 
-        if state.semaphore.wait(timeout: .now() + timeout) == .timedOut {
+        if try !RefreshWork.wait(state.semaphore, timeout: timeout) {
             state.fail(RuntimeError("Timed out waiting for codex app-server response. stderr=\(state.stderrTail())"))
-            process.terminate()
         }
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        try? stdin.fileHandleForWriting.close()
-        if process.isRunning {
-            process.terminate()
-        }
-        if let error = state.error {
+        let completion = state.completion()
+        if let error = completion.error {
             throw error
         }
-        let results = state.results
+        let results = completion.results
         for method in methods where results[method] == nil {
             throw RuntimeError("codex app-server did not return \(method)")
         }
@@ -2018,15 +2081,17 @@ public enum CodexBackend {
     private static func fetchData(_ request: URLRequest) throws -> Data {
         let semaphore = DispatchSemaphore(value: 0)
         let state = URLFetchState()
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
             if let error {
                 state.complete(.failure(error))
             } else {
                 state.complete(.success((data ?? Data(), response!)))
             }
             semaphore.signal()
-        }.resume()
-        if semaphore.wait(timeout: .now() + request.timeoutInterval) == .timedOut {
+        }
+        task.resume()
+        defer { task.cancel() }
+        if try !RefreshWork.wait(semaphore, timeout: request.timeoutInterval) {
             throw RuntimeError("Timed out waiting for ChatGPT reset credit response")
         }
         guard let result = state.result() else {
@@ -2053,7 +2118,7 @@ public enum CodexBackend {
         var issues: [UsageScanIssue]
     }
 
-    private static func walkJsonlFileInfos(root: URL, dayStart: Date, allowMissing: Bool) -> JsonlDiscovery {
+    private static func walkJsonlFileInfos(root: URL, dayStart: Date, allowMissing: Bool) throws -> JsonlDiscovery {
         var info = stat()
         let result = stat(root.path, &info)
         let missing = result != 0 && errno == ENOENT
@@ -2075,7 +2140,9 @@ public enum CodexBackend {
                                                          message: "Session directory enumeration failed.")])
         }
         var files: [JsonlFileInfo] = []
-        for case let file as URL in enumerator where file.pathExtension == "jsonl" {
+        for case let file as URL in enumerator {
+            try RefreshWork.check()
+            guard file.pathExtension == "jsonl" else { continue }
             let canonical = file.standardizedFileURL.resolvingSymlinksInPath()
             guard let stamp = UsageFileStamp.read(canonical) else {
                 issues.append(UsageScanIssue(kind: .fileReadFailed, path: canonical.path, count: 1,

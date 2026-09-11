@@ -62,6 +62,22 @@ final class AccountContextTests: XCTestCase {
         XCTAssertFalse(encoded.contains("header."))
     }
 
+    func testRefreshIdentityTracksUnknownCredentialsWithoutExposingThem() throws {
+        let before = source(directory)
+        let auth = directory.appendingPathComponent("auth.json")
+        try Data(#"{"OPENAI_API_KEY":"fixture-key-a"}"#.utf8).write(to: auth)
+        let first = source(directory)
+        XCTAssertNil(first.identityKey)
+        XCTAssertFalse(first.matches(before))
+        XCTAssertFalse(first.refreshIdentity.contains("fixture-key-a"))
+        try Data(#"{"OPENAI_API_KEY":"fixture-key-b"}"#.utf8).write(to: auth)
+        XCTAssertFalse(first.matches(source(directory)))
+        try login(directory)
+        let known = source(directory)
+        try login(directory, accessToken: "rotated-token")
+        XCTAssertTrue(known.matches(source(directory)))
+    }
+
     func testMissingOrUnverifiedCredentialsNeverAcquirePersistentIdentity() throws {
         XCTAssertNil(source(directory).context(account: serverAccount).scopeKey)
         try login(directory)

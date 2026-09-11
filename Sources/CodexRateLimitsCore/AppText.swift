@@ -1100,6 +1100,60 @@ public enum AppText {
 
 
 extension AppText {
+    public static func refreshSourceName(_ source: RefreshSource) -> String {
+        switch source {
+        case .quota: return weeklyText("额度", "額度", "上限", "한도", "Quota")
+        case .credits: return weeklyText("余额", "餘額", "残高", "잔액", "Balance")
+        case .resetCredits: return weeklyText("重置券", "重置券", "リセット券", "초기화권", "Reset credits")
+        case .localUsage: return weeklyText("本机统计", "本機統計", "ローカル統計", "로컬 통계", "Local usage")
+        }
+    }
+
+    public static func freshnessSummary(_ value: DataFreshness?, source: RefreshSource) -> String {
+        let phase: String
+        switch value?.status ?? .idle {
+        case .idle: phase = weeklyText("尚未更新", "尚未更新", "未更新", "업데이트 전", "not updated")
+        case .refreshing: phase = weeklyText("刷新中", "重新整理中", "更新中", "새로 고침 중", "refreshing")
+        case .success: phase = weeklyText("已更新", "已更新", "更新済み", "업데이트됨", "updated")
+        case .partial: phase = weeklyText("部分成功", "部分成功", "一部成功", "일부 성공", "partial")
+        case .failed: phase = weeklyText("刷新失败", "重新整理失敗", "更新失敗", "새로 고침 실패", "refresh failed")
+        case .unavailable: phase = weeklyText("未返回数据", "未傳回資料", "データなし", "데이터 없음", "not returned")
+        case .stale: phase = weeklyText("数据已过期", "資料已過期", "期限切れ", "데이터 만료", "stale data")
+        }
+        let stale = value?.isStale == true && value?.status != .stale
+            ? weeklyText(" · 已过期", " · 已過期", " · 期限切れ", " · 만료됨", " · stale") : ""
+        let timestamp = value?.dataAtIso ?? value?.lastSuccessAtIso
+        let label = timestamp.flatMap(RefreshOutcome.date).map { date -> String in
+            let formatter = DateFormatter()
+            formatter.dateStyle = Calendar.current.isDateInToday(date) ? .none : .short
+            formatter.timeStyle = .medium
+            return formatter.string(from: date)
+        }
+        return "\(refreshSourceName(source)) · \(phase)\(stale)" + (label.map { " · \($0)" } ?? "")
+    }
+
+    public static func freshnessDetails(_ value: DataFreshness?, source: RefreshSource) -> String {
+        guard let value else { return freshnessSummary(nil, source: source) }
+        var lines = [freshnessSummary(value, source: source)]
+        let fields = [(weeklyText("最后尝试", "最後嘗試", "最終試行", "마지막 시도", "Last attempt"), value.lastAttemptAtIso),
+                      (weeklyText("最后成功", "最後成功", "最終成功", "마지막 성공", "Last success"), value.lastSuccessAtIso),
+                      (weeklyText("数据时间", "資料時間", "データ時刻", "데이터 시간", "Data timestamp"), value.dataAtIso),
+                      (weeklyText("下次重试", "下次重試", "次の再試行", "다음 재시도", "Next retry"), value.nextRetryAtIso)]
+        lines += fields.compactMap { label, value in value.map { "\(label): \($0)" } }
+        if let error = value.error { lines.append(error) }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func refreshDetails(_ snapshot: RefreshSnapshot) -> String {
+        let prefix = snapshot.networkAvailable == false
+            ? weeklyText("网络离线\n", "網路離線\n", "オフライン\n", "오프라인\n", "Network offline\n") : ""
+        return prefix + RefreshSource.allCases.map { freshnessDetails(snapshot[$0], source: $0) }.joined(separator: "\n")
+    }
+
+    public static var staleWeeklyValue: String {
+        weeklyText("周金额暂停 · 数据已过期", "週金額暫停 · 資料已過期", "週間金額停止 · 期限切れ", "주간 금액 중지 · 데이터 만료", "Weekly estimate paused · stale data")
+    }
+
     public static func pricingVersion(_ pricing: UsagePricingMetadata?) -> String {
         guard let pricing else { return "" }
         let origin = pricing.source == "custom"

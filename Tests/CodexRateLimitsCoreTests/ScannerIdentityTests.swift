@@ -46,6 +46,36 @@ final class ScannerIdentityTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
     }
 
+    func testRejectedAccountResultDoesNotCommitMemoryOrPersistentCache() throws {
+        let file = root.appendingPathComponent("usage.jsonl")
+        try write(events(total: 100), to: file)
+        let scanner = scanner()
+        XCTAssertEqual(try scanner.snapshot().totalTokens, 100)
+        let cacheFile = root.appendingPathComponent("cache.json")
+        let original = try Data(contentsOf: cacheFile)
+        try write(events(total: 900), to: file)
+        var checked = false
+        XCTAssertThrowsError(try scanner.snapshot(validateCommit: { checked = true; return false }))
+        XCTAssertTrue(checked)
+        XCTAssertEqual(try Data(contentsOf: cacheFile), original)
+        XCTAssertEqual(try scanner.snapshot().totalTokens, 900)
+        XCTAssertEqual(try self.scanner().snapshot().totalTokens, 900)
+    }
+
+    func testCancelledRebuildPreservesExistingCacheAndCanRecover() throws {
+        let file = root.appendingPathComponent("usage.jsonl")
+        try write(events(total: 100), to: file)
+        let scanner = scanner()
+        _ = try scanner.snapshot()
+        let cacheFile = root.appendingPathComponent("cache.json")
+        let original = try Data(contentsOf: cacheFile)
+        let cancellation = RefreshCancellation(deadline: Date().addingTimeInterval(5))
+        cancellation.cancel()
+        XCTAssertThrowsError(try scanner.snapshot(rebuild: true, cancellation: cancellation))
+        XCTAssertEqual(try Data(contentsOf: cacheFile), original)
+        XCTAssertEqual(try scanner.snapshot(rebuild: true).totalTokens, 100)
+    }
+
     func testSameSizeReplacementAndInPlaceRewriteInvalidateCachedTotals() throws {
         let file = root.appendingPathComponent("rollout.jsonl")
         try write(events(total: 100), to: file)

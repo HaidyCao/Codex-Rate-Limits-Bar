@@ -308,6 +308,21 @@ dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar local-usage
 dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar status
 ```
 
+## Freshness and refresh recovery
+
+Quota, official balance, reset credits, and local usage show separate update
+states and timestamps. Official data becomes stale after five minutes and local
+usage after two. Failed requests retain and dim old values; stale quota pauses
+forecasts, and stale quota or local usage pauses weekly amount estimates.
+Unrelated refreshes do not clear another source's error.
+
+Wake and network recovery trigger refreshes. Concurrent requests coalesce,
+failures use bounded exponential backoff, and manual refresh remains available.
+Account changes and timed-out requests cannot apply late results. CLI/MCP
+snapshots expose additive `refresh` / `freshness` metadata; their history is
+limited to each invocation. See [refresh behavior and verification](docs/refresh.md)
+for timings, field definitions, and manual system-event checks.
+
 ## Shared Swift Binary
 
 Reusable models, localization, formatting, Codex data access, and local JSONL

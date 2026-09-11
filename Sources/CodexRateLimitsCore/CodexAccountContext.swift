@@ -77,6 +77,12 @@ struct CodexAccountSource {
     }
 
     func matches(_ other: CodexAccountSource) -> Bool {
-        codexHome == other.codexHome && authFile == other.authFile && identityKey == other.identityKey
+        refreshIdentity == other.refreshIdentity
+    }
+
+    var refreshIdentity: String {
+        let fallback = credentials.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+            .map { CodexAccountContext.digest([$0.base64EncodedString()]) } ?? "no-file-credentials"
+        return CodexAccountContext.digest([codexHome.path, authFile.path, String(usesFileCredentials), identityKey ?? fallback])
     }
 }

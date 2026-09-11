@@ -45,6 +45,7 @@ enum UsageFileIdentity {
         var hasher = SHA256()
         while remaining > 0 {
             try autoreleasepool {
+                try RefreshWork.check()
                 guard let chunk = try handle.read(upToCount: Int(min(remaining, 1_048_576))), !chunk.isEmpty else {
                     throw RuntimeError("Session file ended while verifying its cached prefix")
                 }
