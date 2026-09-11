@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "api": {
+    "version": "2026-09-12.1",
+    "verifiedAt": "2026-09-12",
+    "sources": [
+      "https://developers.openai.com/api/docs/pricing",
+      "https://developers.openai.com/api/docs/models/gpt-6-astra"
+    ],
+    "conditions": [
+      "USD per 1M tokens; Standard API equivalents at current rates, including historical logs.",
+      "Fast, Batch, Flex, regional and tool fees are excluded.",
+      "Cyber has no published long-context API tier; requests above 272K remain unpriced.",
+      "Dated snapshots use their explicit base or alias target, never arbitrary name prefixes."
+    ],
+    "models": {
+      "gpt-5.6-cyber": {
+        "input": 12.5,
+        "cachedInput": 1.25,
+        "cacheWriteInput": 15.625,
+        "output": 75.0,
+        "datedSnapshots": true,
+        "maximumInputTokens": 272000
+      },
+      "gpt-6-astra": {
+        "input": 10.0,
+        "cachedInput": 1.0,
+        "cacheWriteInput": 12.5,
+        "output": 50.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.6-sol": {
+        "input": 4.0,
+        "cachedInput": 0.4,
+        "cacheWriteInput": 5.0,
+        "output": 20.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.6-terra": {
+        "input": 2.0,
+        "cachedInput": 0.2,
+        "cacheWriteInput": 2.5,
+        "output": 12.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.6-luna": {
+        "input": 0.2,
+        "cachedInput": 0.02,
+        "cacheWriteInput": 0.25,
+        "output": 1.2,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.5": {
+        "input": 5.0,
+        "cachedInput": 0.5,
+        "cacheWriteInput": 6.25,
+        "output": 30.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.4": {
+        "input": 2.5,
+        "cachedInput": 0.25,
+        "cacheWriteInput": 3.125,
+        "output": 15.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-5.4-mini": {
+        "input": 0.75,
+        "cachedInput": 0.075,
+        "cacheWriteInput": 0.75,
+        "output": 4.5,
+        "datedSnapshots": true
+      },
+      "gpt-5.3-codex": {
+        "input": 1.75,
+        "cachedInput": 0.175,
+        "cacheWriteInput": 1.75,
+        "output": 14.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.3-chat-latest": {
+        "input": 1.75,
+        "cachedInput": 0.175,
+        "cacheWriteInput": 1.75,
+        "output": 14.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.2-codex": {
+        "input": 1.75,
+        "cachedInput": 0.175,
+        "cacheWriteInput": 1.75,
+        "output": 14.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.2-chat-latest": {
+        "input": 1.75,
+        "cachedInput": 0.175,
+        "cacheWriteInput": 1.75,
+        "output": 14.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.2": {
+        "input": 1.75,
+        "cachedInput": 0.175,
+        "cacheWriteInput": 1.75,
+        "output": 14.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.1-codex-max": {
+        "input": 1.25,
+        "cachedInput": 0.125,
+        "cacheWriteInput": 1.25,
+        "output": 10.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.1-codex-mini": {
+        "input": 0.25,
+        "cachedInput": 0.025,
+        "cacheWriteInput": 0.25,
+        "output": 2.0,
+        "datedSnapshots": true
+      },
+      "gpt-5.1-codex": {
+        "input": 1.25,
+        "cachedInput": 0.125,
+        "cacheWriteInput": 1.25,
+        "output": 10.0,
+        "datedSnapshots": true
+      },
+      "gpt-5-codex": {
+        "input": 1.25,
+        "cachedInput": 0.125,
+        "cacheWriteInput": 1.25,
+        "output": 10.0,
+        "datedSnapshots": true
+      },
+      "gpt-5": {
+        "input": 1.25,
+        "cachedInput": 0.125,
+        "cacheWriteInput": 1.25,
+        "output": 10.0,
+        "datedSnapshots": true
+      }
+    },
+    "aliases": {
+      "gpt-5.6": "gpt-5.6-sol",
+      "gpt-5.6-latest": "gpt-5.6-sol",
+      "gpt-daybreak-blue-latest": "gpt-5.6-sol",
+      "gpt-daybreak-red-latest": "gpt-5.6-cyber"
+    }
+  },
+  "credits": {
+    "version": "2026-09-12.1",
+    "verifiedAt": "2026-09-12",
+    "sources": [
+      "https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing",
+      "https://learn.chatgpt.com/docs/agent-configuration/speed",
+      "https://help.openai.com/en/articles/20001415"
+    ],
+    "conditions": [
+      "Purchased-credit equivalents per 1M tokens at current rates, not actual deductions or included quota.",
+      "Cache writes are excluded. Astra has no long-context surcharge in Codex.",
+      "Sol purchased-credit promotion is available at least through 2026-11-21; included limits are unchanged.",
+      "Legacy Enterprise, tools, images, voice, cloud and other-device activity are excluded."
+    ],
+    "models": {
+      "gpt-6-astra": {
+        "input": 250.0,
+        "cachedInput": 25.0,
+        "cacheWriteInput": 0,
+        "output": 1250.0,
+        "datedSnapshots": true,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.5,
+          "priority": 2.5
+        }
+      },
+      "gpt-5.6-sol": {
+        "input": 100.0,
+        "cachedInput": 10.0,
+        "cacheWriteInput": 0,
+        "output": 500.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        },
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.5,
+          "priority": 2.5
+        }
+      },
+      "gpt-5.6-terra": {
+        "input": 50.0,
+        "cachedInput": 5.0,
+        "cacheWriteInput": 0,
+        "output": 300.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        },
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.5,
+          "priority": 2.5
+        }
+      },
+      "gpt-5.6-luna": {
+        "input": 5.0,
+        "cachedInput": 0.5,
+        "cacheWriteInput": 0,
+        "output": 30.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        },
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.5,
+          "priority": 2.5
+        }
+      },
+      "gpt-5.6-cyber": {
+        "input": 312.5,
+        "cachedInput": 31.25,
+        "cacheWriteInput": 0,
+        "output": 1875.0,
+        "datedSnapshots": true,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1
+        }
+      },
+      "gpt-5.5": {
+        "input": 125.0,
+        "cachedInput": 12.5,
+        "cacheWriteInput": 0,
+        "output": 750.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        },
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.5,
+          "priority": 2.5
+        }
+      },
+      "gpt-5.4": {
+        "input": 62.5,
+        "cachedInput": 6.25,
+        "cacheWriteInput": 0,
+        "output": 375.0,
+        "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        },
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2.0,
+          "priority": 2.0
+        }
+      },
+      "gpt-5.4-mini": {
+        "input": 18.75,
+        "cachedInput": 1.875,
+        "cacheWriteInput": 0,
+        "output": 113.0,
+        "datedSnapshots": true,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1
+        }
+      },
+      "gpt-5.3-codex": {
+        "input": 43.75,
+        "cachedInput": 4.375,
+        "cacheWriteInput": 0,
+        "output": 350.0,
+        "datedSnapshots": true,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1
+        }
+      },
+      "gpt-5.2": {
+        "input": 43.75,
+        "cachedInput": 4.375,
+        "cacheWriteInput": 0,
+        "output": 350.0,
+        "datedSnapshots": true,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1
+        }
+      }
+    },
+    "aliases": {
+      "gpt-5.6": "gpt-5.6-sol",
+      "gpt-5.6-latest": "gpt-5.6-sol",
+      "gpt-daybreak-blue-latest": "gpt-5.6-sol",
+      "gpt-daybreak-red-latest": "gpt-5.6-cyber"
+    }
+  }
+}

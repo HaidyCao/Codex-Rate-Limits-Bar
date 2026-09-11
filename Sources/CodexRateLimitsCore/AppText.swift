@@ -773,6 +773,7 @@ public enum AppText {
         let forecastSuffix = forecast.map { "\n\(quotaForecastLabel($0))" } ?? ""
         let costSuffix = weeklyQuotaCost.map {
             "\n\(weeklyQuotaEstimatedCost($0))\n\(weeklyValuationDetails($0.valuation))\n\(costEstimateDisclaimer)"
+                + (unpricedUsageDetails($0.unpricedUsage).map { "\n" + $0 } ?? "")
         } ?? ""
         switch language {
         case .simplifiedChinese:
@@ -1099,6 +1100,51 @@ public enum AppText {
 
 
 extension AppText {
+    public static func pricingVersion(_ pricing: UsagePricingMetadata?) -> String {
+        guard let pricing else { return "" }
+        let origin = pricing.source == "custom"
+            ? weeklyText("自定义", "自訂", "カスタム", "사용자 정의", "custom")
+            : weeklyText("内置", "內建", "組み込み", "기본", "built-in")
+        let versions = pricing.api.version == pricing.credits.version ? pricing.api.version
+            : "API \(pricing.api.version) / credits \(pricing.credits.version)"
+        let prefix = weeklyText("价目表", "價目表", "料金表", "요금표", "Rate card")
+        return "\(prefix) \(versions) · \(origin)" + (pricing.configurationError == nil ? "" : " ⚠︎")
+    }
+
+    public static func pricingDetails(_ pricing: UsagePricingMetadata?) -> String {
+        guard let pricing else { return "" }
+        let verified = weeklyText("核验", "核驗", "確認", "확인", "verified")
+        var lines = [pricingVersion(pricing), "API \(verified): \(pricing.api.verifiedAt) · credits \(verified): \(pricing.credits.verifiedAt)",
+            weeklyText("历史用量按当前价目表重估；自定义配置中的日期与来源由用户声明。", "歷史用量依目前價目表重估；自訂配置中的日期與來源由使用者聲明。",
+                       "履歴は現在の料金表で再計算。カスタムの日付と出典は利用者による申告です。", "과거 사용량은 현재 요율로 재평가하며 사용자 설정 날짜와 출처는 사용자 선언입니다.",
+                       "Historical usage is re-estimated at current rates. Custom verification dates and sources are user-declared.")]
+        if let oldAPI = pricing.previousAPIVersion, let oldCredits = pricing.previousCreditsVersion, let at = pricing.changedAtIso {
+            lines.append("API \(oldAPI) → \(pricing.api.version); credits \(oldCredits) → \(pricing.credits.version) · \(at)")
+            lines.append(weeklyText("价目表内容已变更，受影响日志按新规则重算。", "價目表內容已變更，受影響日誌依新規則重算。",
+                                   "料金表の変更に伴い、対象ログを再計算。", "요금표 변경으로 영향을 받는 로그를 재계산합니다.", "The rate card changed; affected logs are recalculated with the new rules."))
+        }
+        if let path = pricing.configurationPath { lines.append(path) }
+        if let error = pricing.configurationError { lines.append(error) }
+        lines += ["API: " + pricing.api.conditions.joined(separator: " "), "credits: " + pricing.credits.conditions.joined(separator: " ")]
+        lines += Array(Set(pricing.api.sources + pricing.credits.sources)).sorted()
+        return lines.joined(separator: "\n")
+    }
+
+    public static func unpricedUsageDetails(_ entries: [UnpricedUsage]?) -> String? {
+        guard let entries, !entries.isEmpty else { return nil }
+        return entries.map { entry in
+            let reason: String
+            switch entry.reason {
+            case "unknownModel": reason = weeklyText("未知模型", "未知模型", "不明なモデル", "알 수 없는 모델", "unknown model")
+            case "unknownServiceTier": reason = weeklyText("未知模式", "未知模式", "不明なモード", "알 수 없는 모드", "unknown mode")
+            case "unsupportedContext": reason = weeklyText("该上下文无价格", "該上下文無價格", "対象コンテキストの価格なし", "컨텍스트 요금 없음", "unpriced context")
+            default: reason = weeklyText("等待价格重算", "等待價格重算", "再計算待ち", "요금 재계산 대기", "awaiting repricing")
+            }
+            let tier = entry.serviceTier.map { " · \($0)" } ?? ""
+            return "\(entry.kind) · \(entry.model)\(tier) · \(entry.totalTokens) tokens (\(String(format: "%.2f", entry.percent))%) · \(reason)"
+        }.joined(separator: "\n")
+    }
+
     public static func todayEstimatedCredits(_ estimate: UsageCreditEstimate?) -> String {
         let amount = CreditFormatter.string(estimate?.estimatedCredits)
         let value = amount + (estimate?.isPartial == true && estimate?.estimatedCredits != nil ? "+" : "")

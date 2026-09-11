@@ -14,7 +14,8 @@ let package = Package(
     targets: [
         .target(
             name: "CodexRateLimitsCore",
-            path: "Sources/CodexRateLimitsCore"
+            path: "Sources/CodexRateLimitsCore",
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "CodexRateLimitsBar",

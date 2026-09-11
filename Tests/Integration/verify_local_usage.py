@@ -47,6 +47,12 @@ for line in sys.stdin:
             return subprocess.run([str(binary), *args], input=input, env=env, text=True,
                                   capture_output=True, timeout=30, check=True).stdout
 
+        builtin = json.loads(run("pricing", "--export-builtin"))
+        pricing_file = root / "pricing.json"
+        pricing_file.write_text(json.dumps(builtin))
+        env["CODEX_PRICING_FILE"] = str(pricing_file)
+        assert json.loads(run("pricing", "--validate", str(pricing_file)))["source"] == "custom"
+
         def mcp(name):
             messages = [
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -56,11 +62,11 @@ for line in sys.stdin:
             responses = [json.loads(line) for line in run("mcp", input="".join(json.dumps(m) + "\n" for m in messages)).splitlines()]
             return json.loads(next(r for r in responses if r.get("id") == 2)["result"]["content"][0]["text"])
 
-        def write_usage(complete=True):
-            context = {"model": "gpt-5.6-sol"}
+        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard"):
+            context = {"model": model}
             info = {"total_token_usage": {"input_tokens": 1000, "total_tokens": 1000}}
             if complete:
-                context["service_tier"] = "standard"
+                context["service_tier"] = tier
                 info["last_token_usage"] = {"input_tokens": 1000}
             events = [
                 {"payload": {"id": "fixture-session"}, "timestamp": timestamp, "type": "session_meta"},
@@ -79,7 +85,7 @@ for line in sys.stdin:
             combined = mcp("get_codex_status")
             for value in [direct, shared, status["localUsage"], combined["localUsage"]]:
                 assert value["diagnostics"]["status"] == expected, value["diagnostics"]
-                for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits"]:
+                for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits", "pricing", "unpricedUsage"]:
                     assert value[key] == direct[key], key
                 assert value["display"]["scanStatusLabel"] == direct["display"]["scanStatusLabel"]
             assert status.get("localUsageError") == direct.get("error")
@@ -99,6 +105,37 @@ for line in sys.stdin:
         assert complete["totalTokens"] == 1000
         assert complete["billingAssumptions"]["apiPercent"] == 0
         assert len(complete["topFiles"][0]["sourceFiles"]) == 2
+
+        write_usage(model="Raw-Private-Model", tier="private-mode")
+        unknown = check_shared_status("complete")
+        assert unknown["todayCost"]["unpricedTokens"] == 1000
+        assert unknown["todayCredits"]["unpricedTokens"] == 1000
+        assert all(entry["model"] == "Raw-Private-Model" and entry["serviceTier"] == "private-mode"
+                   and entry["totalTokens"] == 1000 and entry["percent"] == 100 for entry in unknown["unpricedUsage"])
+        custom = json.loads(json.dumps(builtin))
+        custom["api"]["version"] = "manual-api-v2"
+        custom["api"]["aliases"]["raw-private-model"] = "gpt-5.6-sol"
+        custom["api"]["models"]["gpt-5.6-sol"]["input"] = 8
+        custom["credits"]["version"] = "manual-credits-v2"
+        custom["credits"]["aliases"]["raw-private-model"] = "gpt-5.6-terra"
+        custom["credits"]["models"]["gpt-5.6-terra"]["serviceTiers"]["private-mode"] = 3
+        pricing_file.write_text(json.dumps(custom))
+        assert json.loads(run("pricing", "--validate", str(pricing_file)))["api"]["version"] == "manual-api-v2"
+        mapped = check_shared_status("complete")
+        assert mapped["todayCost"]["estimatedCostUSD"] == 0.008
+        assert mapped["todayCredits"]["estimatedCredits"] == 0.15
+        assert mapped["todayCost"]["models"][0]["pricingSource"] == "custom"
+        assert not mapped["unpricedUsage"]
+        custom["api"]["models"]["gpt-5.6-sol"]["input"] = -1
+        pricing_file.write_text(json.dumps(custom))
+        rejected = subprocess.run([str(binary), "pricing", "--validate", str(pricing_file)], env=env,
+                                  text=True, capture_output=True, timeout=30)
+        assert rejected.returncode != 0
+        fallback = check_shared_status("complete")
+        assert fallback["pricing"]["configurationError"]
+        assert fallback["pricing"]["source"] == "builtin"
+        assert fallback["todayCost"]["unpricedTokens"] == 1000
+        pricing_file.write_text(json.dumps(builtin))
         write_usage(complete=False)
         assumed = check_shared_status("complete")
         assert assumed["todayCost"]["coveragePercent"] == 100
@@ -119,7 +156,7 @@ for line in sys.stdin:
         bad.write_text("{broken json}\n")
         unavailable = check_shared_status("unavailable")
         assert "--" in unavailable["display"]["consumptionLabel"]
-    print("CLI/MCP integration passed: completeness, assumptions, recovery, account attribution and timestamped weekly evidence.")
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing validation, custom aliases and unknown usage details.")
 
 
 if __name__ == "__main__":

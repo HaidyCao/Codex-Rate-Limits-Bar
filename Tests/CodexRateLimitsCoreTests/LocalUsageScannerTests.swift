@@ -525,6 +525,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(missing.totalTokens, 100_000)
         XCTAssertEqual(missing.todayCost?.coveragePercent, 0)
         XCTAssertNil(missing.todayCost?.estimatedCostUSD)
+        XCTAssertEqual(missing.unpricedUsage?.filter { $0.kind == "api" }.reduce(0) { $0 + $1.totalTokens }, 100_000)
 
         try logData.write(to: file)
         try setModificationDate(now, for: file)
@@ -878,6 +879,7 @@ final class LocalUsageScannerTests: XCTestCase {
                       var buckets = cost["buckets"] as? [String: [String: Any]],
                       var bucket = buckets[model] else { continue }
                 bucket.removeValue(forKey: "estimatedCostUSD")
+                bucket.removeValue(forKey: "api")
                 buckets[model] = bucket
                 cost["buckets"] = buckets
                 state[key] = cost

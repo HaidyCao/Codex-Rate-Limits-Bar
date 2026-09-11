@@ -17,6 +17,7 @@ build:
 	mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 	cp "$(BUILD_DIR)/$(PRODUCT)" "$(CONTENTS)/MacOS/$(PRODUCT)"
 	cp Resources/Info.plist "$(CONTENTS)/Info.plist"
+	cp -R "$(BUILD_DIR)/CodexRateLimitsBar_CodexRateLimitsCore.bundle" "$(CONTENTS)/Resources/"
 	chmod +x "$(CONTENTS)/MacOS/$(PRODUCT)"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $(PRODUCT)" "$(CONTENTS)/Info.plist"
 	/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $(BUNDLE_ID)" "$(CONTENTS)/Info.plist"

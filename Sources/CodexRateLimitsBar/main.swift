@@ -192,6 +192,7 @@ class RateLimitsDrawingView: NSView {
         self.credits = credits
         toolTip = AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
             + "\n" + AppText.weeklyValuationDetails(weeklyQuotaCost?.valuation)
+            + (AppText.unpricedUsageDetails(weeklyQuotaCost?.unpricedUsage).map { "\n" + $0 } ?? "")
             + ((weeklyQuotaCost?.unpricedModels?.isEmpty == false) ? "\n" + (weeklyQuotaCost?.unpricedModels?.joined(separator: ", ") ?? "") : "")
         needsDisplay = true
     }
@@ -757,7 +758,7 @@ class LocalUsageDrawingView: NSView {
         self.snapshot = snapshot
         toolTip = [AppText.todayEstimatedCredits(snapshot.todayCredits),
                    AppText.pricingCoverage(cost: snapshot.todayCost, credits: snapshot.todayCredits),
-                   AppText.unpricedModels(cost: snapshot.todayCost, credits: snapshot.todayCredits),
+                   AppText.unpricedUsageDetails(snapshot.unpricedUsage), AppText.pricingDetails(snapshot.pricing),
                    AppText.scanDetails(snapshot), AppText.creditsEstimateDetails]
             .compactMap { $0 }.joined(separator: "\n")
         needsDisplay = true
@@ -828,7 +829,8 @@ class LocalUsageDrawingView: NSView {
         drawText(AppText.scanStatus(snapshot?.diagnostics), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true ? .systemOrange : secondaryColor)
         drawText(AppText.billingAssumptions(snapshot?.billingAssumptions) ?? "", in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         drawText(AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? "", in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(AppText.pricingVersion(snapshot?.pricing), in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: snapshot?.pricing?.configurationError == nil ? secondaryColor : .systemOrange)
+        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 342, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {
@@ -1001,7 +1003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let localCacheHitItem = NSMenuItem(title: "命中 --", action: nil, keyEquivalent: "")
     private let localUsageDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 352))
+    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 374))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
@@ -1418,7 +1420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             cacheHit: formatPercent(localUsage.cacheHitPercent),
             estimatedCost: localUsage.display?.estimatedCostLabel
         ) + "\n" + [localUsage.display?.estimatedCreditsLabel, localUsage.display?.pricingCoverageLabel,
-                     AppText.unpricedModels(cost: localUsage.todayCost, credits: localUsage.todayCredits),
+                     AppText.unpricedUsageDetails(localUsage.unpricedUsage), AppText.pricingDetails(localUsage.pricing),
                      AppText.scanDetails(localUsage)]
             .compactMap { $0 }.joined(separator: "\n")
 

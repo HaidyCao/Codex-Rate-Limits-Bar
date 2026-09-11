@@ -151,6 +151,27 @@ cursors. Non-default `CODEX_HOME` profiles use separate cache files so CLI and
 desktop accounts cannot replace each other's weekly observations. The compact
 per-model buckets do not retain every token event.
 
+Prices and aliases now live in the bundled [pricing.json](Sources/CodexRateLimitsCore/Resources/pricing.json),
+with separate API and credits versions, verification dates, sources and conditions.
+The menu shows the active version and whether it is built-in or custom; its tooltip
+includes verification dates, sources and the latest version transition. CLI/MCP
+expose the same metadata in `localUsage.pricing` (or `pricing` on `local-usage`).
+All retained usage is re-estimated at the current rates, not historical billing rates.
+
+An optional `~/Library/Application Support/Codex Rate Limits Bar/pricing.json`
+replaces the full built-in document; `CODEX_PRICING_FILE` selects another file.
+Changes take effect at the next local refresh. Invalid configuration is rejected
+with a visible error and built-in fallback. See [Price configuration](docs/pricing.md)
+for export, validation, manual prices, aliases and independent credits mode rules.
+
+`unpricedUsage` lists raw model/mode names, reasons, token counts and percentages,
+separately for API and credits. The weekly estimate has its own scoped list.
+Known amounts remain available when another request for the same model lacks a
+price. Cyber's unpublished long-context API tier stays unpriced rather than using
+a guessed multiplier. Unknown-price details persist across restarts. The first
+upgrade replays retained cost-bearing files to recover these details and current
+rules, preserving account baselines and timestamped quota evidence.
+
 ### Codex credits
 
 `local-usage` and `status.localUsage` include `todayCredits`, with `estimatedCredits`,
@@ -171,7 +192,7 @@ Missing mode or request-context records assume standard rates; missing mode toke
 counts are reported. Unrecognized modes stay unpriced. API equivalents continue
 to use Standard API rates regardless of Codex mode.
 
-The built-in rates were verified on 2026-09-11. Historical usage is re-estimated at
+The built-in rates were verified on 2026-09-12. Historical usage is re-estimated at
 these rates, including current Daybreak aliases and Sol's purchased-credit
 promotion; it is not a historical billing ledger. Tools, images, voice, regional
 surcharges, cloud/other-device activity, and legacy Enterprise credit pricing are
@@ -301,6 +322,9 @@ CodexRateLimitsBar status
 CodexRateLimitsBar rate-limits
 CodexRateLimitsBar local-usage
 CodexRateLimitsBar local-usage --rebuild
+CodexRateLimitsBar pricing
+CodexRateLimitsBar pricing --export-builtin
+CodexRateLimitsBar pricing --validate /path/to/pricing.json
 CodexRateLimitsBar reset-credits
 CodexRateLimitsBar usage
 CodexRateLimitsBar mcp

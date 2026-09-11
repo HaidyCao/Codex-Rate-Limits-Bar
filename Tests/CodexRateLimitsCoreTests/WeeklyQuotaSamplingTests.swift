@@ -6,6 +6,7 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
     private let start = ISO8601DateFormatter().date(from: "2026-09-11T00:00:00Z")!
     private var now = ISO8601DateFormatter().date(from: "2026-09-11T00:00:00Z")!
     private var root: URL!
+    private var pricing = PricingCatalog.builtin
     private var active: URL { root.appendingPathComponent("z-active") }
     private var other: URL { root.appendingPathComponent("a-other") }
     private var file: URL { active.appendingPathComponent("usage.jsonl") }
@@ -25,7 +26,7 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         return CodexBackend.LocalUsageScanner(rootURLs: copies ? [other, active] : [active], calendar: calendar,
-            now: { self.now }, cacheFileURL: cacheURL, weeklyRootURLs: [active])
+            now: { self.now }, cacheFileURL: cacheURL, weeklyRootURLs: [active], pricingProvider: { self.pricing })
     }
     private func at(_ minute: Int) -> Date { start.addingTimeInterval(Double(minute) * 60) }
     private func window(_ minute: Int) -> RateLimitWindow {
@@ -92,6 +93,47 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD, repriced.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.valuation?.sampleCount, before.weeklyQuotaCost?.valuation?.sampleCount)
         XCTAssertEqual(rebuilt.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
+    }
+
+    func testCatalogPriceChangeRecalculatesWeeklyEvidenceAndRecordsVersionAcrossRestart() throws {
+        let scanner = scanner()
+        let before = try train(scanner)
+        var document = pricing.document
+        document.api.version = "custom-price-v2"
+        document.api.models["gpt-5.6-sol"]?.input = 8
+        pricing = PricingCatalog.snapshot(document, source: "custom", path: "/fixture/pricing.json", error: nil)
+        let changed = try scanner.snapshot(weeklyWindow: window(95), quotaSampleAt: now)
+        XCTAssertEqual(try XCTUnwrap(changed.weeklyQuotaCost?.estimatedQuotaUSD), 4.8, accuracy: 0.000001)
+        XCTAssertEqual(changed.weeklyQuotaCost?.valuation?.sampleCount, before.weeklyQuotaCost?.valuation?.sampleCount)
+        XCTAssertEqual(changed.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
+        XCTAssertEqual(changed.pricing?.previousAPIVersion, before.pricing?.api.version)
+        XCTAssertEqual(changed.pricing?.api.version, "custom-price-v2")
+        XCTAssertNotNil(changed.pricing?.changedAtIso)
+        XCTAssertEqual(changed.todayCredits?.estimatedCredits, before.todayCredits?.estimatedCredits)
+        let restarted = try self.scanner().snapshot(weeklyWindow: window(95), quotaSampleAt: now)
+        XCTAssertEqual(restarted.pricing, changed.pricing)
+        XCTAssertEqual(restarted.weeklyQuotaCost?.estimatedQuotaUSD, changed.weeklyQuotaCost?.estimatedQuotaUSD)
+        let rebuilt = try scanner.snapshot(weeklyWindow: window(95), rebuild: true, quotaSampleAt: now)
+        XCTAssertEqual(rebuilt.pricing, changed.pricing)
+        XCTAssertEqual(rebuilt.weeklyQuotaCost?.estimatedQuotaUSD, changed.weeklyQuotaCost?.estimatedQuotaUSD)
+    }
+
+    func testMetadataOnlyCatalogChangeKeepsAllFileStates() throws {
+        let scanner = scanner()
+        _ = try train(scanner)
+        func files() throws -> NSDictionary {
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as? [String: Any])
+            let cache = try XCTUnwrap(root["cache"] as? [String: Any])
+            return try XCTUnwrap(cache["files"] as? NSDictionary)
+        }
+        let before = try files()
+        var document = pricing.document
+        document.api.version = "metadata-only-v2"
+        pricing = PricingCatalog.snapshot(document, source: "custom", path: nil, error: nil)
+        let changed = try scanner.snapshot(weeklyWindow: window(95), quotaSampleAt: now)
+        XCTAssertEqual(try files(), before)
+        XCTAssertNotNil(changed.pricing?.previousFingerprint)
+        XCTAssertEqual(changed.weeklyQuotaCost?.valuation?.status, .ready)
     }
 
     func testAccountAndQuotaResetStartNewEvidenceAndIgnoreLateOldWindows() throws {

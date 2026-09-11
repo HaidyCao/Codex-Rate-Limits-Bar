@@ -538,9 +538,11 @@ public enum CodexBackend {
         private var scanIssues: [UsageScanIssue] = []
         private var rootStatuses: [UsageRootStatus] = []
         private var timelineStartedAt: Date?
+        private var pricingProvider: () -> PricingSnapshot = { PricingCatalog.builtin }
         private let allowMissingRoots: Bool
 
         init() {
+            pricingProvider = { PricingCatalog.load() }
             allowMissingRoots = ProcessInfo.processInfo.environment["CODEX_SESSIONS_DIR"]?.isEmpty != false
             rootURLsProvider = { CodexBackend.localUsageRootURLs() }
             weeklyRootURLsProvider = { CodexBackend.weeklyUsageRootURLs() }
@@ -550,13 +552,15 @@ public enum CodexBackend {
         }
 
         init(rootURLs: [URL], calendar: Calendar, now: @escaping () -> Date, cacheFileURL: URL? = nil,
-             weeklyRootURLs: [URL]? = nil, allowMissingRoots: Bool = false) {
+             weeklyRootURLs: [URL]? = nil, allowMissingRoots: Bool = false,
+             pricingProvider: @escaping () -> PricingSnapshot = { PricingCatalog.builtin }) {
             self.allowMissingRoots = allowMissingRoots
             rootURLsProvider = { rootURLs }
             weeklyRootURLsProvider = { weeklyRootURLs ?? rootURLs }
             nowProvider = now
             calendarProvider = { calendar }
             self.cacheFileURL = cacheFileURL
+            self.pricingProvider = pricingProvider
         }
 
         init(
@@ -579,8 +583,10 @@ public enum CodexBackend {
             defer { lock.unlock() }
             defer { _ = malloc_zone_pressure_relief(nil, 0) }
             return try autoreleasepool {
-                try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation,
-                               rebuild: rebuild, quotaSampleAt: quotaSampleAt)
+                try PricingCatalog.$current.withValue(pricingProvider()) {
+                    try scanLocked(weeklyWindow: weeklyWindow, accountContext: accountContext, invalidateWeeklyObservation: invalidateWeeklyObservation,
+                                   rebuild: rebuild, quotaSampleAt: quotaSampleAt)
+                }
             }
         }
 
@@ -633,7 +639,8 @@ public enum CodexBackend {
                     dayStart: dayStart,
                     dayEnd: dayEnd,
                     files: previous.files.mapValues { $0.resetForNewDay() },
-                    weeklyCostObservation: previous.weeklyCostObservation
+                    weeklyCostObservation: previous.weeklyCostObservation,
+                    pricing: previous.pricing
                 )
                 isColdScan = false
                 cacheChanged = true
@@ -646,6 +653,20 @@ public enum CodexBackend {
             guard var cache else {
                 throw RuntimeError("local usage cache unavailable")
             }
+            var pricing = PricingCatalog.current.metadata
+            if let previous = cache.pricing {
+                pricing.previousFingerprint = previous.previousFingerprint
+                pricing.previousAPIVersion = previous.previousAPIVersion
+                pricing.previousCreditsVersion = previous.previousCreditsVersion
+                pricing.changedAtIso = previous.changedAtIso
+                if previous.fingerprint != pricing.fingerprint {
+                    pricing.previousFingerprint = previous.fingerprint
+                    pricing.previousAPIVersion = previous.api.version
+                    pricing.previousCreditsVersion = previous.credits.version
+                    pricing.changedAtIso = ISO8601DateFormatter().string(from: now)
+                }
+            }
+            if cache.pricing != pricing { cache.pricing = pricing; cacheChanged = true }
             if cache.source != source {
                 cache.source = source
                 cacheChanged = true
@@ -1450,7 +1471,7 @@ public enum CodexBackend {
             let diagnostics = makeDiagnostics(cache: cache, filesDiscovered: filesScanned)
             let assumptions = todayCostAccumulator.billingAssumptions()
             let weeklyDiagnostics = makeDiagnostics(cache: cache, filesDiscovered: filesScanned, roots: weeklyRoots)
-            let weeklyQuotaCost = makeWeeklyQuotaCost(
+            var weeklyQuotaCost = makeWeeklyQuotaCost(
                 observed: weeklyCostAccumulator.estimate(),
                 window: weeklyWindow,
                 observation: cache.weeklyCostObservation,
@@ -1459,6 +1480,8 @@ public enum CodexBackend {
                 assumptions: weeklyCostAccumulator.billingAssumptions(),
                 timeline: weeklyTimeline, quotaSampleAt: quotaSampleAt
             )
+            weeklyQuotaCost?.unpricedUsage = weeklyCostAccumulator.unpricedUsage()
+            let unpricedUsage = todayCostAccumulator.unpricedUsage()
 
             return LocalUsageSnapshot(
                 fetchedAtIso: ISO8601DateFormatter().string(from: now),
@@ -1494,12 +1517,16 @@ public enum CodexBackend {
                     estimatedCreditsLabel: AppText.todayEstimatedCredits(diagnostics.status == .unavailable ? nil : todayCredits),
                     pricingCoverageLabel: AppText.pricingCoverage(cost: todayCost, credits: todayCredits),
                     scanStatusLabel: AppText.scanStatus(diagnostics),
-                    billingAssumptionsLabel: AppText.billingAssumptions(assumptions)
+                    billingAssumptionsLabel: AppText.billingAssumptions(assumptions),
+                    pricingVersionLabel: AppText.pricingVersion(cache.pricing),
+                    unpricedUsageDetails: AppText.unpricedUsageDetails(unpricedUsage)
                 ),
                 todayCredits: todayCredits,
                 accountContext: accountContext,
                 diagnostics: diagnostics,
-                billingAssumptions: assumptions
+                billingAssumptions: assumptions,
+                pricing: cache.pricing,
+                unpricedUsage: unpricedUsage
             )
         }
 
@@ -1607,6 +1634,7 @@ public enum CodexBackend {
         var dayEnd: Date
         var files: [String: LocalUsageFileState] = [:]
         var weeklyCostObservation: LocalUsageWeeklyCostObservation?
+        var pricing: UsagePricingMetadata?
     }
 
     private struct LocalUsageWeeklyCostObservation: Codable {
@@ -2536,6 +2564,16 @@ public enum CodexCommandLine {
                 try writeJSON(CodexBackend.readCombined())
             case "local-usage":
                 try writeJSON(CodexBackend.readLocalTokenUsage(rebuild: arguments.dropFirst().contains("--rebuild")))
+            case "pricing":
+                switch Array(arguments.dropFirst()) {
+                case []: try writeJSON(PricingCatalog.load().metadata)
+                case ["--export-builtin"]: try writeJSON(PricingCatalog.builtin.document)
+                case ["--export"]: try writeJSON(PricingCatalog.load().document)
+                case let options where options.count == 2 && options[0] == "--validate":
+                    let url = URL(fileURLWithPath: (options[1] as NSString).expandingTildeInPath)
+                    try writeJSON(PricingCatalog.snapshot(PricingCatalog.read(url), source: "custom", path: url.path, error: nil).metadata)
+                default: throw RuntimeError("Usage: pricing [--export | --export-builtin | --validate FILE]")
+                }
             case "status":
                 try writeJSON(CodexBackend.readStatus())
             case "mcp":

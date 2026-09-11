@@ -115,6 +115,8 @@ public struct LocalUsageDisplay: Codable, Sendable {
     public var pricingCoverageLabel: String? = nil
     public var scanStatusLabel: String? = nil
     public var billingAssumptionsLabel: String? = nil
+    public var pricingVersionLabel: String? = nil
+    public var unpricedUsageDetails: String? = nil
 }
 
 public struct UsageModelCost: Codable, Sendable {
@@ -125,6 +127,9 @@ public struct UsageModelCost: Codable, Sendable {
     public let outputTokens: Int64
     public let totalTokens: Int64
     public let estimatedCostUSD: Double?
+    public var unpricedTokens: Int64? = nil
+    public var canonicalModel: String? = nil
+    public var pricingSource: String? = nil
 }
 
 public struct UsageCostEstimate: Codable, Sendable {
@@ -139,7 +144,7 @@ public struct UsageCostEstimate: Codable, Sendable {
     }
 
     public var unpricedModels: [String] {
-        models.filter { $0.estimatedCostUSD == nil && $0.totalTokens > 0 }.map(\.model)
+        models.filter { ($0.unpricedTokens ?? ($0.estimatedCostUSD == nil ? $0.totalTokens : 0)) > 0 }.map(\.model)
     }
 }
 
@@ -148,6 +153,8 @@ public struct UsageModelCredits: Codable, Sendable {
     public let totalTokens: Int64
     public let estimatedCredits: Double?
     public let unpricedTokens: Int64
+    public var canonicalModel: String? = nil
+    public var pricingSource: String? = nil
 }
 
 public struct UsageCreditEstimate: Codable, Sendable {
@@ -183,6 +190,7 @@ public struct WeeklyQuotaCostEstimate: Codable, Sendable {
     public var billingAssumptions: UsageBillingAssumptions? = nil
     public var inferencePauseReason: String? = nil
     public var valuation: WeeklyQuotaValuation? = nil
+    public var unpricedUsage: [UnpricedUsage]? = nil
 }
 
 public struct LocalUsageTopFile: Codable, Sendable {
@@ -225,6 +233,8 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public var accountContext: CodexAccountContext? = nil
     public var diagnostics: UsageScanDiagnostics? = nil
     public var billingAssumptions: UsageBillingAssumptions? = nil
+    public var pricing: UsagePricingMetadata? = nil
+    public var unpricedUsage: [UnpricedUsage]? = nil
 }
 
 public struct RuntimeError: Error, LocalizedError {

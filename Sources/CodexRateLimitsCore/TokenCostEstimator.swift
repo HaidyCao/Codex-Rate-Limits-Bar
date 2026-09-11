@@ -73,151 +73,70 @@ public enum USDFormatter {
 }
 
 enum TokenCostEstimator {
-    // Standard API-equivalent prices checked on 2026-09-11, in USD per 1M tokens.
-    // https://developers.openai.com/api/docs/pricing
-    static let longContextInputThreshold: Int64 = 272_000
-
-    private struct Price: Sendable {
-        let input: Double
-        let cachedInput: Double
-        let cacheWriteInput: Double
-        let output: Double
-        let usesLongContextTier: Bool
-
-        init(
-            input: Double,
-            cachedInput: Double,
-            cacheWriteInput: Double? = nil,
-            output: Double,
-            usesLongContextTier: Bool = false
-        ) {
-            self.input = input
-            self.cachedInput = cachedInput
-            self.cacheWriteInput = cacheWriteInput ?? input
-            self.output = output
-            self.usesLongContextTier = usesLongContextTier
-        }
-    }
-
-    private static let prices: [String: Price] = [
-        "gpt-5.6-cyber": Price(input: 12.50, cachedInput: 1.25, cacheWriteInput: 15.625, output: 75.00, usesLongContextTier: true),
-        "gpt-6-astra": Price(input: 10.00, cachedInput: 1.00, cacheWriteInput: 12.50, output: 50.00, usesLongContextTier: true),
-        "gpt-5.6-sol": Price(input: 4.00, cachedInput: 0.40, cacheWriteInput: 5.00, output: 20.00, usesLongContextTier: true),
-        "gpt-5.6-terra": Price(input: 2.00, cachedInput: 0.20, cacheWriteInput: 2.50, output: 12.00, usesLongContextTier: true),
-        "gpt-5.6-luna": Price(input: 0.20, cachedInput: 0.02, cacheWriteInput: 0.25, output: 1.20, usesLongContextTier: true),
-        "gpt-5.5": Price(input: 5.00, cachedInput: 0.50, cacheWriteInput: 6.25, output: 30.00, usesLongContextTier: true),
-        "gpt-5.4": Price(input: 2.50, cachedInput: 0.25, cacheWriteInput: 3.125, output: 15.00, usesLongContextTier: true),
-        "gpt-5.4-mini": Price(input: 0.75, cachedInput: 0.075, output: 4.50),
-        "gpt-5.3-codex": Price(input: 1.75, cachedInput: 0.175, output: 14.00),
-        "gpt-5.3-chat-latest": Price(input: 1.75, cachedInput: 0.175, output: 14.00),
-        "gpt-5.2-codex": Price(input: 1.75, cachedInput: 0.175, output: 14.00),
-        "gpt-5.2-chat-latest": Price(input: 1.75, cachedInput: 0.175, output: 14.00),
-        "gpt-5.2": Price(input: 1.75, cachedInput: 0.175, output: 14.00),
-        "gpt-5.1-codex-max": Price(input: 1.25, cachedInput: 0.125, output: 10.00),
-        "gpt-5.1-codex-mini": Price(input: 0.25, cachedInput: 0.025, output: 2.00),
-        "gpt-5.1-codex": Price(input: 1.25, cachedInput: 0.125, output: 10.00),
-        "gpt-5-codex": Price(input: 1.25, cachedInput: 0.125, output: 10.00),
-        "gpt-5": Price(input: 1.25, cachedInput: 0.125, output: 10.00),
-    ]
-
-    private static let aliases = [
-        "gpt-5.6": "gpt-5.6-sol",
-        "gpt-5.6-latest": "gpt-5.6-sol",
-        "gpt-daybreak-blue-latest": "gpt-5.6-sol",
-        "gpt-daybreak-red-latest": "gpt-5.6-cyber",
-    ]
-
-    static func canonicalModel(_ model: String?) -> String? {
-        guard let model = model?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              !model.isEmpty else { return nil }
-        if let alias = aliases[model] { return alias }
-        if prices[model] != nil { return model }
-        // Only dated snapshots may inherit a base price. Spark, Pro and future
-        // variants are distinct models, even when their names share a prefix.
-        guard let suffix = model.range(of: #"-[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression)
-        else { return nil }
-        let base = String(model[..<suffix.lowerBound])
-        if base == "gpt-5.6" { return "gpt-5.6-sol" }
-        return prices[base] != nil ? base : nil
-    }
-
-    // Persist the effective rules with each raw model bucket. A price or alias
-    // change invalidates only affected files, without discarding weekly baselines.
+    static func canonicalModel(_ model: String?) -> String? { PricingCatalog.current.document.api.canonical(model) }
     static func pricingSignature(for model: String) -> String {
-        let canonical = canonicalModel(model) ?? model
-        let api = prices[canonical].map {
-            "\($0.input)/\($0.cachedInput)/\($0.cacheWriteInput)/\($0.output)/\($0.usesLongContextTier)"
-        } ?? "unpriced"
-        return "raw-model-v1|\(canonical)|\(api)|\(CodexCreditEstimator.signature(for: canonical))"
+        let snapshot = PricingCatalog.current
+        let api = canonicalModel(model).flatMap { snapshot.apiSignatures[$0] } ?? "unpriced"
+        let credits = snapshot.document.credits.canonical(model).flatMap { snapshot.creditSignatures[$0] } ?? "unpriced"
+        return "pricing-v2|\(api)|\(credits)"
     }
-
     static func needsRequestContext(_ model: String?) -> Bool {
-        canonicalModel(model).flatMap { prices[$0]?.usesLongContextTier } == true
+        PricingCatalog.current.document.api.rate(model)?.needsContext == true
     }
-
-    static func estimateUSD(
-        usage: TokenUsage,
-        model: String?,
-        requestInputTokens: Int64? = nil
-    ) -> Double? {
-        guard let model = canonicalModel(model), let price = prices[model] else { return nil }
-        let isLongContext = price.usesLongContextTier
-            && requestInputTokens.map { $0 > longContextInputThreshold } == true
-        let inputMultiplier = isLongContext ? 2.0 : 1.0
-        let outputMultiplier = isLongContext ? 1.5 : 1.0
-        let cost = Double(usage.uncachedInputTokens) * price.input * inputMultiplier
-            + Double(usage.cachedInputTokens) * price.cachedInput * inputMultiplier
-            + Double(usage.cacheWriteInputTokens) * price.cacheWriteInput * inputMultiplier
-            + Double(usage.outputTokens) * price.output * outputMultiplier
-        return cost / 1_000_000
+    static func estimateUSD(usage: TokenUsage, model: String?, requestInputTokens: Int64? = nil) -> Double? {
+        PricingCatalog.current.document.api.rate(model)?.estimate(usage, requestInput: requestInputTokens)
     }
 }
 
 struct TokenCostAccumulator: Codable {
-    private struct Bucket: Codable {
-        var usage = TokenUsage()
-        var estimatedCostUSD: Double?
-        var pricingSignature: String?
-        var credits: CreditTotals?
-        var assumptions: UsageBillingAssumptions?
-    }
-
-    private struct CreditTotals: Codable {
+    private struct Totals: Codable {
         var amount = 0.0
         var pricedTokens: Int64 = 0
         var unpricedTokens: Int64 = 0
         var assumedStandardTokens: Int64 = 0
-
-        mutating func merge(_ other: CreditTotals) {
+        mutating func merge(_ other: Totals) {
             amount += other.amount
             pricedTokens += other.pricedTokens
             unpricedTokens += other.unpricedTokens
             assumedStandardTokens += other.assumedStandardTokens
         }
+        var estimate: Double? { pricedTokens > 0 ? amount : nil }
     }
-
+    private struct Missing: Codable {
+        let kind: String
+        let tier: String?
+        let reason: String
+        var tokens: Int64
+    }
+    private struct Bucket: Codable {
+        var usage = TokenUsage()
+        var pricingSignature: String?
+        var api: Totals?
+        var credits: Totals?
+        var assumptions: UsageBillingAssumptions?
+        var missing: [Missing]?
+    }
     private var buckets: [String: Bucket] = [:]
 
     var hasNewlyPricedModels: Bool {
         buckets.contains { model, bucket in
-            bucket.estimatedCostUSD == nil && TokenCostEstimator.canonicalModel(model) != nil
+            bucket.api == nil && TokenCostEstimator.canonicalModel(model) != nil
+                && bucket.pricingSignature != TokenCostEstimator.pricingSignature(for: model)
         }
     }
-
     var requiresRepricing: Bool {
-        hasNewlyPricedModels || buckets.contains { model, bucket in
-            bucket.pricingSignature != TokenCostEstimator.pricingSignature(for: model) || bucket.assumptions == nil
+        buckets.contains { model, bucket in
+            bucket.pricingSignature != TokenCostEstimator.pricingSignature(for: model)
+                || bucket.assumptions == nil || bucket.api == nil || bucket.missing == nil
         }
     }
 
     mutating func add(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String? = nil) {
-        let raw = model?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let raw = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = raw.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
         let signature = TokenCostEstimator.pricingSignature(for: label)
-        let existing = buckets[label]
-        var bucket = existing ?? Bucket(pricingSignature: signature, credits: CreditTotals(), assumptions: UsageBillingAssumptions())
-        let eventCost = TokenCostEstimator.estimateUSD(usage: usage, model: label, requestInputTokens: requestInputTokens)
-        let hadUnpricedUsage = existing != nil && bucket.estimatedCostUSD == nil
+        var bucket = buckets[label] ?? Bucket(pricingSignature: signature, api: Totals(), credits: Totals(),
+                                              assumptions: UsageBillingAssumptions(), missing: [])
         bucket.usage.add(usage)
         bucket.assumptions?.totalTokens += usage.totalTokens
         if serviceTier == nil { bucket.assumptions?.missingServiceTierTokens += usage.totalTokens }
@@ -225,84 +144,84 @@ struct TokenCostAccumulator: Codable {
         if requestInputTokens == nil, TokenCostEstimator.needsRequestContext(label) {
             bucket.assumptions?.assumedAPITokens += usage.totalTokens
         }
+        // A new event cannot upgrade stale cached requests to current prices.
         if bucket.pricingSignature == signature {
-            if let eventCost, !hadUnpricedUsage {
-                bucket.estimatedCostUSD = (bucket.estimatedCostUSD ?? 0) + eventCost
+            func missing(_ kind: String, _ reason: String) {
+                if let index = bucket.missing?.firstIndex(where: { $0.kind == kind && $0.tier == serviceTier && $0.reason == reason }) {
+                    bucket.missing?[index].tokens += usage.totalTokens
+                } else { bucket.missing?.append(Missing(kind: kind, tier: serviceTier, reason: reason, tokens: usage.totalTokens)) }
+            }
+            if let cost = TokenCostEstimator.estimateUSD(usage: usage, model: label, requestInputTokens: requestInputTokens) {
+                bucket.api?.amount += cost
+                bucket.api?.pricedTokens += usage.totalTokens
+            } else {
+                bucket.api?.unpricedTokens += usage.totalTokens
+                missing("api", TokenCostEstimator.canonicalModel(label) == nil ? "unknownModel" : "unsupportedContext")
             }
             if let value = CodexCreditEstimator.estimate(usage: usage, model: label,
                                                        requestInputTokens: requestInputTokens, serviceTier: serviceTier) {
                 bucket.credits?.amount += value
                 bucket.credits?.pricedTokens += usage.totalTokens
-                if serviceTier == nil {
-                    bucket.credits?.assumedStandardTokens += usage.totalTokens
-                }
+                if serviceTier == nil { bucket.credits?.assumedStandardTokens += usage.totalTokens }
                 if serviceTier == nil || (requestInputTokens == nil && CodexCreditEstimator.needsRequestContext(label)) {
                     bucket.assumptions?.assumedCreditTokens += usage.totalTokens
                 }
             } else {
                 bucket.credits?.unpricedTokens += usage.totalTokens
+                missing("credits", CodexCreditEstimator.unpricedReason(model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
             }
+        } else {
+            bucket.pricingSignature = nil
+            bucket.api = nil
+            bucket.credits = nil
+            bucket.missing = nil
         }
-        // Never upgrade stale history by appending one event. The scanner must
-        // replay its requests to recover models, context sizes and service tiers.
         buckets[label] = bucket
     }
 
     mutating func merge(_ other: TokenCostAccumulator) {
         for (model, otherBucket) in other.buckets {
-            guard var bucket = buckets[model] else {
-                buckets[model] = otherBucket
-                continue
-            }
+            guard var bucket = buckets[model] else { buckets[model] = otherBucket; continue }
             bucket.usage.add(otherBucket.usage)
             if let assumptions = otherBucket.assumptions { bucket.assumptions?.merge(assumptions) }
             else { bucket.assumptions = nil }
             if bucket.pricingSignature == otherBucket.pricingSignature {
-                if let cost = bucket.estimatedCostUSD, let otherCost = otherBucket.estimatedCostUSD {
-                    bucket.estimatedCostUSD = cost + otherCost
-                } else {
-                    bucket.estimatedCostUSD = nil
-                }
-                if let credits = otherBucket.credits { bucket.credits?.merge(credits) }
-                else { bucket.credits = nil }
+                if let api = otherBucket.api { bucket.api?.merge(api) } else { bucket.api = nil }
+                if let credits = otherBucket.credits { bucket.credits?.merge(credits) } else { bucket.credits = nil }
+                if let missing = otherBucket.missing {
+                    for entry in missing {
+                        if let index = bucket.missing?.firstIndex(where: { $0.kind == entry.kind && $0.tier == entry.tier && $0.reason == entry.reason }) {
+                            bucket.missing?[index].tokens += entry.tokens
+                        } else { bucket.missing?.append(entry) }
+                    }
+                } else { bucket.missing = nil }
             } else {
                 bucket.pricingSignature = nil
-                bucket.estimatedCostUSD = nil
+                bucket.api = nil
                 bucket.credits = nil
+                bucket.missing = nil
             }
             buckets[model] = bucket
         }
     }
 
     func estimate() -> UsageCostEstimate {
-        var knownCost = 0.0
-        var pricedTokens: Int64 = 0
-        var unpricedTokens: Int64 = 0
+        var totals = Totals()
         var models: [UsageModelCost] = []
         for (model, bucket) in buckets {
-            let cost = bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model)
-                ? bucket.estimatedCostUSD : nil
-            if let cost {
-                knownCost += cost
-                pricedTokens += bucket.usage.totalTokens
-            } else {
-                unpricedTokens += bucket.usage.totalTokens
-            }
-            models.append(UsageModelCost(
-                model: model, inputTokens: bucket.usage.inputTokens,
-                cachedInputTokens: bucket.usage.cachedInputTokens,
-                cacheWriteInputTokens: bucket.usage.cacheWriteInputTokens,
-                outputTokens: bucket.usage.outputTokens, totalTokens: bucket.usage.totalTokens,
-                estimatedCostUSD: cost
-            ))
+            let current = bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model) && bucket.missing != nil
+            let value = (current ? bucket.api : nil) ?? Totals(unpricedTokens: bucket.usage.totalTokens)
+            totals.merge(value)
+            models.append(UsageModelCost(model: model, inputTokens: bucket.usage.inputTokens,
+                cachedInputTokens: bucket.usage.cachedInputTokens, cacheWriteInputTokens: bucket.usage.cacheWriteInputTokens,
+                outputTokens: bucket.usage.outputTokens, totalTokens: bucket.usage.totalTokens, estimatedCostUSD: value.estimate,
+                unpricedTokens: value.unpricedTokens, canonicalModel: TokenCostEstimator.canonicalModel(model), pricingSource: PricingCatalog.current.metadata.source))
         }
-        let total = pricedTokens + unpricedTokens
+        let total = totals.pricedTokens + totals.unpricedTokens
         models.sort { $0.totalTokens == $1.totalTokens ? $0.model < $1.model : $0.totalTokens > $1.totalTokens }
-        return UsageCostEstimate(
-            estimatedCostUSD: pricedTokens > 0 || total == 0 ? knownCost : nil,
-            coveragePercent: total > 0 ? Double(pricedTokens) / Double(total) * 100 : 100,
-            pricedTokens: pricedTokens, unpricedTokens: unpricedTokens, models: models
-        )
+        return UsageCostEstimate(estimatedCostUSD: total == 0 ? 0 : totals.estimate,
+            coveragePercent: total > 0 ? Double(totals.pricedTokens) / Double(total) * 100 : 100,
+            pricedTokens: totals.pricedTokens, unpricedTokens: totals.unpricedTokens, models: models)
     }
 
     func billingAssumptions() -> UsageBillingAssumptions {
@@ -315,26 +234,41 @@ struct TokenCostAccumulator: Codable {
     }
 
     func creditEstimate() -> UsageCreditEstimate {
-        var totals = CreditTotals()
+        var totals = Totals()
         var models: [UsageModelCredits] = []
         for (model, bucket) in buckets {
-            let credits = bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model)
-                ? bucket.credits : nil
-            let value = credits ?? CreditTotals(unpricedTokens: bucket.usage.totalTokens)
+            let current = bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model) && bucket.missing != nil
+            let value = (current ? bucket.credits : nil) ?? Totals(unpricedTokens: bucket.usage.totalTokens)
             totals.merge(value)
-            models.append(UsageModelCredits(
-                model: model, totalTokens: bucket.usage.totalTokens,
-                estimatedCredits: value.pricedTokens > 0 ? value.amount : nil,
-                unpricedTokens: value.unpricedTokens
-            ))
+            models.append(UsageModelCredits(model: model, totalTokens: bucket.usage.totalTokens,
+                estimatedCredits: value.estimate, unpricedTokens: value.unpricedTokens,
+                canonicalModel: PricingCatalog.current.document.credits.canonical(model), pricingSource: PricingCatalog.current.metadata.source))
         }
         let total = totals.pricedTokens + totals.unpricedTokens
         models.sort { $0.totalTokens == $1.totalTokens ? $0.model < $1.model : $0.totalTokens > $1.totalTokens }
-        return UsageCreditEstimate(
-            estimatedCredits: totals.pricedTokens > 0 || total == 0 ? totals.amount : nil,
+        return UsageCreditEstimate(estimatedCredits: total == 0 ? 0 : totals.estimate,
             coveragePercent: total > 0 ? Double(totals.pricedTokens) / Double(total) * 100 : 100,
             pricedTokens: totals.pricedTokens, unpricedTokens: totals.unpricedTokens,
-            assumedStandardTokens: totals.assumedStandardTokens, models: models
-        )
+            assumedStandardTokens: totals.assumedStandardTokens, models: models)
+    }
+
+    func unpricedUsage() -> [UnpricedUsage] {
+        let total = buckets.values.reduce(Int64(0)) { $0 + $1.usage.totalTokens }
+        guard total > 0 else { return [] }
+        return buckets.flatMap { model, bucket -> [UnpricedUsage] in
+            let current = bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model) && bucket.missing != nil
+            let entries = ["api", "credits"].flatMap { kind -> [Missing] in
+                let totals = kind == "api" ? bucket.api : bucket.credits
+                return current && totals != nil ? bucket.missing!.filter { $0.kind == kind }
+                    : [Missing(kind: kind, tier: nil, reason: "stalePricing", tokens: bucket.usage.totalTokens)]
+            }
+            return entries.filter { $0.tokens > 0 }.map {
+                UnpricedUsage(kind: $0.kind, model: model, serviceTier: $0.tier, reason: $0.reason,
+                              totalTokens: $0.tokens, percent: Double($0.tokens) / Double(total) * 100)
+            }
+        }.sorted { lhs, rhs in
+            if lhs.totalTokens != rhs.totalTokens { return lhs.totalTokens > rhs.totalTokens }
+            return [lhs.kind, lhs.model, lhs.serviceTier ?? "", lhs.reason].lexicographicallyPrecedes([rhs.kind, rhs.model, rhs.serviceTier ?? "", rhs.reason])
+        }
     }
 }
