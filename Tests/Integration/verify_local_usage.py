@@ -293,7 +293,29 @@ for line in sys.stdin:
         assert switched["accountContext"]["accountKey"] != persistent["accountContext"]["accountKey"]
         assert switched["localUsage"]["weeklyQuotaCost"]["accountScopeKey"] != before["accountScopeKey"]
         assert switched["localUsage"]["totalTokens"] == 1000
-    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives and account switches.")
+        # Mutually incomplete archived/live copies must agree across processes.
+        original = [json.loads(line) for line in (sessions / "renamed-copy.jsonl").read_text().splitlines()]
+        instant = datetime.now(timezone.utc) - timedelta(seconds=5)
+        def sample(total, second):
+            value = json.loads(json.dumps(original[-1]))
+            value["timestamp"] = (instant + timedelta(seconds=second)).isoformat().replace("+00:00", "Z")
+            value["payload"]["info"]["total_token_usage"] = {"input_tokens": total, "total_tokens": total}
+            return value
+        for path, values, prefix in [(archive / "renamed.jsonl", [sample(100, 1), sample(300, 3)], "\n \t\r\n"),
+                                      (sessions / "renamed-copy.jsonl", [sample(200, 2), sample(300, 3)], "")]:
+            path.write_text(prefix + "".join(json.dumps(value) + "\n" for value in original[:-1] + values))
+        observation = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
+        values = [json.loads(run("status"))["localUsage"], mcp("get_codex_status")["localUsage"],
+                  json.loads(run("local-usage", "--rebuild")), mcp("get_codex_local_usage")]
+        for value in values:
+            assert value["totalTokens"] == 300
+            assert abs(value["todayCost"]["estimatedCostUSD"] - 0.0012) < 1e-12
+            assert abs(value["todayCredits"]["estimatedCredits"] - 0.03) < 1e-12
+            assert value["diagnostics"]["status"] == "complete"
+        current = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
+        for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
+            assert current[key] == observation[key]
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches and complementary copies.")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ flowchart TD
     Official --> Normalize[OfficialResponseNormalizer]
     Scanner --> Store[LocalUsageCacheStore / LocalUsageCache]
     Scanner --> Log[LocalUsageLog / LocalUsagePaths]
+    Scanner --> Copies[UsageCopyLedger：副本历史对齐]
     Scanner --> Pricing[PricingCatalog / 估算器]
 ```
 
@@ -30,7 +31,8 @@ flowchart TD
 | 官方认证归属、额度和重置券回退 | `CodexAccountContext`、`OfficialUsageClient` |
 | 官方响应字段及格式兼容 | `OfficialResponseNormalizer` |
 | 子进程或 HTTP 超时与清理 | `OfficialUsageTransport`；可执行文件发现共用 `CodexProcess` |
-| 日志解析、去重、全量和增量统计 | `LocalUsageScanner`、`LocalUsageLog`、`UsageFileIdentity` |
+| 日志解析、文件身份、全量和增量统计 | `LocalUsageScanner`、`LocalUsageLog`、`UsageFileIdentity` |
+| 副本历史对齐、日/周来源范围及贡献归属 | `UsageCopyLedger` |
 | 缓存文档、文件锁、磁盘读写 | `LocalUsageCache`、`LocalUsageCacheStore` |
 | 目录选择及账户来源范围 | `LocalUsagePaths`、`CodexPaths` |
 | 请求合并、退避、过期状态、结果接受规则 | `RefreshCoordinator`（`RefreshState.swift`） |

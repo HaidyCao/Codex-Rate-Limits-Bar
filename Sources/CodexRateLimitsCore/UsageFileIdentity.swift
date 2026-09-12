@@ -20,21 +20,29 @@ struct UsageFileStamp: Codable, Equatable {
 }
 
 enum UsageFileIdentity {
-    static func sessionID(at url: URL) -> String? {
+    static func sessionID(at url: URL) throws -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var line = Data()
         while line.count <= 8 * 1_048_576 {
+            try RefreshWork.check()
             guard let chunk = try? handle.read(upToCount: 4096), !chunk.isEmpty else { return nil }
-            if let end = chunk.firstIndex(of: 0x0A) {
-                line.append(chunk.prefix(upTo: end))
+            var start = chunk.startIndex
+            while let end = chunk[start...].firstIndex(of: 0x0A) {
+                line.append(chunk[start..<end])
+                guard line.count <= 8 * 1_048_576 else { return nil }
+                start = chunk.index(after: end)
+                if LocalUsageLog.isBlankLine(line) {
+                    line.removeAll(keepingCapacity: true)
+                    continue
+                }
                 guard let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
                       event["type"] as? String == "session_meta", let payload = event["payload"] as? [String: Any]
                 else { return nil }
                 let id = ((payload["id"] as? String) ?? (payload["session_id"] as? String))?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return id.flatMap { $0.isEmpty ? nil : $0 }
             }
-            line.append(chunk)
+            line.append(chunk[start...])
         }
         return nil
     }
@@ -58,61 +66,5 @@ enum UsageFileIdentity {
 
     static func digest(_ hasher: SHA256) -> String {
         hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-/// Used only while replaying a session that has multiple physical copies.
-/// Persist compact totals, not individual token events or this temporary ledger.
-final class UsageCopyLedger {
-    struct Contribution {
-        var usage: TokenUsage
-        let model: String?
-        let tier: String?
-        let requestInput: Int64?
-        let timestamp: String?
-        var dailyOwner: String?
-        var weeklyOwner: String?
-    }
-    private(set) var contributions: [Data: Contribution] = [:]
-    private var dailyOwners: [Data: String] = [:]
-    var path = ""
-    var isWeeklySource = false
-
-    func record(key: Data, usage: TokenUsage, model: String?, tier: String?, requestInput: Int64?,
-                timestamp: String?, today: Bool, weekly: Bool) {
-        guard today || (weekly && isWeeklySource) else { return }
-        var contribution = contributions[key] ?? Contribution(usage: usage, model: model, tier: tier,
-                                                               requestInput: requestInput, timestamp: timestamp)
-        // A copy may omit intermediate cumulative samples. The most precise
-        // observed delta wins, independently of filename or scan order.
-        if usage.totalTokens < contribution.usage.totalTokens { contribution.usage = usage }
-        if today, contribution.dailyOwner == nil { contribution.dailyOwner = path }
-        if weekly, isWeeklySource, contribution.weeklyOwner == nil { contribution.weeklyOwner = path }
-        contributions[key] = contribution
-    }
-
-    func claimDaily(_ key: Data) -> Bool {
-        if let owner = dailyOwners[key] { return owner == path }
-        dailyOwners[key] = path
-        return true
-    }
-
-    static func eventKey(session: String?, activeSession: String?, timestamp: Date?, usage: TokenUsage,
-                         model: String?, tier: String?, requestInput: Int64?, imported: Bool) -> Data {
-        struct Identity: Encodable {
-            let session: String?
-            let activeSession: String?
-            let timestamp: Date?
-            let usage: TokenUsage
-            let model: String?
-            let tier: String?
-            let requestInput: Int64?
-            let imported: Bool
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let value = Identity(session: session, activeSession: activeSession, timestamp: timestamp, usage: usage,
-                             model: model, tier: tier, requestInput: requestInput, imported: imported)
-        return Data(SHA256.hash(data: try! encoder.encode(value)))
     }
 }

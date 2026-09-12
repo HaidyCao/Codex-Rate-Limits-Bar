@@ -17,6 +17,27 @@ struct JsonlDiscovery {
 
 
 enum LocalUsageLog {
+    /// Owned by one scanner and accessed only while that scanner holds its lock.
+    /// Constructing ISO parsers per token event dominates dense copied histories.
+    final class TimestampParser {
+        private let fractional = ISO8601DateFormatter()
+        private let plain = ISO8601DateFormatter()
+
+        init() {
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            plain.formatOptions = [.withInternetDateTime]
+        }
+
+        func parse(_ value: String?) -> Date? {
+            guard let value else { return nil }
+            return fractional.date(from: value) ?? plain.date(from: value)
+        }
+    }
+
+    static func isBlankLine(_ data: Data) -> Bool {
+        data.allSatisfy { $0 == 0x20 || $0 == 0x09 || $0 == 0x0D || $0 == 0x0A }
+    }
+
     static func walkJsonlFileInfos(root: URL, dayStart: Date, allowMissing: Bool) throws -> JsonlDiscovery {
         var info = stat()
         let result = stat(root.path, &info)

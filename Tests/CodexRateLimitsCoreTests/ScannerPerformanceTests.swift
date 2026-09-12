@@ -4,6 +4,84 @@ import XCTest
 @testable import CodexRateLimitsCore
 
 final class ScannerPerformanceTests: XCTestCase {
+    func testSparseCopiedHistoriesStayCompactAndMatchRebuild() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["USAGE_RUN_BENCHMARKS"] == "1", "Run make benchmark for copied-history performance.")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("CopyBenchmark-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = root.appendingPathComponent("cache.json")
+        let now = ISO8601DateFormatter().date(from: "2026-09-11T12:00:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        func scanner() -> LocalUsageScanner {
+            LocalUsageScanner(rootURLs: [root], calendar: calendar, now: { now }, cacheFileURL: cache)
+        }
+        let count = 20_000
+        let header = Data("{\"type\":\"session_meta\",\"payload\":{\"id\":\"copy-benchmark\"}}\n".utf8)
+        func event(_ index: Int) -> Data {
+            Data("{\"timestamp\":\"2026-09-11T11:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"model\":\"gpt-5.6-sol\",\"service_tier\":\"standard\",\"total_token_usage\":{\"input_tokens\":\(index * 10),\"total_tokens\":\(index * 10)},\"last_token_usage\":{\"input_tokens\":10}}}}\n".utf8)
+        }
+        var paths: [URL] = []
+        for copy in 0..<6 {
+            let path = root.appendingPathComponent("\(copy).jsonl")
+            paths.append(path)
+            try header.write(to: path)
+            let handle = try FileHandle(forWritingTo: path)
+            try handle.seekToEnd()
+            for index in 1...count where index == count || (index * 17 + copy * 5) % 7 < 3 {
+                try handle.write(contentsOf: event(index))
+            }
+            try handle.close()
+        }
+        for copy in 6..<8 {
+            let path = root.appendingPathComponent("\(copy).jsonl")
+            try FileManager.default.copyItem(at: paths[0], to: path)
+            paths.append(path)
+        }
+        var timings: [String: Double] = [:]
+        func measure(_ name: String, _ body: () throws -> LocalUsageSnapshot) rethrows -> LocalUsageSnapshot {
+            let start = ProcessInfo.processInfo.systemUptime
+            let value = try body()
+            timings[name] = ProcessInfo.processInfo.systemUptime - start
+            return value
+        }
+        func check(_ value: LocalUsageSnapshot, events: Int) throws {
+            XCTAssertEqual(value.totalTokens, Int64(events * 10))
+            XCTAssertEqual(value.diagnostics?.status, .complete)
+            XCTAssertEqual(try XCTUnwrap(value.todayCost?.estimatedCostUSD), Double(events * 10) * 0.000004, accuracy: 1e-9)
+            XCTAssertEqual(try XCTUnwrap(value.todayCredits?.estimatedCredits), Double(events * 10) * 0.0001, accuracy: 1e-8)
+        }
+        let reader = scanner()
+        try check(measure("coldSeconds") { try reader.snapshot() }, events: count)
+        try check(measure("unchangedSeconds") { try reader.snapshot() }, events: count)
+        try check(measure("restartSeconds") { try scanner().snapshot() }, events: count)
+        for path in paths {
+            let handle = try FileHandle(forWritingTo: path)
+            try handle.seekToEnd(); try handle.write(contentsOf: event(count + 1)); try handle.close()
+        }
+        let appended = try measure("appendSeconds") { try reader.snapshot() }
+        let rebuilt = try measure("rebuildSeconds") { try reader.snapshot(rebuild: true) }
+        try check(appended, events: count + 1); try check(rebuilt, events: count + 1)
+        let matches = appended.totalTokens == rebuilt.totalTokens && appended.todayCost?.estimatedCostUSD == rebuilt.todayCost?.estimatedCostUSD
+            && appended.todayCredits?.estimatedCredits == rebuilt.todayCredits?.estimatedCredits && appended.eventCount == rebuilt.eventCount
+        XCTAssertTrue(matches)
+        let cacheBytes = try Data(contentsOf: cache).count
+        var usage = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
+        XCTAssertLessThan(cacheBytes, 1_048_576)
+        XCTAssertLessThan(usage.ru_maxrss, 256 * 1_048_576)
+        var report: [String: Any] = ["fullHistorySamples": count, "copies": paths.count,
+            "cacheBytes": cacheBytes, "peakRSSBytes": usage.ru_maxrss, "resultsMatch": matches, "totalTokens": rebuilt.totalTokens]
+        report.merge(timings) { _, new in new }
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        if let path = ProcessInfo.processInfo.environment["USAGE_BENCHMARK_OUTPUT"] {
+            let file = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("benchmark-copies.json")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: file)
+        }
+        print("Copied-history benchmark:\n" + String(decoding: data, as: UTF8.self))
+    }
+
     func testSyntheticLargeLogRemainsBoundedAndIncrementalResultsMatchRebuild() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["USAGE_RUN_BENCHMARKS"] == "1", "Run make benchmark for the synthetic large-log check.")
         let mib = Int(ProcessInfo.processInfo.environment["USAGE_BENCHMARK_MIB"] ?? "256") ?? 256

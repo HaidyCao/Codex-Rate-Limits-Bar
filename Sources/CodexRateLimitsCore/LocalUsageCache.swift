@@ -37,6 +37,9 @@ struct LocalUsageFileState: Codable {
     var prefixDigest: String?
     var copyMembers: [String]?
     var copyDay: String?
+    var copyAlgorithmVersion: Int?
+    var copyHistoryConflict: Bool?
+    var weeklyCopyHistoryConflict: Bool?
     var latestUsageAt: Date?
     var hasUsageBounds: Bool?
     var diagnostics: UsageFileDiagnostics?
@@ -62,6 +65,10 @@ struct LocalUsageFileState: Codable {
 
     var requiresCostRebuild: Bool {
         dailyCost?.requiresRepricing == true || weeklyCost?.requiresRepricing == true
+    }
+
+    var requiresBlankLineReplay: Bool {
+        parseErrorCount > 0 && diagnostics?.blankLinesChecked != true
     }
 
     func resetForNewDay() -> LocalUsageFileState {

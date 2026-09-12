@@ -8,6 +8,7 @@ final class LocalUsageScanner: @unchecked Sendable {
     private static let retainedHistoryDays = 8
 
     private let lock = NSLock()
+    private let timestampParser = LocalUsageLog.TimestampParser()
     private let rootURLsProvider: () -> [URL]
     private let weeklyRootURLsProvider: () -> [URL]
     private let nowProvider: () -> Date
@@ -178,8 +179,8 @@ final class LocalUsageScanner: @unchecked Sendable {
             for var file in discovery.files {
                 guard rebuild || file.modifiedAt >= discoveryStart || cache.files[file.url.path] != nil else { continue }
                 let state = cache.files[file.url.path]
-                file.sessionID = state?.fileStamp == file.stamp ? state?.primarySessionId : autoreleasepool {
-                    UsageFileIdentity.sessionID(at: file.url)
+                file.sessionID = state?.fileStamp == file.stamp ? state?.primarySessionId : try autoreleasepool {
+                    try UsageFileIdentity.sessionID(at: file.url)
                 }
                 // An unreadable replacement must remain in its old copy
                 // transaction until its new session identity is available.
@@ -198,6 +199,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             for path in Array(cache.files.keys) {
                 cache.files[path]?.weeklyCost = nil
                 cache.files[path]?.weeklyTimeline = nil
+                cache.files[path]?.weeklyCopyHistoryConflict = nil
             }
             cacheChanged = true
         }
@@ -235,6 +237,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                 guard let state = cache.files[file.url.path] else { return true }
                 return state.fileStamp != file.stamp || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
                     || state.diagnostics?.version != UsageFileDiagnostics.currentVersion
+                    || state.copyAlgorithmVersion != UsageCopyLedger.currentVersion || state.requiresBlankLineReplay
                     || state.copyMembers != paths || state.copyDay != localDate
             })
             let lostCopy = members.first?.sessionID.map { missingSessions.contains($0) } ?? false
@@ -257,6 +260,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                    return state.copyMembers == paths && state.copyDay == localDate && state.hasUsageBounds == true
                        && state.prefixDigest != nil && !state.requiresCostRebuild
                        && state.diagnostics?.version == UsageFileDiagnostics.currentVersion
+                       && state.copyAlgorithmVersion == UsageCopyLedger.currentVersion && !state.requiresBlankLineReplay
                }),
                members.filter({ $0.url.path != changedMembers[0].url.path }).allSatisfy({ file in
                    (cache.files[file.url.path]?.latestUsageAt ?? .distantPast) < activityStart
@@ -266,6 +270,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                 cacheChanged = scan(file, cache: &cache, historyStart: historyStart, now: now, stats: &stats) || cacheChanged
                 cache.files[file.url.path]?.copyMembers = paths
                 cache.files[file.url.path]?.copyDay = localDate
+                cache.files[file.url.path]?.copyAlgorithmVersion = UsageCopyLedger.currentVersion
                 if stats.readFailureCount > previousFailures {
                     scanIssues.append(UsageScanIssue(kind: .copyReplayIncomplete, path: file.url.path, count: 1,
                                                     message: "Could not refresh session copies; retained their previous totals."))
@@ -274,7 +279,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             }
             let previousStates = Dictionary(uniqueKeysWithValues: paths.compactMap { path in cache.files[path].map { (path, $0) } })
             let previousFailures = stats.readFailureCount
-            if replayCopies { copyLedger = UsageCopyLedger() }
+            if replayCopies { copyLedger = UsageCopyLedger(trackWeekly: cache.weeklyCostObservation != nil) }
             for file in members {
                 copyLedger?.path = file.url.path
                 copyLedger?.isWeeklySource = weeklyRoots.contains { file.url.path.hasPrefix($0 + "/") }
@@ -284,6 +289,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                 if hasCopies {
                     cache.files[file.url.path]?.copyMembers = paths
                     cache.files[file.url.path]?.copyDay = localDate
+                    cache.files[file.url.path]?.copyAlgorithmVersion = UsageCopyLedger.currentVersion
                 }
             }
             let completedLedger = copyLedger
@@ -295,7 +301,11 @@ final class LocalUsageScanner: @unchecked Sendable {
                                                     message: "Could not rebuild session copies; retained their previous totals."))
                 }
             } else if let completedLedger {
-                applyCopyContributions(completedLedger, cache: &cache)
+                try applyCopyContributions(completedLedger, cache: &cache)
+                for path in paths {
+                    cache.files[path]?.copyHistoryConflict = completedLedger.hasDailyConflict
+                    cache.files[path]?.weeklyCopyHistoryConflict = completedLedger.hasWeeklyConflict
+                }
             }
         }
 
@@ -341,28 +351,29 @@ final class LocalUsageScanner: @unchecked Sendable {
         return snapshot
     }
 
-    private func applyCopyContributions(_ ledger: UsageCopyLedger, cache: inout LocalUsageScanCache) {
-        for key in ledger.contributions.keys.sorted(by: { $0.lexicographicallyPrecedes($1) }) {
-            let event = ledger.contributions[key]!
+    private func applyCopyContributions(_ ledger: UsageCopyLedger, cache: inout LocalUsageScanCache) throws {
+        var latestDates: [String: Date] = [:]
+        for event in try ledger.resolvedContributions() {
+            try RefreshWork.check()
             if let path = event.dailyOwner, var state = cache.files[path] {
                 state.totals.add(event.usage)
                 var cost = state.dailyCost ?? TokenCostAccumulator()
                 cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
                 state.dailyCost = cost
                 state.eventCount += 1
-                if (parseIsoDate(state.lastEventAtIso) ?? .distantPast) < (parseIsoDate(event.timestamp) ?? .distantPast) {
+                let latest = latestDates[path] ?? timestampParser.parse(state.lastEventAtIso) ?? .distantPast
+                if latest < event.sampledAt {
                     state.lastEventAtIso = event.timestamp
                 }
+                latestDates[path] = max(latest, event.sampledAt)
                 cache.files[path] = state
             }
             if let path = event.weeklyOwner {
                 var cost = cache.files[path]?.weeklyCost ?? TokenCostAccumulator()
                 cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
                 cache.files[path]?.weeklyCost = cost
-                if let timestamp = parseIsoDate(event.timestamp) {
-                    addTimeline(usage: event.usage, model: event.model, requestInput: event.requestInput, tier: event.tier,
-                                at: timestamp, state: &cache.files[path]!)
-                }
+                addTimeline(usage: event.usage, model: event.model, requestInput: event.requestInput, tier: event.tier,
+                            at: event.sampledAt, state: &cache.files[path]!)
             }
         }
     }
@@ -475,6 +486,7 @@ final class LocalUsageScanner: @unchecked Sendable {
         for path in Array(cache.files.keys) {
             cache.files[path]?.weeklyCost = nil
             cache.files[path]?.weeklyTimeline = nil
+            cache.files[path]?.weeklyCopyHistoryConflict = nil
         }
         return true
     }
@@ -488,6 +500,7 @@ final class LocalUsageScanner: @unchecked Sendable {
         var state = previousState ?? LocalUsageFileState()
         var replay = force || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
             || state.diagnostics?.version != UsageFileDiagnostics.currentVersion
+            || state.requiresBlankLineReplay
             || file.size < state.offset || state.fileStamp?.identity != file.stamp.identity
         if !replay, state.fileStamp == file.stamp, file.size == state.offset { return false }
         do {
@@ -537,6 +550,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             state.modifiedAt = file.modifiedAt
             state.fileStamp = file.stamp
             state.hasUsageBounds = true
+            state.diagnostics?.blankLinesChecked = true
             state.prefixDigest = UsageFileIdentity.digest(hasher)
             cache.files[path] = state
             stats.filesRead += 1
@@ -661,7 +675,7 @@ final class LocalUsageScanner: @unchecked Sendable {
         weeklyObservationStart: Date?,
         now: Date
     ) {
-        guard !lineData.isEmpty else { return }
+        guard !LocalUsageLog.isBlankLine(lineData) else { return }
         let object: [String: Any]
         do {
             guard let value = try JSONSerialization.jsonObject(with: lineData) as? [String: Any],
@@ -731,7 +745,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             return
         }
 
-        let timestamp = parseIsoDate(stringValue(object["timestamp"]))
+        let timestamp = timestampParser.parse(stringValue(object["timestamp"]))
         guard timestamp != nil else {
             state.diagnostics?.invalidUsageRecords += 1
             return
@@ -752,26 +766,28 @@ final class LocalUsageScanner: @unchecked Sendable {
         let requestInputTokens = TokenUsage.nonnegativeInteger(dictionaryValue(info["last_token_usage"])?["input_tokens"])
         let serviceTier = LocalUsageLog.serviceTierFromPayload(info)
             ?? LocalUsageLog.serviceTierFromPayload(payload) ?? state.currentServiceTier
-        let eventKey = (isInHistory ? copyLedger : nil).map { _ in
+        let eventKey = copyLedger.map { _ in
             UsageCopyLedger.eventKey(session: state.primarySessionId, activeSession: state.activeSessionId,
                                      timestamp: timestamp, usage: currentTotalUsage, model: model, tier: serviceTier,
                                      requestInput: requestInputTokens, imported: isImportedForkEvent)
         }
         let countToday = isToday && (eventKey.map { copyLedger!.claimDaily($0) } ?? true)
+        let countWeekly = timestamp.map { time in
+            weeklyObservationStart.map { time > $0 && time <= now } ?? false
+        } ?? false
+        if let copyLedger, let eventKey, !isImportedForkEvent, !regressed {
+            copyLedger.observe(key: eventKey, current: currentTotalUsage, delta: delta, continuing: sameSession,
+                model: model, tier: serviceTier, requestInput: requestInputTokens, timestamp: timestamp!,
+                timestampText: stringValue(object["timestamp"]), today: isToday && isInHistory,
+                inWeeklyWindow: countWeekly && isInHistory)
+        }
         if isInHistory {
             if isImportedForkEvent {
                 if countToday {
                     state.importedEventCount += 1
                 }
             } else if let delta {
-                let countWeekly = timestamp.map { time in
-                    weeklyObservationStart.map { time > $0 && time <= now } ?? false
-                } ?? false
-                if let copyLedger, let eventKey {
-                    copyLedger.record(key: eventKey, usage: delta, model: model, tier: serviceTier,
-                                      requestInput: requestInputTokens, timestamp: stringValue(object["timestamp"]),
-                                      today: isToday, weekly: countWeekly)
-                } else {
+                if copyLedger == nil {
                     if countToday {
                         state.totals.add(delta)
                         var dailyCost = state.dailyCost ?? TokenCostAccumulator()
@@ -963,6 +979,9 @@ final class LocalUsageScanner: @unchecked Sendable {
                 if count > 0 { issues.append(UsageScanIssue(kind: kind, path: path, count: count, message: message)) }
             }
             append(.invalidJSON, state.parseErrorCount, "Malformed JSON records could not be read.")
+            let copyConflict = roots == nil ? state.copyHistoryConflict : state.weeklyCopyHistoryConflict
+            append(.copyReplayIncomplete, copyConflict == true ? 1 : 0,
+                   "Session copies contain incompatible cumulative histories; some overlaps could not be resolved.")
             append(.invalidUsage, file?.invalidUsageRecords ?? 0, "Records lack valid usage totals, timestamps or required event fields.")
             append(.oversizedRecord, file?.oversizedRecords ?? 0, "Records exceed the 8 MB parsing limit; their effect on usage could not be verified.")
             append(.pendingRecord, !state.pendingData.isEmpty || state.isSkippingOversizedLine == true ? 1 : 0,

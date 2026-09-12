@@ -94,6 +94,7 @@ public struct UsageBillingAssumptions: Codable, Sendable {
 struct UsageFileDiagnostics: Codable {
     static let currentVersion = 2
     var version = currentVersion
+    var blankLinesChecked: Bool? = true
     var validRecords = 0
     var todayUsageEvents = 0
     var invalidUsageRecords = 0

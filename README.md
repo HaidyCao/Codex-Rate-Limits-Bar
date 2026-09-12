@@ -61,12 +61,15 @@ Verified moves into archives transfer the cached entry without counting it twice
 
 Files with the same session ID share an event ledger during replay: matching
 timestamps, cumulative usage and billing context count once; distinct branch
-tails contribute their own increments. When a copy omits intermediate cumulative
-samples, the smallest observed delta for the matching event is used. Different
-session IDs remain separate even when filenames match. Existing fork-import and
-midnight-baseline rules still apply. The ledger is temporary and is not persisted.
+tails contribute their own increments. A matching later event aligns the histories
+since their previous common anchor: `[100, 300]` and `[200, 300]` total 300, while
+`[100, 200]` and `[100, 250]` remain separate tails totaling 350. Later convergence
+can revise a previously observed total. Different session IDs remain separate
+even when filenames match. Blank lines before session metadata are supported;
+fork-import and midnight-baseline rules still apply. The ledger is temporary and
+is not persisted. See [copy reconciliation](docs/copy-reconciliation.md).
 
-Daily and weekly contributions retain separate source ownership, so a copy in
+Daily and weekly histories are reconciled separately, so a copy in
 another home cannot remove the active account's weekly usage. `topFiles` entries
 include `sourceFiles` listing all known copies. If an unreadable or missing copy
 prevents a safe replay, the affected group retains its previous totals and reports
