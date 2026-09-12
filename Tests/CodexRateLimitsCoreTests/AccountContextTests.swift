@@ -39,10 +39,10 @@ final class AccountContextTests: XCTestCase {
         let alias = directory.appendingPathComponent("alias")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
         let environment = ["CODEX_HOME": alias.path]
-        let before = CodexBackend.weeklyUsageRootURLs(environment: environment, home: directory)
+        let before = LocalUsagePaths.weeklyUsageRootURLs(environment: environment, home: directory)
         let sourceBefore = CodexAccountSource(environment: environment, home: directory)
         try FileManager.default.createDirectory(at: actual.appendingPathComponent("archived_sessions"), withIntermediateDirectories: true)
-        XCTAssertEqual(CodexBackend.weeklyUsageRootURLs(environment: environment, home: directory).map(\.path), before.map(\.path))
+        XCTAssertEqual(LocalUsagePaths.weeklyUsageRootURLs(environment: environment, home: directory).map(\.path), before.map(\.path))
         XCTAssertEqual(CodexAccountSource(environment: environment, home: directory).refreshIdentity, sourceBefore.refreshIdentity)
         XCTAssertEqual(CodexPaths.canonical(alias.appendingPathComponent("new/deep/path")),
                        CodexPaths.canonical(actual).appendingPathComponent("new/deep/path"))
@@ -103,22 +103,22 @@ final class AccountContextTests: XCTestCase {
     }
 
     func testOfficialResetCountIsAuthoritativeAndNullDetailsAreNotZero() throws {
-        let onlyCount = CodexBackend.normalizeResetCreditsResponse(["availableCount": 3, "credits": NSNull()])
+        let onlyCount = OfficialResponseNormalizer.normalizeResetCreditsResponse(["availableCount": 3, "credits": NSNull()])
         XCTAssertEqual(onlyCount.availableCount, 3)
         XCTAssertEqual(onlyCount.detailsAvailable, false)
         XCTAssertTrue(onlyCount.credits.isEmpty)
         XCTAssertEqual(onlyCount.display?.detailLabels, [AppText.resetCreditDetailsUnavailable])
-        let empty = CodexBackend.normalizeResetCreditsResponse(["availableCount": 0, "credits": []])
+        let empty = OfficialResponseNormalizer.normalizeResetCreditsResponse(["availableCount": 0, "credits": []])
         XCTAssertEqual(empty.availableCount, 0)
         XCTAssertEqual(empty.detailsAvailable, true)
-        let capped = CodexBackend.normalizeResetCreditsResponse(["availableCount": 5, "credits": [
+        let capped = OfficialResponseNormalizer.normalizeResetCreditsResponse(["availableCount": 5, "credits": [
             ["id": "credit-a", "resetType": "codexRateLimits", "status": "available", "grantedAt": 1_800_000_000, "expiresAt": 1_800_086_400]
         ]])
         XCTAssertEqual(capped.availableCount, 5)
         XCTAssertEqual(capped.credits.first?.resetType, "codexRateLimits")
         XCTAssertNotNil(capped.credits.first?.createdAtIso)
         XCTAssertNotNil(capped.credits.first?.expiresAtIso)
-        XCTAssertNil(CodexBackend.normalizeResetCreditsResponse([:]).availableCount)
+        XCTAssertNil(OfficialResponseNormalizer.normalizeResetCreditsResponse([:]).availableCount)
     }
 
     func testOfficialResetDataAvoidsPrivateRequestAndFallbackUsesSameAccount() throws {
@@ -126,14 +126,14 @@ final class AccountContextTests: XCTestCase {
         let source = source(directory)
         let context = source.context(account: serverAccount)
         var calls = 0
-        let official = CodexBackend.resolveResetCredits(response: ["rateLimitResetCredits": ["availableCount": 2, "credits": NSNull()]],
+        let official = OfficialUsageClient.resolveResetCredits(response: ["rateLimitResetCredits": ["availableCount": 2, "credits": NSNull()]],
                                                         source: source, context: context) { _ in
             calls += 1
             return Data()
         }
         XCTAssertEqual(calls, 0)
         XCTAssertEqual(official.availableCount, 2)
-        let fallback = CodexBackend.resolveResetCredits(response: [:], source: source, context: context) { request in
+        let fallback = OfficialUsageClient.resolveResetCredits(response: [:], source: source, context: context) { request in
             calls += 1
             XCTAssertEqual(request.value(forHTTPHeaderField: "ChatGPT-Account-ID"), "workspace-a")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-access")
@@ -142,7 +142,7 @@ final class AccountContextTests: XCTestCase {
         XCTAssertEqual(calls, 1)
         XCTAssertEqual(fallback.availableCount, 4)
         XCTAssertEqual(fallback.accountContext?.scopeKey, context.scopeKey)
-        let rejected = CodexBackend.resolveResetCredits(response: [:], source: source, context: self.context("other")) { _ in
+        let rejected = OfficialUsageClient.resolveResetCredits(response: [:], source: source, context: self.context("other")) { _ in
             XCTFail("Must not send credentials for a different account")
             return Data()
         }
@@ -157,18 +157,18 @@ final class AccountContextTests: XCTestCase {
                                         "rateLimitsByLimitId": ["codex": ["limitId": "codex", "secondary": ["usedPercent": 25, "windowDurationMins": 10080]]],
                                         "rateLimitResetCredits": ["availableCount": 0, "credits": []]]
         ]
-        let payload = try CodexBackend.readAccountPayload(includeUsage: false, sourceProvider: { self.source(self.directory) }, call: { methods, home in
+        let payload = try OfficialUsageClient(sourceProvider: { self.source(self.directory) }, call: { methods, home in
             XCTAssertEqual(methods, ["account/read", "account/rateLimits/read"])
             XCTAssertEqual(home, self.directory.resolvingSymlinksInPath().path)
             return response
-        }, fetchReset: { _ in XCTFail("Official reset data should be reused"); return Data() })
+        }, fetchReset: { _ in XCTFail("Official reset data should be reused"); return Data() }).readAccountPayload(includeUsage: false)
         XCTAssertEqual(payload.selectedRateLimit?.weeklyWindow?.remainingPercent, 75)
         XCTAssertEqual(payload.accountContext?.limitID, "codex")
         XCTAssertNotNil(payload.accountContext?.scopeKey)
-        XCTAssertThrowsError(try CodexBackend.readAccountPayload(includeUsage: false, sourceProvider: { self.source(self.directory) }, call: { _, _ in
+        XCTAssertThrowsError(try OfficialUsageClient(sourceProvider: { self.source(self.directory) }, call: { _, _ in
             try self.login(self.directory, account: "workspace-b")
             return response
-        }))
+        }).readAccountPayload(includeUsage: false))
     }
 
     func testQuotaHistoryAndNotificationsAreIsolatedAndRestoredByScope() throws {

@@ -235,10 +235,10 @@ final class RefreshStateTests: XCTestCase {
             "credits": ["hasCredits": false, "unlimited": false, "balance": "0"]]]
         let fixtureHome = FileManager.default.temporaryDirectory.appendingPathComponent("refresh-fixture-no-login-\(UUID())")
         func outcomes() throws -> [RefreshSource: RefreshOutcome] {
-            let payload = try CodexBackend.readAccountPayload(includeUsage: false,
+            let payload = try OfficialUsageClient(
                 sourceProvider: { CodexAccountSource(environment: ["CODEX_HOME": fixtureHome.path]) },
                 call: { _, _ in ["account/read": [:], "account/rateLimits/read": response] },
-                fetchReset: { _ in XCTFail("Fixture must not make a network request"); return Data() })
+                fetchReset: { _ in XCTFail("Fixture must not make a network request"); return Data() }).readAccountPayload(includeUsage: false)
             return RefreshOutcome.official(payload)
         }
         response["rateLimitResetCredits"] = ["availableCount": 3, "credits": NSNull()]

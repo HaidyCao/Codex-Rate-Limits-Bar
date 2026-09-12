@@ -18,8 +18,8 @@ final class ScannerIdentityTests: XCTestCase {
 
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
-    private func scanner(_ roots: [URL]? = nil, weeklyRoots: [URL]? = nil) -> CodexBackend.LocalUsageScanner {
-        CodexBackend.LocalUsageScanner(rootURLs: roots ?? [root], calendar: calendar, now: { self.now },
+    private func scanner(_ roots: [URL]? = nil, weeklyRoots: [URL]? = nil) -> LocalUsageScanner {
+        LocalUsageScanner(rootURLs: roots ?? [root], calendar: calendar, now: { self.now },
                                        cacheFileURL: root.appendingPathComponent("cache.json"), weeklyRootURLs: weeklyRoots)
     }
 

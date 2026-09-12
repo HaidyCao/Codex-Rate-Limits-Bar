@@ -67,7 +67,7 @@ final class LocalUsageScannerTests: XCTestCase {
             tokenCount(total: 100, timestamp: "2026-07-13T15:50:00Z"),
             tokenCount(total: 150, timestamp: "2026-07-13T16:10:00Z"),
         ], to: file, modifiedAt: now)
-        let scanner = CodexBackend.LocalUsageScanner(
+        let scanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendarProvider: { calendarClock.value },
             now: { now }
@@ -361,7 +361,7 @@ final class LocalUsageScannerTests: XCTestCase {
             tokenCount(total: 100, timestamp: "2026-07-14T00:01:00Z"),
         ], to: file, modifiedAt: now)
 
-        let firstScanner = CodexBackend.LocalUsageScanner(
+        let firstScanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { now },
@@ -369,7 +369,7 @@ final class LocalUsageScannerTests: XCTestCase {
         )
         XCTAssertEqual(try firstScanner.snapshot().totalTokens, 100)
 
-        let restartedScanner = CodexBackend.LocalUsageScanner(
+        let restartedScanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { now },
@@ -391,7 +391,7 @@ final class LocalUsageScannerTests: XCTestCase {
             tokenCount(total: 100, timestamp: "2026-07-13T15:00:00Z"),
         ], to: file, modifiedAt: clock.now)
 
-        let firstScanner = CodexBackend.LocalUsageScanner(
+        let firstScanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { clock.now },
@@ -411,7 +411,7 @@ final class LocalUsageScannerTests: XCTestCase {
             to: file,
             modifiedAt: clock.now
         )
-        let nextDayScanner = CodexBackend.LocalUsageScanner(
+        let nextDayScanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { clock.now },
@@ -441,7 +441,7 @@ final class LocalUsageScannerTests: XCTestCase {
             turnContext(model: "gpt-5.6-sol", timestamp: "2026-09-04T14:01:00Z"),
             tokenCount(total: 1_000_000, timestamp: "2026-09-04T14:10:00Z"),
         ], to: file, modifiedAt: clock.now)
-        let scanner = CodexBackend.LocalUsageScanner(
+        let scanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory], calendar: calendar, now: { clock.now }, cacheFileURL: cacheFile
         )
         let first = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-07T00:00:00Z"))
@@ -480,7 +480,7 @@ final class LocalUsageScannerTests: XCTestCase {
             sessionMeta(id: "session-a", timestamp: "2026-09-04T14:00:00Z"),
             turnContext(model: "gpt-6-astra", timestamp: "2026-09-04T14:01:00Z"),
         ], to: file, modifiedAt: clock.now)
-        let scanner = CodexBackend.LocalUsageScanner(
+        let scanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory], calendar: calendar, now: { clock.now }, cacheFileURL: cacheFile
         )
         let first = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-07T00:00:00Z"))
@@ -492,7 +492,7 @@ final class LocalUsageScannerTests: XCTestCase {
         try removeCachedCost(model: "gpt-6-astra", from: cacheFile)
 
         clock.now = try date("2026-09-05T01:00:00Z")
-        let restarted = CodexBackend.LocalUsageScanner(
+        let restarted = LocalUsageScanner(
             rootURLs: [temporaryDirectory], calendar: calendar, now: { clock.now }, cacheFileURL: cacheFile
         )
         let rebuilt = try restarted.snapshot(weeklyWindow: window)
@@ -514,7 +514,7 @@ final class LocalUsageScannerTests: XCTestCase {
             turnContext(model: "gpt-6-astra", timestamp: "2026-09-05T00:01:00Z"),
             tokenCount(total: 100_000, timestamp: "2026-09-05T00:10:00Z"),
         ], to: file, modifiedAt: now)
-        let scanner = CodexBackend.LocalUsageScanner(
+        let scanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory], calendar: calendar, now: { now }, cacheFileURL: cacheFile
         )
         _ = try scanner.snapshot()
@@ -551,7 +551,7 @@ final class LocalUsageScannerTests: XCTestCase {
         }
         try writeEvents(events, to: file, modifiedAt: now)
 
-        let scanner = CodexBackend.LocalUsageScanner(
+        let scanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { now },
@@ -566,7 +566,7 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertFalse(cacheText.contains("costEvents"))
         XCTAssertLessThan(cacheData.count, 20_000)
 
-        let restartedScanner = CodexBackend.LocalUsageScanner(
+        let restartedScanner = LocalUsageScanner(
             rootURLs: [temporaryDirectory],
             calendar: calendar,
             now: { now },
@@ -635,12 +635,12 @@ final class LocalUsageScannerTests: XCTestCase {
             sessionMeta(id: "a", timestamp: "2026-09-11T00:00:00Z"), fast,
             tokenCount(input: 1_000_000, total: 1_000_000, lastInput: 100_000, timestamp: "2026-09-11T00:01:00Z"),
         ], to: file, modifiedAt: now)
-        let first = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+        let first = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                    now: { now }, cacheFileURL: cache)
         XCTAssertEqual(try first.snapshot().todayCredits?.estimatedCredits, 625)
         try appendEvent(tokenCount(input: 2_000_000, total: 2_000_000, lastInput: 100_000,
                                    timestamp: "2026-09-11T00:02:00Z"), to: file, modifiedAt: now)
-        let restarted = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+        let restarted = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                        now: { now }, cacheFileURL: cache)
         XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_250)
         var missingTier = turnContext(model: "gpt-6-astra", timestamp: "2026-09-11T00:03:00Z")
@@ -671,7 +671,7 @@ final class LocalUsageScannerTests: XCTestCase {
         try writeEvents([sessionMeta(id: "a", timestamp: "2026-09-11T00:00:00Z"),
                          turnContext(model: "gpt-5.3-codex-spark", timestamp: "2026-09-11T00:01:00Z")],
                         to: file, modifiedAt: clock.now)
-        let scanner = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+        let scanner = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                      now: { clock.now }, cacheFileURL: cacheFile)
         let baseline = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-14T00:00:00Z"))
         clock.now = try date("2026-09-11T02:00:00Z")
@@ -723,7 +723,7 @@ final class LocalUsageScannerTests: XCTestCase {
         let cache = temporaryDirectory.appendingPathComponent("cache.json")
         try writeEvents([sessionMeta(id: "a", timestamp: "2026-09-11T00:00:00Z"),
                          turnContext(model: "gpt-5.6-sol", timestamp: "2026-09-11T00:01:00Z")], to: file, modifiedAt: clock.now)
-        let first = CodexBackend.LocalUsageScanner(rootURLs: [firstRoot], calendar: calendar, now: { clock.now }, cacheFileURL: cache)
+        let first = LocalUsageScanner(rootURLs: [firstRoot], calendar: calendar, now: { clock.now }, cacheFileURL: cache)
         let baseline = try first.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-14T00:00:00Z"))
         clock.now = try date("2026-09-11T02:00:00Z")
         try appendEvent(tokenCount(total: 1_000_000, timestamp: "2026-09-11T01:30:00Z"), to: file, modifiedAt: clock.now)
@@ -732,7 +732,7 @@ final class LocalUsageScannerTests: XCTestCase {
                          turnContext(model: "gpt-5.6-luna", timestamp: "2026-09-11T01:01:00Z"),
                          tokenCount(total: 1_000_000, timestamp: "2026-09-11T01:30:00Z")],
                         to: secondRoot.appendingPathComponent("rollout-b.jsonl"), modifiedAt: clock.now)
-        let expanded = CodexBackend.LocalUsageScanner(rootURLs: [firstRoot, secondRoot], calendar: calendar,
+        let expanded = LocalUsageScanner(rootURLs: [firstRoot, secondRoot], calendar: calendar,
                                                      now: { clock.now }, cacheFileURL: cache)
         let result = try expanded.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 12, end: "2026-09-14T00:00:00Z"))
         XCTAssertEqual(result.totalTokens, 2_000_000)
@@ -752,7 +752,7 @@ final class LocalUsageScannerTests: XCTestCase {
                              turnContext(model: "gpt-5.6-sol", timestamp: "2026-09-11T00:01:00Z")],
                             to: root.appendingPathComponent("rollout-\(root.lastPathComponent).jsonl"), modifiedAt: clock.now)
         }
-        let scanner = CodexBackend.LocalUsageScanner(rootURLs: [desktop, cli], calendar: calendar,
+        let scanner = LocalUsageScanner(rootURLs: [desktop, cli], calendar: calendar,
                                                      now: { clock.now }, weeklyRootURLs: [desktop])
         _ = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-14T00:00:00Z"))
         clock.now = try date("2026-09-11T02:00:00Z")
@@ -776,25 +776,25 @@ final class LocalUsageScannerTests: XCTestCase {
         for root in [desktop, cli, archive] { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
         let alias = temporaryDirectory.appendingPathComponent("custom-home")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: cli.deletingLastPathComponent())
-        let roots = CodexBackend.localUsageRootURLs(environment: ["CODEX_HOME": alias.path], home: temporaryDirectory)
+        let roots = LocalUsagePaths.localUsageRootURLs(environment: ["CODEX_HOME": alias.path], home: temporaryDirectory)
         let optionalArchive = desktop.deletingLastPathComponent().appendingPathComponent("archived_sessions")
         XCTAssertEqual(Set(roots.map(\.path)), Set([desktop, optionalArchive, cli, archive].map { $0.resolvingSymlinksInPath().path }))
-        let override = CodexBackend.localUsageRootURLs(environment: ["CODEX_SESSIONS_DIR": desktop.path], home: temporaryDirectory)
+        let override = LocalUsagePaths.localUsageRootURLs(environment: ["CODEX_SESSIONS_DIR": desktop.path], home: temporaryDirectory)
         XCTAssertEqual(override, [desktop.resolvingSymlinksInPath()])
     }
 
     func testDifferentCodexHomesDoNotOverwriteEachOthersObservationCache() throws {
-        let standard = try XCTUnwrap(CodexBackend.localUsageCacheURL(environment: [:], home: temporaryDirectory))
-        let explicitDefault = CodexBackend.localUsageCacheURL(
+        let standard = try XCTUnwrap(LocalUsagePaths.localUsageCacheURL(environment: [:], home: temporaryDirectory))
+        let explicitDefault = LocalUsagePaths.localUsageCacheURL(
             environment: ["CODEX_HOME": temporaryDirectory.appendingPathComponent(".codex").path], home: temporaryDirectory)
-        let cli = CodexBackend.localUsageCacheURL(
+        let cli = LocalUsagePaths.localUsageCacheURL(
             environment: ["CODEX_HOME": temporaryDirectory.appendingPathComponent(".codex-cli").path], home: temporaryDirectory)
         XCTAssertEqual(standard.lastPathComponent, "local-usage-cache.json")
         XCTAssertEqual(standard, explicitDefault)
         XCTAssertNotEqual(standard, cli)
-        XCTAssertEqual(cli, CodexBackend.localUsageCacheURL(
+        XCTAssertEqual(cli, LocalUsagePaths.localUsageCacheURL(
             environment: ["CODEX_HOME": temporaryDirectory.appendingPathComponent(".codex-cli").path], home: temporaryDirectory))
-        XCTAssertNil(CodexBackend.localUsageCacheURL(environment: ["CODEX_SESSIONS_DIR": temporaryDirectory.path], home: temporaryDirectory))
+        XCTAssertNil(LocalUsagePaths.localUsageCacheURL(environment: ["CODEX_SESSIONS_DIR": temporaryDirectory.path], home: temporaryDirectory))
     }
 
     func testAccountSwitchResetsWeeklyObservationAndRetainsWholeMachineDailyUsage() throws {
@@ -807,7 +807,7 @@ final class LocalUsageScannerTests: XCTestCase {
             CodexAccountContext(codexHome: temporaryDirectory.path, authenticationSource: "auth.json",
                                 accountKey: key, accountLabel: nil, limitID: limit)
         }
-        let scanner = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+        let scanner = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                      now: { clock.now }, cacheFileURL: cacheFile)
         let a = context("a"), b = context("b")
         _ = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 10, end: "2026-09-17T00:00:00Z"), accountContext: a)
@@ -815,7 +815,7 @@ final class LocalUsageScannerTests: XCTestCase {
         try appendEvent(tokenCount(total: 100_000, timestamp: "2026-09-11T01:30:00Z"), to: file, modifiedAt: clock.now)
         let first = try scanner.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"), accountContext: a)
         XCTAssertEqual(first.weeklyQuotaCost?.observedCostUSD, 0.4)
-        let restarted = CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
+        let restarted = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                        now: { clock.now }, cacheFileURL: cacheFile)
         let resumed = try restarted.snapshot(weeklyWindow: rateLimitWindow(usedPercent: 15, end: "2026-09-17T00:00:00Z"), accountContext: a)
         XCTAssertEqual(resumed.weeklyQuotaCost?.observationStartIso, first.weeklyQuotaCost?.observationStartIso)
@@ -864,8 +864,8 @@ final class LocalUsageScannerTests: XCTestCase {
         XCTAssertEqual(resumed.weeklyQuotaCost?.baselineUsedPercent, 20)
     }
 
-    private func scanner(now: @escaping () -> Date) -> CodexBackend.LocalUsageScanner {
-        CodexBackend.LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar, now: now)
+    private func scanner(now: @escaping () -> Date) -> LocalUsageScanner {
+        LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar, now: now)
     }
 
     private func removeCachedCost(model: String, from url: URL) throws {

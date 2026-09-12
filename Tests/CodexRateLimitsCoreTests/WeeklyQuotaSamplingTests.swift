@@ -22,10 +22,10 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
-    private func scanner(copies: Bool = false) -> CodexBackend.LocalUsageScanner {
+    private func scanner(copies: Bool = false) -> LocalUsageScanner {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        return CodexBackend.LocalUsageScanner(rootURLs: copies ? [other, active] : [active], calendar: calendar,
+        return LocalUsageScanner(rootURLs: copies ? [other, active] : [active], calendar: calendar,
             now: { self.now }, cacheFileURL: cacheURL, weeklyRootURLs: [active], pricingProvider: { self.pricing })
     }
     private func at(_ minute: Int) -> Date { start.addingTimeInterval(Double(minute) * 60) }
@@ -50,7 +50,7 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
          "payload": ["type": "token_count", "info": ["total_token_usage": ["input_tokens": total, "total_tokens": total],
                                                       "last_token_usage": ["input_tokens": 1000]]]]
     }
-    private func train(_ scanner: CodexBackend.LocalUsageScanner, copies: Bool = false,
+    private func train(_ scanner: LocalUsageScanner, copies: Bool = false,
                        context: CodexAccountContext? = nil) throws -> LocalUsageSnapshot {
         _ = try scanner.snapshot(weeklyWindow: window(0), accountContext: context, quotaSampleAt: now)
         var result: LocalUsageSnapshot!

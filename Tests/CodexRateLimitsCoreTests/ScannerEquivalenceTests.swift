@@ -22,8 +22,8 @@ final class ScannerEquivalenceTests: XCTestCase {
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
-    private func scanner(_ name: String) -> CodexBackend.LocalUsageScanner {
-        CodexBackend.LocalUsageScanner(rootURLs: [sessions, archive], calendar: calendar, now: { self.now },
+    private func scanner(_ name: String) -> LocalUsageScanner {
+        LocalUsageScanner(rootURLs: [sessions, archive], calendar: calendar, now: { self.now },
             cacheFileURL: root.appendingPathComponent("\(name).json"), pricingProvider: { self.pricing })
     }
     private func meta(_ id: String) -> [String: Any] { ["type": "session_meta", "payload": ["id": id]] }
@@ -43,12 +43,12 @@ final class ScannerEquivalenceTests: XCTestCase {
         } else { try data.write(to: file, options: .atomic) }
         try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
     }
-    private func read(_ scanner: CodexBackend.LocalUsageScanner, rebuild: Bool = false) throws -> LocalUsageSnapshot {
+    private func read(_ scanner: LocalUsageScanner, rebuild: Bool = false) throws -> LocalUsageSnapshot {
         let context = CodexAccountContext(codexHome: root.path, authenticationSource: "fixture", accountKey: "a", accountLabel: nil, limitID: "codex")
         let window = RateLimitWindow(usedPercent: 20, remainingPercent: 80, windowDurationMins: 10080, resetsAt: nil, resetsAtIso: "2026-09-17T16:00:00Z")
         return try scanner.snapshot(weeklyWindow: window, accountContext: context, rebuild: rebuild, quotaSampleAt: now)
     }
-    private func assertEquivalent(_ subject: CodexBackend.LocalUsageScanner, _ reference: CodexBackend.LocalUsageScanner,
+    private func assertEquivalent(_ subject: LocalUsageScanner, _ reference: LocalUsageScanner,
                                   total: Int64, stage: String, file: StaticString = #filePath, line: UInt = #line) throws {
         let actual = try read(subject)
         let replay = try read(reference, rebuild: true)

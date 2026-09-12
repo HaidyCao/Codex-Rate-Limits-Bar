@@ -290,13 +290,15 @@ public final class RefreshCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     private let deadline: Date
+    private let now: @Sendable () -> Date
 
-    public init(deadline: Date) { self.deadline = deadline }
+    public convenience init(deadline: Date) { self.init(deadline: deadline, now: Date.init) }
+    init(deadline: Date, now: @escaping @Sendable () -> Date) { self.deadline = deadline; self.now = now }
     public func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     public func check() throws {
         lock.lock(); let cancelled = cancelled; lock.unlock()
         if cancelled { throw RuntimeError("Refresh cancelled.") }
-        if Date() > deadline { throw RuntimeError("Refresh timed out.") }
+        if now() > deadline { throw RuntimeError("Refresh timed out.") }
     }
 }
 

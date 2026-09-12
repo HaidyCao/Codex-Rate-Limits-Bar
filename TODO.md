@@ -15,7 +15,7 @@
 | TODO-05 | P2 | 价目表版本化与未知模型维护 | 已完成（2026-09-12） |
 | TODO-06 | P2 | 展示数据时效，完善刷新恢复 | 已完成（2026-09-12） |
 | TODO-07 | P2 | 完善回归测试和验证流程 | 已完成（2026-09-12） |
-| TODO-08 | P3 | 拆分 Backend 和主界面职责 | 关键修复及测试完成后 |
+| TODO-08 | P3 | 拆分 Backend 和主界面职责 | 已完成（2026-09-12） |
 
 ## TODO-01：统一账户来源，隔离预测和提醒历史
 
@@ -51,7 +51,7 @@
 
 **验收样例：** 同大小日志从 100 tokens 改成 900 后，增量和全量扫描均返回 900；100 tokens 的相同会话改名副本合计仍为 100；跨 home 的相同日志全机只计一次，当前账户周消耗仍为应有的 `$0.40`。
 
-相关代码：[CodexBackend.swift](Sources/CodexRateLimitsCore/CodexBackend.swift) 中的扫描、文件状态和去重逻辑。
+相关代码：[LocalUsageScanner.swift](Sources/CodexRateLimitsCore/LocalUsageScanner.swift)、[LocalUsageCache.swift](Sources/CodexRateLimitsCore/LocalUsageCache.swift) 和 [UsageFileIdentity.swift](Sources/CodexRateLimitsCore/UsageFileIdentity.swift) 中的扫描、文件状态和去重逻辑。
 
 ## TODO-03：修复静默漏扫，展示统计完整性
 
@@ -121,7 +121,7 @@
 
 **验收：** 断网后用户能辨认旧数据；恢复连接后自动更新；睡眠唤醒和连续失败不会导致永久卡在刷新中或积压请求。
 
-相关代码：[RefreshState.swift](Sources/CodexRateLimitsCore/RefreshState.swift)、[MenuBarApp.swift](Sources/CodexRateLimitsBar/MenuBarApp.swift)。使用说明与人工验收：[数据时效与刷新恢复](docs/refresh.md)。
+相关代码：[RefreshState.swift](Sources/CodexRateLimitsCore/RefreshState.swift)、[UsageRefreshController.swift](Sources/CodexRateLimitsCore/UsageRefreshController.swift)、[AppDelegate.swift](Sources/CodexRateLimitsBar/AppDelegate.swift)。使用说明与人工验收：[数据时效与刷新恢复](docs/refresh.md)。
 
 ## TODO-07：完善回归测试和验证流程
 
@@ -141,12 +141,16 @@
 
 ## TODO-08：拆分 Backend 和主界面职责
 
+**完成记录（2026-09-12）：** 先建立[分阶段实施计划](docs/refactoring-plan.md)，再依次迁移官方数据访问、本机扫描/缓存、外部入口和界面刷新控制。Backend 从 2,672 行缩为 89 行的公开读取入口；官方客户端、响应转换、进程/HTTP 传输、扫描器、缓存存储、CLI/MCP 和插件安装各自归位，复用既有认证上下文。刷新任务及唯一数据状态迁入不依赖 AppKit 的 Core 控制器，可注入客户端、历史处理、执行器和时钟；AppDelegate 缩为 465 行，菜单卡片、偏好与系统事件接入分别独立。缓存仍使用原 v4 字段及编码，四个卡片的绘制内容保持一致。新增 11 项控制器测试，全部 162 项常规测试、隔离 CLI/MCP、7 种 AppKit 场景和独立应用资源验证通过。256 MiB 合成日志冷扫描约 1.51 秒、重建约 1.51 秒、无变化增量约 0.0016 秒、追加约 0.15 秒，峰值 RSS 约 29 MB、缓存 3,870 字节，全量/增量金额一致，相比 TODO-07 无明显性能退化。备份旧应用和状态后安装，四项实际读取成功、扫描完整，账户及周观察基线不变，460 条已有样本保留。真实网络与睡眠事件仍使用既有人工验收步骤。
+
 **现状：** 审查时 `CodexBackend.swift` 约 2,290 行，菜单栏文件约 1,681 行（TODO-07 将启动入口保留在 `main.swift`，视图及应用逻辑移至 `MenuBarApp.swift`），统计、接口和界面调度的变更影响范围较大。
 
-- [ ] 从 Backend 拆出本机扫描器及缓存存储、官方接口客户端、认证/账户上下文。
-- [ ] 将 MCP 服务、CLI 分发和插件安装逻辑从数据访问模块分离。
-- [ ] 将菜单栏刷新调度及状态管理与 AppKit 视图绘制分离。
-- [ ] 为接口客户端和刷新调度提供可替换依赖，便于测试失败、恢复和迟到响应。
-- [ ] 分阶段迁移，每一步保持 CLI/MCP 输出、缓存兼容性和已验证统计行为。
+- [x] 从 Backend 拆出本机扫描器及缓存存储、官方接口客户端、认证/账户上下文。
+- [x] 将 MCP 服务、CLI 分发和插件安装逻辑从数据访问模块分离。
+- [x] 将菜单栏刷新调度及状态管理与 AppKit 视图绘制分离。
+- [x] 为接口客户端和刷新调度提供可替换依赖，便于测试失败、恢复和迟到响应。
+- [x] 分阶段迁移，每一步保持 CLI/MCP 输出、缓存兼容性和已验证统计行为。
 
 **验收：** 单独修改价格、扫描或刷新状态时，无需同时改动无关模块；既有验证通过，性能无明显退化。
+
+相关说明：[模块边界](docs/architecture.md)、[实施计划与验收记录](docs/refactoring-plan.md)。

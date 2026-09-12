@@ -18,8 +18,8 @@ final class ScannerCompletenessTests: XCTestCase {
 
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
 
-    private func scanner(_ roots: [URL]? = nil, weeklyRoots: [URL]? = nil) -> CodexBackend.LocalUsageScanner {
-        CodexBackend.LocalUsageScanner(rootURLs: roots ?? [root], calendar: calendar, now: { self.now },
+    private func scanner(_ roots: [URL]? = nil, weeklyRoots: [URL]? = nil) -> LocalUsageScanner {
+        LocalUsageScanner(rootURLs: roots ?? [root], calendar: calendar, now: { self.now },
                                        cacheFileURL: root.appendingPathComponent("cache.json"), weeklyRootURLs: weeklyRoots)
     }
 
@@ -295,7 +295,7 @@ final class ScannerCompletenessTests: XCTestCase {
 
     func testOptionalMissingRootsAndRateOnlyUpdatesAreNotFailures() throws {
         let optional = root.appendingPathComponent("optional")
-        let scanner = CodexBackend.LocalUsageScanner(rootURLs: [root, optional], calendar: calendar, now: { self.now },
+        let scanner = LocalUsageScanner(rootURLs: [root, optional], calendar: calendar, now: { self.now },
                                                      allowMissingRoots: true)
         try write([["type": "event_msg", "payload": ["type": "token_count", "info": NSNull(), "rate_limits": [:]]]])
         let result = try scanner.snapshot()

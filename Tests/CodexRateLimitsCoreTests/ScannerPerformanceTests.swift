@@ -15,8 +15,8 @@ final class ScannerPerformanceTests: XCTestCase {
         let now = ISO8601DateFormatter().date(from: "2026-09-11T12:00:00Z")!
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        func scanner() -> CodexBackend.LocalUsageScanner {
-            CodexBackend.LocalUsageScanner(rootURLs: [root], calendar: calendar, now: { now }, cacheFileURL: cache)
+        func scanner() -> LocalUsageScanner {
+            LocalUsageScanner(rootURLs: [root], calendar: calendar, now: { now }, cacheFileURL: cache)
         }
         func event(_ total: Int) throws -> Data {
             let event: [String: Any] = ["timestamp": "2026-09-11T11:00:00Z", "type": "event_msg",

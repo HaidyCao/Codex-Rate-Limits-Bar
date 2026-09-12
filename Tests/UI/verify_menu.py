@@ -20,8 +20,10 @@ def main():
     objects = sorted((build / "CodexRateLimitsCore.build").glob("*.swift.o"))
     if not objects:
         raise SystemExit("Core objects missing; run make build first")
+    app_sources = sorted(path for path in (repo / "Sources/CodexRateLimitsBar").glob("*.swift")
+                         if path.name != "main.swift")
     run_checked(["swiftc", "-swift-version", "6", "-parse-as-library",
-                 "-I", build / "Modules", *objects, repo / "Sources/CodexRateLimitsBar/MenuBarApp.swift",
+                 "-I", build / "Modules", *objects, *app_sources,
                  repo / "Tests/UI/VerifyMenu.swift", "-o", executable])
     with tempfile.TemporaryDirectory(prefix="codex-menu-verification-") as directory:
         run_checked(offline_command([executable, artifacts / "fixtures", artifacts / "menu"]),

@@ -332,10 +332,15 @@ for timings, field definitions, and manual system-event checks.
 
 ## Shared Swift Binary
 
-Reusable models, localization, formatting, Codex data access, and local JSONL
-scanning live in `Sources/CodexRateLimitsCore`. The AppKit menu bar shell is in
-`Sources/CodexRateLimitsBar/MenuBarApp.swift`; `main.swift` is the startup entry.
-The verification executable compiles those same views against CLI/MCP fixtures.
+Reusable models, localization, data access, local JSONL scanning, and refresh
+control live in `Sources/CodexRateLimitsCore`. `CodexBackend` is the shared facade;
+official clients, cache storage, CLI/MCP and refresh orchestration have separate
+implementations. The AppKit shell lives in `Sources/CodexRateLimitsBar`:
+`AppDelegate.swift` connects the menu to the controller, `RefreshEventMonitor.swift`
+forwards system events, and each menu card has its own view file. `main.swift`
+is the startup entry. The verification executable compiles those same views
+against CLI/MCP fixtures. See [module boundaries](docs/architecture.md) and the
+[staged refactoring plan](docs/refactoring-plan.md).
 
 The executable supports several command-line modes in addition to the menu bar
 app:
