@@ -299,14 +299,21 @@ make install-plugin
 `make install-plugin` also installs the app before refreshing the bundled Codex
 plugin.
 
-For a quick data-source check:
+For isolated regression checks:
 
 ```sh
-make verify
-make verify-local-usage  # Isolated CLI/MCP fixtures; no real account or session data
+make verify             # Swift, CLI/MCP, actual AppKit views, relocated app resources
+make verify-local-usage # CLI/MCP fixtures only
+make benchmark          # Synthetic 256 MiB log; no real sessions
+make verify-live        # Explicit opt-in: query the current real Codex account
 dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar local-usage
 dist/Codex\ Rate\ Limits\ Bar.app/Contents/MacOS/CodexRateLimitsBar status
 ```
+
+Default verification runs with temporary credentials, caches and logs, and blocks
+network access for test processes. Artifacts are saved to `.build/verification/`.
+See [verification commands and coverage](docs/verification.md) for CI commands,
+performance measurements, and manual checks.
 
 ## Freshness and refresh recovery
 
@@ -326,8 +333,9 @@ for timings, field definitions, and manual system-event checks.
 ## Shared Swift Binary
 
 Reusable models, localization, formatting, Codex data access, and local JSONL
-scanning live in `Sources/CodexRateLimitsCore`. The AppKit menu bar shell remains
-in `Sources/CodexRateLimitsBar`, with Core behavior covered by `swift test`.
+scanning live in `Sources/CodexRateLimitsCore`. The AppKit menu bar shell is in
+`Sources/CodexRateLimitsBar/MenuBarApp.swift`; `main.swift` is the startup entry.
+The verification executable compiles those same views against CLI/MCP fixtures.
 
 The executable supports several command-line modes in addition to the menu bar
 app:

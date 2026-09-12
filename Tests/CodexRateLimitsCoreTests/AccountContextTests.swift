@@ -33,6 +33,21 @@ final class AccountContextTests: XCTestCase {
                             accountLabel: nil, limitID: limitID)
     }
 
+    func testMissingRootsKeepTheirIdentityAfterCreationThroughAnAlias() throws {
+        let actual = directory.appendingPathComponent("actual")
+        try FileManager.default.createDirectory(at: actual.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        let alias = directory.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: actual)
+        let environment = ["CODEX_HOME": alias.path]
+        let before = CodexBackend.weeklyUsageRootURLs(environment: environment, home: directory)
+        let sourceBefore = CodexAccountSource(environment: environment, home: directory)
+        try FileManager.default.createDirectory(at: actual.appendingPathComponent("archived_sessions"), withIntermediateDirectories: true)
+        XCTAssertEqual(CodexBackend.weeklyUsageRootURLs(environment: environment, home: directory).map(\.path), before.map(\.path))
+        XCTAssertEqual(CodexAccountSource(environment: environment, home: directory).refreshIdentity, sourceBefore.refreshIdentity)
+        XCTAssertEqual(CodexPaths.canonical(alias.appendingPathComponent("new/deep/path")),
+                       CodexPaths.canonical(actual).appendingPathComponent("new/deep/path"))
+    }
+
     func testSourceUsesActiveHomeAndDoesNotRedirectOnlyResetAuthentication() throws {
         let desktop = directory.appendingPathComponent(".codex")
         let cli = directory.appendingPathComponent(".codex-cli")

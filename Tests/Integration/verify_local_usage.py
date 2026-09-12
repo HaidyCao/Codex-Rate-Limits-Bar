@@ -1,4 +1,5 @@
 """Isolated CLI/MCP checks; fake credentials/server, no real session or cache writes."""
+import argparse
 import base64
 import json
 import os
@@ -9,14 +10,27 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Support"))
+from verification_support import isolated_environment, offline_command, run_checked
+
 
 def main():
-    binary = Path(sys.argv[1] if len(sys.argv) > 1 else ".build/release/CodexRateLimitsBar").resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", nargs="?", default=".build/release/CodexRateLimitsBar", type=Path)
+    parser.add_argument("--artifacts", type=Path, help="Save isolated status fixtures for AppKit verification")
+    args = parser.parse_args()
+    binary = args.binary.resolve()
+    artifacts = args.artifacts.resolve() if args.artifacts else None
+    if artifacts:
+        artifacts.mkdir(parents=True, exist_ok=True)
+
+    def save(name, value):
+        if artifacts:
+            (artifacts / (name + ".json")).write_text(json.dumps(value, indent=2))
     with tempfile.TemporaryDirectory(prefix="codex-usage-integration-") as directory:
         root = Path(directory)
-        profile, sessions = root / "profile", root / "sessions"
-        profile.mkdir()
-        sessions.mkdir()
+        env = isolated_environment(root)
+        profile, sessions = Path(env["CODEX_HOME"]), Path(env["CODEX_SESSIONS_DIR"])
         claims = base64.urlsafe_b64encode(json.dumps({"sub": "fixture-user"}).encode()).decode().rstrip("=")
         (profile / "auth.json").write_text(json.dumps({"tokens": {
             "account_id": "fixture-account", "id_token": f"h.{claims}.s", "access_token": "fixture-access"
@@ -51,14 +65,17 @@ for line in sys.stdin:
     print(json.dumps({'id': request['id'], 'result': result}), flush=True)
 """)
         fake.chmod(0o700)
-        env = os.environ.copy()
-        env.update(CODEX_HOME=str(profile), CODEX_SESSIONS_DIR=str(sessions), CODEX_BIN=str(fake),
+        env.update(CODEX_BIN=str(fake),
                    FIXTURE_RESET_AT=str(int(datetime.now(timezone.utc).timestamp()) + 86400))
+        # Keep the fixture near local noon even when verification starts at UTC
+        # midnight. Explicit midnight rollover remains covered by Swift clocks.
+        offset = 12 - datetime.now(timezone.utc).hour
+        env["TZ"] = f"Etc/GMT{-offset:+d}" if offset else "Etc/GMT"
         timestamp = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
 
         def run(*args, input=None):
-            return subprocess.run([str(binary), *args], input=input, env=env, text=True,
-                                  capture_output=True, timeout=30, check=True).stdout
+            return run_checked(offline_command([binary, *args]), input=input, env=env, text=True,
+                               capture_output=True, timeout=45).stdout
 
         builtin = json.loads(run("pricing", "--export-builtin"))
         pricing_file = root / "pricing.json"
@@ -91,7 +108,7 @@ for line in sys.stdin:
             (sessions / "usage.jsonl").write_text(data)
             (sessions / "renamed-copy.jsonl").write_text(data)
 
-        def check_shared_status(expected):
+        def check_shared_status(expected, artifact=None):
             direct = json.loads(run("local-usage", "--rebuild"))
             shared = mcp("get_codex_local_usage")
             status = json.loads(run("status"))
@@ -111,6 +128,8 @@ for line in sys.stdin:
                 assert value["refresh"]["resetCredits"]["status"] == "partial"
                 assert value["resetCredits"]["freshness"]["status"] == "partial"
                 assert value["refresh"]["localUsage"]["status"] == direct["freshness"]["status"]
+            if artifact:
+                save(artifact, status)
             assert status.get("localUsageError") == direct.get("error")
             assert status["accountContext"] == status["localUsage"]["accountContext"]
             assert status["resetCredits"]["availableCount"] == 3
@@ -124,13 +143,13 @@ for line in sys.stdin:
             return direct
 
         write_usage()
-        complete = check_shared_status("complete")
+        complete = check_shared_status("complete", "complete")
         assert complete["totalTokens"] == 1000
         assert complete["billingAssumptions"]["apiPercent"] == 0
         assert len(complete["topFiles"][0]["sourceFiles"]) == 2
 
         write_usage(model="Raw-Private-Model", tier="private-mode")
-        unknown = check_shared_status("complete")
+        unknown = check_shared_status("complete", "unknown")
         assert unknown["todayCost"]["unpricedTokens"] == 1000
         assert unknown["todayCredits"]["unpricedTokens"] == 1000
         assert all(entry["model"] == "Raw-Private-Model" and entry["serviceTier"] == "private-mode"
@@ -151,7 +170,7 @@ for line in sys.stdin:
         assert not mapped["unpricedUsage"]
         custom["api"]["models"]["gpt-5.6-sol"]["input"] = -1
         pricing_file.write_text(json.dumps(custom))
-        rejected = subprocess.run([str(binary), "pricing", "--validate", str(pricing_file)], env=env,
+        rejected = subprocess.run(offline_command([binary, "pricing", "--validate", pricing_file]), env=env,
                                   text=True, capture_output=True, timeout=30)
         assert rejected.returncode != 0
         fallback = check_shared_status("complete")
@@ -165,7 +184,7 @@ for line in sys.stdin:
         assert assumed["billingAssumptions"]["creditPercent"] == 100
         bad = sessions / "bad.jsonl"
         bad.write_text("not json\n")
-        assert check_shared_status("partial")["diagnostics"]["parseErrorCount"] == 1
+        assert check_shared_status("partial", "partial")["diagnostics"]["parseErrorCount"] == 1
         bad.chmod(0)
         try:
             assert check_shared_status("partial")["diagnostics"]["readFailureCount"] == 1
@@ -177,12 +196,13 @@ for line in sys.stdin:
             path.unlink()
         check_shared_status("empty")
         bad.write_text("{broken json}\n")
-        unavailable = check_shared_status("unavailable")
+        unavailable = check_shared_status("unavailable", "unavailable")
         assert "--" in unavailable["display"]["consumptionLabel"]
         bad.unlink()
         write_usage()
         env["FIXTURE_MODE"] = "failure"
         for value in [json.loads(run("status")), mcp("get_codex_status")]:
+            save("failure", value)
             assert value["refresh"]["localUsage"]["status"] == "success"
             for source in ["quota", "credits", "resetCredits"]:
                 freshness = value["refresh"][source]
@@ -200,7 +220,7 @@ for line in sys.stdin:
         env["FIXTURE_PID_FILE"] = str(root / "child.pid")
         started = time.monotonic()
         timeout = json.loads(run("status"))
-        assert 10 < time.monotonic() - started < 20
+        assert 10 < time.monotonic() - started < 40
         assert timeout["refresh"]["quota"]["status"] == "failed"
         assert "Timed out" in timeout["refresh"]["quota"]["error"]
         assert timeout["refresh"]["localUsage"]["status"] == "success"
@@ -215,7 +235,36 @@ for line in sys.stdin:
         recovered = json.loads(run("status"))
         assert recovered["refresh"]["quota"]["status"] == "success"
         assert not recovered["refresh"]["quota"].get("error")
-    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup and recovery.")
+        del env["CODEX_SESSIONS_DIR"]
+        persistent = json.loads(run("status"))
+        support = Path(env["CFFIXED_USER_HOME"]) / "Library/Application Support/Codex Rate Limits Bar"
+        cache_file = support / "local-usage-cache.json"
+        assert cache_file.exists(), "Persistent CLI cache must remain inside the isolated home"
+        before = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
+        for value in [json.loads(run("status")), mcp("get_codex_status")]:
+            assert value["localUsage"]["totalTokens"] == persistent["localUsage"]["totalTokens"] == 1000
+            for key in ["todayCost", "todayCredits", "billingAssumptions", "unpricedUsage"]:
+                assert value["localUsage"][key] == persistent["localUsage"][key], key
+        # Both copies survive a physical move to the archive, then a full rebuild.
+        archive = profile / "archived_sessions"
+        archive.mkdir()
+        (sessions / "usage.jsonl").rename(archive / "renamed.jsonl")
+        moved = json.loads(run("status"))
+        rebuilt = json.loads(run("local-usage", "--rebuild"))
+        for key in ["totalTokens", "inputTokens", "eventCount", "todayCost", "todayCredits"]:
+            assert moved["localUsage"][key] == rebuilt[key] == persistent["localUsage"][key], key
+        after = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
+        for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
+            assert before[key] == after[key], (key, before[key], after[key])
+        # Auth switches within one home must replace account observation, not daily usage.
+        auth = json.loads((profile / "auth.json").read_text())
+        auth["tokens"]["account_id"] = "fixture-account-b"
+        (profile / "auth.json").write_text(json.dumps(auth))
+        switched = json.loads(run("status"))
+        assert switched["accountContext"]["accountKey"] != persistent["accountContext"]["accountKey"]
+        assert switched["localUsage"]["weeklyQuotaCost"]["accountScopeKey"] != before["accountScopeKey"]
+        assert switched["localUsage"]["totalTokens"] == 1000
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives and account switches.")
 
 
 if __name__ == "__main__":

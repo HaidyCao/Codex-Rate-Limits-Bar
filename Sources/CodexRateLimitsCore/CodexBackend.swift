@@ -500,7 +500,7 @@ public enum CodexBackend {
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> [URL] {
         if let override = environment["CODEX_SESSIONS_DIR"], !override.isEmpty {
-            return [URL(fileURLWithPath: override).standardizedFileURL.resolvingSymlinksInPath()]
+            return [CodexPaths.canonical(URL(fileURLWithPath: override))]
         }
         var homes = [home.appendingPathComponent(".codex"), home.appendingPathComponent(".codex-cli")]
         if let configured = environment["CODEX_HOME"], !configured.isEmpty {
@@ -509,7 +509,7 @@ public enum CodexBackend {
         var seen = Set<String>()
         return homes.flatMap { root in
             [root.appendingPathComponent("sessions"), root.appendingPathComponent("archived_sessions")]
-        }.map { $0.standardizedFileURL.resolvingSymlinksInPath() }.filter { seen.insert($0.path).inserted }
+        }.map(CodexPaths.canonical).filter { seen.insert($0.path).inserted }
     }
 
     static func weeklyUsageRootURLs(
@@ -522,7 +522,7 @@ public enum CodexBackend {
         let activeHome = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             ?? home.appendingPathComponent(".codex")
         return ["sessions", "archived_sessions"].map {
-            activeHome.appendingPathComponent($0).standardizedFileURL.resolvingSymlinksInPath()
+            CodexPaths.canonical(activeHome.appendingPathComponent($0))
         }
     }
 
@@ -531,9 +531,8 @@ public enum CodexBackend {
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL? {
         guard environment["CODEX_SESSIONS_DIR"] == nil else { return nil }
-        let defaultHome = home.appendingPathComponent(".codex").standardizedFileURL.resolvingSymlinksInPath()
-        let activeHome = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }?
-            .standardizedFileURL.resolvingSymlinksInPath() ?? defaultHome
+        let defaultHome = CodexPaths.canonical(home.appendingPathComponent(".codex"))
+        let activeHome = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : CodexPaths.canonical(URL(fileURLWithPath: $0)) } ?? defaultHome
         var filename = "local-usage-cache.json"
         if activeHome != defaultHome {
             // Stable, non-security identifier. Swift Hasher changes across runs.
@@ -650,12 +649,12 @@ public enum CodexBackend {
             ) ?? dayStart.addingTimeInterval(-TimeInterval(Self.retainedHistoryDays * 24 * 60 * 60))
             let localDate = CodexBackend.localDateString(now, timeZone: calendar.timeZone)
             let timeZone = calendar.timeZone.identifier
-            let rootURLs = rootURLsProvider()
-            let weeklyRoots = weeklyRootURLsProvider().map { $0.standardizedFileURL.resolvingSymlinksInPath().path }
+            let rootURLs = rootURLsProvider().map(CodexPaths.canonical)
+            let weeklyRoots = weeklyRootURLsProvider().map { CodexPaths.canonical($0).path }
             let source = CodexBackend.localUsageSourceDescription(rootURLs: rootURLs)
             loadPersistentCache()
 
-            let previousRoots = cache.map { Set($0.rootPaths ?? $0.source.split(separator: ",").map(String.init)) } ?? []
+            let previousRoots = cache.map { CodexPaths.canonicalPaths($0.rootPaths ?? $0.source.split(separator: ",").map(String.init)) } ?? []
             let currentRoots = Set(rootURLs.map(\.path))
             // Adding a Codex home must not erase an established observation.
             let canReuseBaseline = cache?.timeZone == timeZone
@@ -1093,7 +1092,7 @@ public enum CodexBackend {
                observation.startedAt >= windowStart,
                observation.startedAt <= now,
                observation.baselineUsedPercent <= usedPercent,
-               observation.rootPaths.map({ Set($0).isSubset(of: Set(rootPaths)) }) ?? true {
+               observation.rootPaths.map({ CodexPaths.canonicalPaths($0).isSubset(of: Set(rootPaths)) }) ?? true {
                 if observation.rootPaths != rootPaths {
                     cache.weeklyCostObservation?.rootPaths = rootPaths
                     return true

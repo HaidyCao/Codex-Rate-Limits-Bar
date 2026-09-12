@@ -29,11 +29,10 @@ struct CodexAccountSource {
     init(environment: [String: String] = ProcessInfo.processInfo.environment,
          home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         let path = environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 }
-        codexHome = (path.map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".codex"))
-            .standardizedFileURL.resolvingSymlinksInPath()
+        codexHome = CodexPaths.canonical(path.map { URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".codex"))
         // Codex app-server owns its credentials. A separate CODEX_AUTH_FILE must
         // not redirect only the reset-credit request to a different login.
-        authFile = codexHome.appendingPathComponent("auth.json").resolvingSymlinksInPath()
+        authFile = CodexPaths.canonical(codexHome.appendingPathComponent("auth.json"))
         credentials = (try? Data(contentsOf: authFile)).flatMap {
             (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
         }
