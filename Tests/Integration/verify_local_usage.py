@@ -126,6 +126,7 @@ for line in sys.stdin:
                 assert value["diagnostics"]["status"] == expected, value["diagnostics"]
                 phase = "failed" if expected == "unavailable" else "partial" if expected == "partial" else "success"
                 assert value["freshness"]["status"] == phase, value["freshness"]
+                assert value["persistence"]["status"] == "disabled"
                 assert bool(value["freshness"].get("lastSuccessAtIso")) == (phase == "success")
                 assert bool(value["freshness"].get("dataAtIso")) == (phase != "failed")
                 for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits", "pricing", "unpricedUsage"]:
@@ -269,7 +270,30 @@ for line in sys.stdin:
         support = Path(env["CFFIXED_USER_HOME"]) / "Library/Application Support/Codex Rate Limits Bar"
         cache_file = support / "local-usage-cache.json"
         assert cache_file.exists(), "Persistent CLI cache must remain inside the isolated home"
+        assert persistent["localUsage"]["persistence"] == {"status": "saved"}
         before = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
+        saved_cache = support / "saved-cache.json"
+        cache_file.rename(saved_cache)
+        cache_file.mkdir()
+        pending = json.loads(run("status"))
+        save("cache-pending", pending)
+        for value in [pending["localUsage"], mcp("get_codex_status")["localUsage"],
+                      json.loads(run("local-usage")), mcp("get_codex_local_usage")]:
+            assert value["persistence"]["status"] == "pending" and value["persistence"]["error"]
+            assert value["diagnostics"]["status"] == "complete"
+            assert value["freshness"]["status"] == "success"
+            assert value["totalTokens"] == persistent["localUsage"]["totalTokens"]
+            assert value["todayCost"] == persistent["localUsage"]["todayCost"]
+        invalid = sessions / "persistence-invalid.jsonl"
+        invalid.write_text("broken json\n")
+        partial_pending = json.loads(run("status"))
+        assert partial_pending["localUsage"]["diagnostics"]["status"] == "partial"
+        assert partial_pending["localUsage"]["persistence"]["status"] == "pending"
+        save("partial-cache-pending", partial_pending)
+        invalid.unlink()
+        cache_file.rmdir()
+        saved_cache.rename(cache_file)
+        assert json.loads(run("status"))["localUsage"]["persistence"] == {"status": "saved"}
         for value in [json.loads(run("status")), mcp("get_codex_status")]:
             assert value["localUsage"]["totalTokens"] == persistent["localUsage"]["totalTokens"] == 1000
             for key in ["todayCost", "todayCredits", "billingAssumptions", "unpricedUsage"]:
@@ -315,7 +339,7 @@ for line in sys.stdin:
         current = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
         for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
             assert current[key] == observation[key]
-    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches and complementary copies.")
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches, complementary copies and cache persistence failures.")
 
 
 if __name__ == "__main__":

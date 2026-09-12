@@ -19,7 +19,7 @@ import Foundation
         let output = URL(fileURLWithPath: CommandLine.arguments[2])
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var scenarios = 0
-        for name in ["complete", "unknown", "missing-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure"] {
+        for name in ["complete", "unknown", "missing-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending"] {
             let payload = try JSONDecoder().decode(RateLimitPayload.self, from: Data(contentsOf: fixtures.appendingPathComponent("\(name).json")))
             guard let local = payload.localUsage, let freshness = payload.refresh else { throw RuntimeError("Missing shared snapshot: \(name)") }
             // Independent fixture expectations supplement GUI/CLI/MCP parity.
@@ -47,6 +47,16 @@ import Foundation
             if name == "missing-percent" || name == "invalid-numbers" {
                 try require(payload.selectedRateLimit?.weeklyWindow == nil && freshness.quota.status == .unavailable,
                             "Invalid percentage became a valid quota")
+            }
+            if name.contains("cache-pending") {
+                guard let persistence = local.persistence else { throw RuntimeError("Missing cache persistence") }
+                try require(persistence.status == .pending && localText.contains(AppText.cachePersistence(persistence)),
+                            "GUI lost the pending cache warning")
+                try require(localText.contains(persistence.error ?? "missing cache error"), "GUI lost the cache write error")
+                try require(local.totalTokens == 1000 && local.todayCost?.estimatedCostUSD == 0.004,
+                            "Cache failure invalidated verified amounts")
+                let textWidth = (AppText.localScanStatus(local) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium)]).width
+                try require(textWidth <= 416, "Cache warning is clipped in the local status row")
             }
             try require(tooltips(rate).contains(AppText.officialCreditsBalance(payload.selectedRateLimit?.credits)), "GUI balance differs from payload")
             try require(tooltips(rate).contains(AppText.freshnessDetails(freshness.quota, source: .quota)), "GUI lost quota freshness")

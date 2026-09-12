@@ -6,26 +6,41 @@ import Foundation
 struct LocalUsageCacheStore {
     let cacheFileURL: URL?
     private var persistentCacheSignature: LocalUsageCacheFileSignature?
+    private(set) var needsPersistence = false
+    private var persistenceError: String?
+
+    var persistence: UsageCachePersistence {
+        UsageCachePersistence(status: cacheFileURL == nil ? .disabled : needsPersistence ? .pending : .saved,
+                              error: persistenceError)
+    }
 
     init(fileURL: URL?) { cacheFileURL = fileURL }
 
     mutating func load(into cache: inout LocalUsageScanCache?) {
-        guard let cacheFileURL,
-              let signature = cacheFileSignature(for: cacheFileURL),
-              signature != persistentCacheSignature
-        else { return }
+        guard let cacheFileURL else { return }
+        guard let signature = cacheFileSignature(for: cacheFileURL) else {
+            // A removed cache or an obstructed destination must not discard
+            // valid in-memory observations, even when no logs have changed.
+            if cache != nil { needsPersistence = true }
+            return
+        }
+        guard signature != persistentCacheSignature else { return }
 
         guard let data = try? Data(contentsOf: cacheFileURL) else { return }
 
         do {
             let document = try JSONDecoder().decode(LocalUsageCacheDocument.self, from: data)
             if document.version == LocalUsageCacheDocument.currentVersion {
-                cache = document.cache
+                var incoming = document.cache
+                if needsPersistence, let pending = cache {
+                    incoming.retainPendingHistory(from: pending)
+                }
+                cache = incoming
             } else {
-                cache = nil
+                needsPersistence = true
             }
         } catch {
-            cache = nil
+            needsPersistence = true
             appendSharedLog("local usage cache ignored: \(errorMessage(error))")
         }
         persistentCacheSignature = signature
@@ -33,6 +48,7 @@ struct LocalUsageCacheStore {
 
     private func cacheFileSignature(for url: URL) -> LocalUsageCacheFileSignature? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
               let size = attributes[.size] as? NSNumber,
               let modifiedAt = attributes[.modificationDate] as? Date
         else { return nil }
@@ -82,6 +98,7 @@ struct LocalUsageCacheStore {
 
     mutating func persist(_ cache: LocalUsageScanCache) {
         guard let cacheFileURL else { return }
+        needsPersistence = true
         do {
             try FileManager.default.createDirectory(
                 at: cacheFileURL.deletingLastPathComponent(),
@@ -92,8 +109,12 @@ struct LocalUsageCacheStore {
             encoder.outputFormatting = [.sortedKeys]
             try encoder.encode(document).write(to: cacheFileURL, options: .atomic)
             persistentCacheSignature = cacheFileSignature(for: cacheFileURL)
+            needsPersistence = false
+            persistenceError = nil
         } catch {
-            appendSharedLog("local usage cache write failed: \(errorMessage(error))")
+            let message = errorMessage(error)
+            if persistenceError != message { appendSharedLog("local usage cache write failed: \(message)") }
+            persistenceError = message
         }
     }
 

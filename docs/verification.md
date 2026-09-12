@@ -33,6 +33,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | --- | --- |
 | 账户切换、额度类型、提醒去重、认证来源 | `AccountContextTests`、`QuotaForecastTests`、CLI/MCP 持久化样例 |
 | 提醒取消、开关、接收失败、迟到确认、重试、重启及旧历史兼容 | `UsageRefreshControllerTests`、`QuotaAlertDeliveryTests` |
+| 缓存保存失败、无变化重试、并发写入、取消及旧快照兼容 | `CachePersistenceTests`、CLI/MCP/UI 样例 |
 | 同大小覆写、截断、改名副本、跨 home、归档移动 | `ScannerIdentityTests`、`ScannerEquivalenceTests` |
 | 互补副本、汇合与分叉、跨日/跨 home、旧副本缓存、文件头空行 | `CopyReconciliationTests`、CLI/MCP 持久化样例 |
 | 跨午夜、fork 导入、模型/模式切换、重启 | `LocalUsageScannerTests`、`ScannerEquivalenceTests` |
@@ -52,7 +53,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 产物写到被 Git 忽略的 `.build/verification/`：
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
-- `menu/`：完整、未知模型、明细缺失、比例缺失、非法数值、部分扫描、不可用、接口失败、保留的过期数据、清空账户，共 10 种场景的浅色/深色 PNG。
+- `menu/`：完整、未知模型、明细缺失、比例缺失、非法数值、部分扫描、不可用、接口失败、保留的过期数据、清空账户、完整扫描但未保存、部分扫描且未保存，共 12 种场景的浅色/深色 PNG。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
 

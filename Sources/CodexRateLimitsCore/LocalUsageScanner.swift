@@ -334,7 +334,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                 cacheChanged = true
             }
         }
-        let snapshot = makeSnapshot(
+        var snapshot = makeSnapshot(
             cache: cache,
             filesScanned: files.count,
             now: now,
@@ -345,7 +345,8 @@ final class LocalUsageScanner: @unchecked Sendable {
         try RefreshWork.check()
         guard validateCommit?() ?? true else { throw RuntimeError("Codex account changed while scanning; discarded the result.") }
         self.cache = cache
-        if cacheChanged { cacheStore.persist(cache) }
+        if cacheChanged || cacheStore.needsPersistence { cacheStore.persist(cache) }
+        snapshot.persistence = cacheStore.persistence
         stats.durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
         log(stats: stats, coldScan: isColdScan)
         return snapshot

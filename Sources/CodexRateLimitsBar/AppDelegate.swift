@@ -309,6 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             freshness[source].error.map { "\(AppText.refreshSourceName(source)): \($0)" }
         }
         if let error = currentAutoLaunchError { details.append("\(AppText.autoLaunchFailure): \(error)") }
+        if let persistence = state.localUsage?.persistence, persistence.status == .pending {
+            details.append([AppText.cachePersistence(persistence), persistence.error].compactMap { $0 }.joined(separator: ": "))
+        }
         if let quotaMonitorError = state.quotaMonitorError, !quotaMonitorError.isEmpty {
             details.append("\(AppText.quotaForecastErrorLabel): \(quotaMonitorError)")
         }

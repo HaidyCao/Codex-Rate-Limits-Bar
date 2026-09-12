@@ -62,6 +62,10 @@ public enum AppText {
     public static func scanDetails(_ snapshot: LocalUsageSnapshot) -> String {
         let diagnostics = snapshot.diagnostics
         var lines = [scanStatus(diagnostics)]
+        if let persistence = snapshot.persistence {
+            lines.append(cachePersistence(persistence))
+            if let error = persistence.error { lines.append(error) }
+        }
         if let diagnostics {
             let counts: String
             switch language {
@@ -87,6 +91,32 @@ public enum AppText {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    public static func cachePersistence(_ value: UsageCachePersistence, compact: Bool = false) -> String {
+        switch (language, value.status) {
+        case (.simplifiedChinese, .saved): return "缓存已保存"
+        case (.simplifiedChinese, .pending): return compact ? "缓存待保存" : "缓存未保存 · 将在刷新时重试"
+        case (.simplifiedChinese, .disabled): return "未启用磁盘缓存"
+        case (.traditionalChinese, .saved): return "快取已儲存"
+        case (.traditionalChinese, .pending): return compact ? "快取待儲存" : "快取未儲存 · 將在更新時重試"
+        case (.traditionalChinese, .disabled): return "未啟用磁碟快取"
+        case (.japanese, .saved): return "キャッシュ保存済み"
+        case (.japanese, .pending): return compact ? "キャッシュ未保存" : "キャッシュ未保存 · 更新時に再試行"
+        case (.japanese, .disabled): return "ディスクキャッシュ無効"
+        case (.korean, .saved): return "캐시 저장됨"
+        case (.korean, .pending): return compact ? "캐시 미저장" : "캐시 미저장 · 새로고침 시 재시도"
+        case (.korean, .disabled): return "디스크 캐시 비활성화"
+        case (.english, .saved): return "Cache saved"
+        case (.english, .pending): return compact ? "Cache not saved" : "Cache not saved · retry on refresh"
+        case (.english, .disabled): return "Disk cache disabled"
+        }
+    }
+
+    public static func localScanStatus(_ snapshot: LocalUsageSnapshot?) -> String {
+        let scan = scanStatus(snapshot?.diagnostics)
+        guard let persistence = snapshot?.persistence, persistence.status == .pending else { return scan }
+        return scan + " · " + cachePersistence(persistence, compact: true)
     }
 
     public static var rebuildLocalUsage: String {

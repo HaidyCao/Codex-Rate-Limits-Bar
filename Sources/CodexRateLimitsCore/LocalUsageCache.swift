@@ -17,6 +17,25 @@ struct LocalUsageScanCache: Codable {
     var files: [String: LocalUsageFileState] = [:]
     var weeklyCostObservation: LocalUsageWeeklyCostObservation?
     var pricing: UsagePricingMetadata?
+
+    /// Another process may save while our last write is pending. Adopt its file
+    /// cursors, then retain observations only for the exact same baseline.
+    mutating func retainPendingHistory(from pending: Self) {
+        guard source == pending.source, timeZone == pending.timeZone,
+              let saved = weeklyCostObservation, let unsaved = pending.weeklyCostObservation,
+              saved.windowID == unsaved.windowID, saved.accountScopeKey == unsaved.accountScopeKey,
+              saved.rootPaths == unsaved.rootPaths, saved.startedAt == unsaved.startedAt,
+              saved.timelineStartedAt == unsaved.timelineStartedAt,
+              saved.baselineUsedPercent == unsaved.baselineUsedPercent else { return }
+        var samples = Dictionary((unsaved.history?.samples ?? []).map { ($0.timestamp, $0) },
+                                 uniquingKeysWith: { _, last in last })
+        for sample in saved.history?.samples ?? [] { samples[sample.timestamp] = sample }
+        var history = WeeklyQuotaHistory(restartReason: saved.history?.restartReason)
+        for sample in samples.values.sorted(by: { $0.timestamp < $1.timestamp }) {
+            history.observe(usedPercent: sample.usedPercent, at: sample.timestamp, now: sample.timestamp)
+        }
+        weeklyCostObservation?.history = history
+    }
 }
 
 struct LocalUsageWeeklyCostObservation: Codable {

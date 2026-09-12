@@ -108,7 +108,7 @@ class LocalUsageDrawingView: NSView {
 
         drawText(AppText.todayEstimatedCredits(unavailable ? nil : snapshot?.todayCredits), in: NSRect(x: 12, y: 210, width: bounds.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold), color: labelColor)
         drawText(AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits), in: NSRect(x: 12, y: 234, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        drawText(AppText.scanStatus(snapshot?.diagnostics), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true ? .systemOrange : secondaryColor)
+        drawText(AppText.localScanStatus(snapshot), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true || snapshot?.persistence?.status == .pending ? .systemOrange : secondaryColor)
         drawText(AppText.billingAssumptions(snapshot?.billingAssumptions) ?? "", in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         let unpricedSummary = snapshot?.hasIncompleteTokenBreakdown == true ? AppText.incompleteTokenBreakdown
             : AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? ""
