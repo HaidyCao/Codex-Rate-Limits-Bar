@@ -128,9 +128,29 @@ and reason. Each entry has `totalTokens` and `percent`, relative to all observed
 tokens in its scope. API and credits are independent views of the same tokens;
 do not add their percentages together. The daily list covers local homes, while
 `weeklyQuotaCost.unpricedUsage` covers the active weekly observation. Reasons are
-`unknownModel`, `unknownServiceTier`, `unsupportedContext` and `stalePricing`.
+`unknownModel`, `unknownServiceTier`, `unsupportedContext`,
+`incompleteTokenBreakdown` and `stalePricing`.
 The UI tooltip, CLI and MCP expose the same details. Known-price requests retain
 their amounts even if another request for the same model is unpriced.
+
+Token totals remain visible when billing components are missing or inconsistent.
+Pricing requires input plus output to equal the total, cached/cache-write input
+to fit within input, and reasoning output to fit within output. Omitted zero
+components remain supported when those checks hold. A delta is unpriced if
+either cumulative endpoint fails these checks, even if its own counters balance.
+Fully unpriced usage shows `--` and 0% pricing coverage; a confirmed zero total
+still shows zero. Scan completeness reports whether logs were read, independently
+of pricing coverage. Weekly valuation excludes intervals containing unpriced tokens.
+When breakdowns are incomplete, the menu's component cards and cache-hit rate
+show `--`. CLI/MCP retain numeric component counters for compatibility; inspect
+`unpricedUsage` before treating those counters as a complete breakdown.
+
+The calculation revision replays existing v4 caches without resetting valid
+account baselines or official weekly samples. Missing component information is
+never reconstructed using the current request's input count or model price.
+The first upgrade scans retained logs again. Concurrent CLI reads can reach the
+15-second cache-lock timeout while that scan is running; retry after it finishes.
+Subsequent reads reuse the upgraded cache.
 
 ## Sources
 

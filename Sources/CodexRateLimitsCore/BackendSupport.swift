@@ -7,19 +7,19 @@ func stringValue(_ value: Any?) -> String? {
 }
 
 func intValue(_ value: Any?) -> Int? {
-    guard let value, !(value is NSNull) else { return nil }
-    if let value = value as? Int { return value }
-    if let value = value as? Int64 { return Int(value) }
-    if let value = value as? Double { return Int(value) }
-    if let value = value as? NSNumber { return value.intValue }
+    if let number = value as? NSNumber {
+        guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return Int(number.stringValue) ?? Int(exactly: number.doubleValue)
+    }
     if let value = value as? String { return Int(value) }
     return nil
 }
 
 func boolValue(_ value: Any?) -> Bool {
     guard let value, !(value is NSNull) else { return false }
-    if let value = value as? Bool { return value }
-    if let value = value as? NSNumber { return value.boolValue }
+    if let number = value as? NSNumber {
+        return CFGetTypeID(number) == CFBooleanGetTypeID() && number.boolValue
+    }
     if let value = value as? String { return value == "true" }
     return false
 }
@@ -37,8 +37,13 @@ func isoNow() -> String {
 }
 
 func isoFromEpochSeconds(_ seconds: Int?) -> String? {
-    guard let seconds else { return nil }
+    guard let seconds, validEpochSeconds(Double(seconds)) else { return nil }
     return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
+}
+
+// Keep external timestamps within nonnegative, four-digit ISO calendar years.
+func validEpochSeconds(_ seconds: Double) -> Bool {
+    seconds.isFinite && seconds >= 0 && seconds < 253_402_300_800
 }
 
 func parseIsoDate(_ value: String?) -> Date? {

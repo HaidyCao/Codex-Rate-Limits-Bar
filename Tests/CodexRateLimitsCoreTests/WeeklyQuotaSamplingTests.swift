@@ -82,6 +82,33 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
         XCTAssertEqual(stale.weeklyQuotaCost?.observationStartIso, trained.weeklyQuotaCost?.observationStartIso)
     }
 
+    func testOldPricingCalculationReplaysWithoutDiscardingWeeklyObservation() throws {
+        let trained = try train(scanner())
+        func oldCalculation(_ value: Any) -> Any {
+            if let array = value as? [Any] { return array.map(oldCalculation) }
+            guard var object = value as? [String: Any] else { return value }
+            object = object.mapValues(oldCalculation)
+            if let signature = object["pricingSignature"] as? String {
+                object["pricingSignature"] = signature.replacingOccurrences(of: "pricing-v3|", with: "pricing-v2|")
+            }
+            if object["amount"] != nil { object["amount"] = 0 }
+            if object["costUSD"] != nil { object["costUSD"] = 0 }
+            if object["validRecords"] != nil { object["version"] = 1 }
+            object.removeValue(forKey: "breakdownUnavailable")
+            return object
+        }
+        let original = try JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL))
+        try JSONSerialization.data(withJSONObject: oldCalculation(original)).write(to: cacheURL, options: .atomic)
+        let migrated = try scanner().snapshot(weeklyWindow: window(95), quotaSampleAt: now)
+        XCTAssertEqual(migrated.todayCost?.estimatedCostUSD, trained.todayCost?.estimatedCostUSD)
+        XCTAssertEqual(migrated.todayCredits?.estimatedCredits, trained.todayCredits?.estimatedCredits)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.observedCostUSD, trained.weeklyQuotaCost?.observedCostUSD)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.estimatedQuotaUSD, trained.weeklyQuotaCost?.estimatedQuotaUSD)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.observationStartIso, trained.weeklyQuotaCost?.observationStartIso)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.baselineUsedPercent, trained.weeklyQuotaCost?.baselineUsedPercent)
+        XCTAssertEqual(migrated.weeklyQuotaCost?.valuation?.sampleCount, trained.weeklyQuotaCost?.valuation?.sampleCount)
+    }
+
     func testRepricingAndRebuildRecalculateTimedCostsAndPreserveSamples() throws {
         let scanner = scanner()
         let before = try train(scanner)
@@ -180,6 +207,22 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
         XCTAssertGreaterThan(partial.weeklyQuotaCost?.coveragePercent ?? 0, 99)
         XCTAssertEqual(partial.weeklyQuotaCost?.inferencePauseReason, "unpricedUsage")
         XCTAssertNil(partial.weeklyQuotaCost?.estimatedQuotaUSD)
+    }
+
+    func testMissingBreakdownPausesAReadyWeeklyValuation() throws {
+        let scanner = scanner()
+        let trained = try train(scanner)
+        XCTAssertEqual(trained.weeklyQuotaCost?.valuation?.status, .ready)
+        try write([["timestamp": ISO8601DateFormatter().string(from: at(95).addingTimeInterval(-10)),
+                    "type": "event_msg", "payload": ["type": "token_count", "info": [
+                        "total_token_usage": ["total_tokens": 95_001], "last_token_usage": ["input_tokens": 1]]]]],
+                  to: file, append: true)
+        let partial = try scanner.snapshot(weeklyWindow: window(95), quotaSampleAt: now)
+        XCTAssertEqual(partial.totalTokens, 95_001)
+        XCTAssertEqual(partial.weeklyQuotaCost?.unpricedTokens, 1)
+        XCTAssertEqual(partial.weeklyQuotaCost?.inferencePauseReason, "unpricedUsage")
+        XCTAssertNil(partial.weeklyQuotaCost?.estimatedQuotaUSD)
+        XCTAssertEqual(partial.weeklyQuotaCost?.baselineUsedPercent, trained.weeklyQuotaCost?.baselineUsedPercent)
     }
 
     func testLegacyAggregateMigrationPreservesBaselineAndStartsTimedEvidenceNow() throws {

@@ -62,7 +62,7 @@ class LocalUsageDrawingView: NSView {
         let inputTokens = snapshot?.inputTokens ?? 0
         let cachedInputTokens = snapshot?.cachedInputTokens ?? 0
         let cacheWriteInputTokens = snapshot?.cacheWriteInputTokens ?? 0
-        let newInputTokens = max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens)
+        let newInputTokens = max(0, max(0, inputTokens - cachedInputTokens) - cacheWriteInputTokens)
         let outputTokens = snapshot?.outputTokens ?? 0
         let eventCount = snapshot?.eventCount ?? 0
         let cacheHitPercent = snapshot?.cacheHitPercent
@@ -71,6 +71,7 @@ class LocalUsageDrawingView: NSView {
         drawText(AppText.localUsageTitle, in: NSRect(x: 32, y: 10, width: 250, height: 18), font: .systemFont(ofSize: 12, weight: .bold), color: labelColor)
 
         let unavailable = snapshot == nil || snapshot?.diagnostics?.status == .unavailable
+        let breakdownUnavailable = unavailable || snapshot?.hasIncompleteTokenBreakdown == true
         let rawTotal = unavailable ? "--" : formatRawNumber(totalTokens)
         let rawFont = NSFont.monospacedDigitSystemFont(ofSize: 32, weight: .bold)
         let rawWidth = ceil(NSString(string: rawTotal).size(withAttributes: [.font: rawFont]).width)
@@ -79,8 +80,9 @@ class LocalUsageDrawingView: NSView {
         let requestRect = NSRect(x: bounds.width - 152, y: 12, width: 140, height: 58)
         drawSubCard(requestRect, fill: subCardFill, stroke: subCardStroke)
         drawText(AppText.todayEstimatedCostCardTitle(requests: eventCount), in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 6, width: requestRect.width - 20, height: 16), font: .systemFont(ofSize: 10.5, weight: .semibold), color: secondaryColor)
-        let cost = USDFormatter.string(unavailable ? nil : snapshot?.todayCost?.estimatedCostUSD)
-        let costSuffix = snapshot?.diagnostics?.status == .partial ? "*" : snapshot?.todayCost?.isPartial == true ? "+" : ""
+        let amount = unavailable ? nil : snapshot?.todayCost?.estimatedCostUSD
+        let cost = USDFormatter.string(amount)
+        let costSuffix = amount == nil ? "" : snapshot?.diagnostics?.status == .partial ? "*" : snapshot?.todayCost?.isPartial == true ? "+" : ""
         drawText("\(cost)\(costSuffix)", in: NSRect(x: requestRect.minX + 10, y: requestRect.minY + 24, width: requestRect.width - 20, height: 24), font: .monospacedDigitSystemFont(ofSize: 18, weight: .bold), color: labelColor)
 
         let padding: CGFloat = 12
@@ -93,22 +95,24 @@ class LocalUsageDrawingView: NSView {
         let rowTwoY: CGFloat = 144
 
         let rect1 = NSRect(x: padding, y: rowOneY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect1, title: AppText.newInput, value: unavailable ? "--" : TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect1, title: AppText.newInput, value: breakdownUnavailable ? "--" : TokenAmountFormatter.compact(newInputTokens, maximumFractionDigits: 1), tint: blue, fill: subCardFill, stroke: subCardStroke)
 
         let rect2 = NSRect(x: padding + cardWidth + gap, y: rowOneY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect2, title: AppText.output, value: unavailable ? "--" : TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect2, title: AppText.output, value: breakdownUnavailable ? "--" : TokenAmountFormatter.compact(outputTokens, maximumFractionDigits: 1), tint: purple, fill: subCardFill, stroke: subCardStroke)
 
         let rect3 = NSRect(x: padding, y: rowTwoY, width: cardWidth, height: cardHeight)
-        drawMetricCard(rect3, title: AppText.hit, value: unavailable ? "--" : TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: subCardFill, stroke: subCardStroke)
+        drawMetricCard(rect3, title: AppText.hit, value: breakdownUnavailable ? "--" : TokenAmountFormatter.compact(cachedInputTokens, maximumFractionDigits: 2), tint: green, fill: subCardFill, stroke: subCardStroke)
 
         let rect4 = NSRect(x: padding + cardWidth + gap, y: rowTwoY, width: cardWidth, height: cardHeight)
-        drawCacheHitCard(rect4, percent: cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
+        drawCacheHitCard(rect4, percent: breakdownUnavailable ? nil : cacheHitPercent, fill: subCardFill, stroke: subCardStroke, tint: green)
 
         drawText(AppText.todayEstimatedCredits(unavailable ? nil : snapshot?.todayCredits), in: NSRect(x: 12, y: 210, width: bounds.width - 24, height: 20), font: .monospacedDigitSystemFont(ofSize: 13, weight: .semibold), color: labelColor)
         drawText(AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits), in: NSRect(x: 12, y: 234, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         drawText(AppText.scanStatus(snapshot?.diagnostics), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true ? .systemOrange : secondaryColor)
         drawText(AppText.billingAssumptions(snapshot?.billingAssumptions) ?? "", in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
-        drawText(AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? "", in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        let unpricedSummary = snapshot?.hasIncompleteTokenBreakdown == true ? AppText.incompleteTokenBreakdown
+            : AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? ""
+        drawText(unpricedSummary, in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         drawText(AppText.pricingVersion(snapshot?.pricing), in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: snapshot?.pricing?.configurationError == nil ? secondaryColor : .systemOrange)
         drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 342, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
         drawText(AppText.freshnessSummary(freshness, source: .localUsage), in: NSRect(x: 12, y: 364, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)

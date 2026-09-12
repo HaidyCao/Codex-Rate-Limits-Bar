@@ -876,7 +876,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             ))
         }
 
-        let cacheHitPercent = totals.inputTokens > 0
+        let cacheHitPercent = totals.hasCompleteBreakdown && totals.inputTokens > 0
             ? max(0, min(100, (Double(totals.cachedInputTokens) / Double(totals.inputTokens)) * 100))
             : nil
         topFiles.sort { $0.totalTokens > $1.totalTokens }

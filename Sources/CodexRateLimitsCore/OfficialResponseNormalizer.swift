@@ -42,13 +42,16 @@ enum OfficialResponseNormalizer {
     }
 
     private static func normalizeWindow(_ window: [String: Any]?) -> RateLimitWindow? {
-        guard let window else { return nil }
-        let usedPercent = intValue(window["usedPercent"]) ?? 0
-        let resetsAt = intValue(window["resetsAt"])
+        guard let window, let usedPercent = intValue(window["usedPercent"]),
+              (0...100).contains(usedPercent) else { return nil }
+        let resetsAt = intValue(window["resetsAt"]).flatMap { validEpochSeconds(Double($0)) ? $0 : nil }
+        let duration = intValue(window["windowDurationMins"]).flatMap {
+            $0 > 0 && validEpochSeconds(Double($0) * 60) ? $0 : nil
+        }
         return RateLimitWindow(
             usedPercent: usedPercent,
             remainingPercent: max(0, 100 - usedPercent),
-            windowDurationMins: intValue(window["windowDurationMins"]),
+            windowDurationMins: duration,
             resetsAt: resetsAt,
             resetsAtIso: isoFromEpochSeconds(resetsAt)
         )
@@ -56,10 +59,17 @@ enum OfficialResponseNormalizer {
 
     private static func normalizeCredits(_ credits: [String: Any]?) -> CreditsSnapshot? {
         guard let credits else { return nil }
+        let rawBalance: String?
+        if let number = credits["balance"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            rawBalance = number.stringValue
+        } else { rawBalance = credits["balance"] as? String }
+        let balance = rawBalance.flatMap { raw in
+            Double(raw).flatMap { $0.isFinite && $0 >= 0 ? raw : nil }
+        }
         return CreditsSnapshot(
             hasCredits: boolValue(credits["hasCredits"]),
             unlimited: boolValue(credits["unlimited"]),
-            balance: stringValue(credits["balance"])
+            balance: balance
         )
     }
 
@@ -69,8 +79,10 @@ enum OfficialResponseNormalizer {
         credits.sort { resetCreditSortKey($0) < resetCreditSortKey($1) }
 
         let fallbackAvailableCount = credits.filter { $0.status == "available" }.count
-        let availableCount = intValue(response["availableCount"] ?? response["available_count"])
-            ?? (response["credits"] is [Any] ? fallbackAvailableCount : nil)
+        let rawCount = response["availableCount"] ?? response["available_count"]
+        let availableCount = rawCount == nil
+            ? (response["credits"] is [Any] ? fallbackAvailableCount : nil)
+            : intValue(rawCount).flatMap { $0 >= 0 ? $0 : nil }
         let firstTypeLabel = credits.first?.typeLabel ?? AppText.resetCreditsCategory
         let visibleSource = credits.contains { $0.status == "available" }
             ? credits.filter { $0.status == "available" }
@@ -159,12 +171,15 @@ enum OfficialResponseNormalizer {
     private static func isoString(_ value: Any?) -> String? {
         guard let value, !(value is NSNull) else { return nil }
         if let number = value as? NSNumber {
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
             let raw = number.doubleValue
             let seconds = raw > 10_000_000_000 ? raw / 1000 : raw
+            guard validEpochSeconds(seconds) else { return nil }
             return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: seconds))
         }
-        guard let string = stringValue(value), !string.isEmpty else { return nil }
-        return parseIsoDate(string).map { ISO8601DateFormatter().string(from: $0) }
+        guard let string = value as? String, let date = parseIsoDate(string),
+              validEpochSeconds(date.timeIntervalSince1970) else { return nil }
+        return ISO8601DateFormatter().string(from: date)
     }
 
     private static func resetCreditTypeLabel(_ value: String?) -> String {

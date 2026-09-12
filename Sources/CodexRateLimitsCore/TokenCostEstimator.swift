@@ -7,9 +7,20 @@ struct TokenUsage: Codable, Equatable, Sendable {
     var outputTokens: Int64 = 0
     var reasoningOutputTokens: Int64 = 0
     var totalTokens: Int64 = 0
+    // Optional for compatibility with existing cached counters. A delta can
+    // look balanced even though one of its cumulative endpoints was incomplete.
+    var breakdownUnavailable: Bool? = nil
+
+    var hasCompleteBreakdown: Bool {
+        breakdownUnavailable != true && inputTokens >= 0 && outputTokens >= 0
+            && totalTokens >= inputTokens && totalTokens - inputTokens == outputTokens
+            && cachedInputTokens >= 0 && cachedInputTokens <= inputTokens
+            && cacheWriteInputTokens >= 0 && cacheWriteInputTokens <= inputTokens - cachedInputTokens
+            && reasoningOutputTokens >= 0 && reasoningOutputTokens <= outputTokens
+    }
 
     var uncachedInputTokens: Int64 {
-        max(0, inputTokens - cachedInputTokens - cacheWriteInputTokens)
+        max(0, max(0, inputTokens - cachedInputTokens) - cacheWriteInputTokens)
     }
 
     static func from(_ value: Any?) -> TokenUsage? {
@@ -43,6 +54,7 @@ struct TokenUsage: Codable, Equatable, Sendable {
     }
 
     mutating func add(_ other: TokenUsage) {
+        if !hasCompleteBreakdown || !other.hasCompleteBreakdown { breakdownUnavailable = true }
         inputTokens += other.inputTokens
         cachedInputTokens += other.cachedInputTokens
         cacheWriteInputTokens += other.cacheWriteInputTokens
@@ -78,7 +90,7 @@ enum TokenCostEstimator {
         let snapshot = PricingCatalog.current
         let api = canonicalModel(model).flatMap { snapshot.apiSignatures[$0] } ?? "unpriced"
         let credits = snapshot.document.credits.canonical(model).flatMap { snapshot.creditSignatures[$0] } ?? "unpriced"
-        return "pricing-v2|\(api)|\(credits)"
+        return "pricing-v3|\(api)|\(credits)"
     }
     static func needsRequestContext(_ model: String?) -> Bool {
         PricingCatalog.current.document.api.rate(model)?.needsContext == true
@@ -156,7 +168,8 @@ struct TokenCostAccumulator: Codable {
                 bucket.api?.pricedTokens += usage.totalTokens
             } else {
                 bucket.api?.unpricedTokens += usage.totalTokens
-                missing("api", TokenCostEstimator.canonicalModel(label) == nil ? "unknownModel" : "unsupportedContext")
+                missing("api", !usage.hasCompleteBreakdown ? "incompleteTokenBreakdown"
+                    : TokenCostEstimator.canonicalModel(label) == nil ? "unknownModel" : "unsupportedContext")
             }
             if let value = CodexCreditEstimator.estimate(usage: usage, model: label,
                                                        requestInputTokens: requestInputTokens, serviceTier: serviceTier) {
@@ -168,7 +181,8 @@ struct TokenCostAccumulator: Codable {
                 }
             } else {
                 bucket.credits?.unpricedTokens += usage.totalTokens
-                missing("credits", CodexCreditEstimator.unpricedReason(model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
+                missing("credits", !usage.hasCompleteBreakdown ? "incompleteTokenBreakdown"
+                    : CodexCreditEstimator.unpricedReason(model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
             }
         } else {
             bucket.pricingSignature = nil

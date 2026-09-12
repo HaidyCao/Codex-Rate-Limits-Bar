@@ -49,6 +49,7 @@ struct PricingRate: Codable, Sendable {
     var needsContext: Bool { contextTier != nil || maximumInputTokens != nil }
 
     func estimate(_ usage: TokenUsage, requestInput: Int64?, multiplier: Double = 1) -> Double? {
+        guard usage.hasCompleteBreakdown else { return nil }
         if let maximumInputTokens, let requestInput, requestInput > maximumInputTokens { return nil }
         let long = contextTier.map { (requestInput ?? 0) > $0.threshold } == true
         let inputCost = Double(usage.uncachedInputTokens) * input

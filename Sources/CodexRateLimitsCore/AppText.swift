@@ -1192,6 +1192,7 @@ extension AppText {
             case "unknownModel": reason = weeklyText("未知模型", "未知模型", "不明なモデル", "알 수 없는 모델", "unknown model")
             case "unknownServiceTier": reason = weeklyText("未知模式", "未知模式", "不明なモード", "알 수 없는 모드", "unknown mode")
             case "unsupportedContext": reason = weeklyText("该上下文无价格", "該上下文無價格", "対象コンテキストの価格なし", "컨텍스트 요금 없음", "unpriced context")
+            case "incompleteTokenBreakdown": reason = incompleteTokenBreakdown
             default: reason = weeklyText("等待价格重算", "等待價格重算", "再計算待ち", "요금 재계산 대기", "awaiting repricing")
             }
             let tier = entry.serviceTier.map { " · \($0)" } ?? ""
@@ -1209,6 +1210,10 @@ extension AppText {
         case .korean: return "오늘 credits 추정: \(value)"
         case .english: return "Estimated credits today: \(value)"
         }
+    }
+
+    public static var incompleteTokenBreakdown: String {
+        weeklyText("token 明细缺失或不一致", "token 明細缺失或不一致", "token 内訳が欠落または不整合", "token 세부 내역 누락 또는 불일치", "missing or inconsistent token breakdown")
     }
 
     public static func officialCreditsBalance(_ credits: CreditsSnapshot?) -> String {

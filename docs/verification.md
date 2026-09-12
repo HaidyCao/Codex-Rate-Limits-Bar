@@ -40,6 +40,8 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 重试、独立错误、超时、网络恢复状态、迟到结果 | `RefreshStateTests`、`UsageRefreshControllerTests`、假服务超时清理/恢复样例 |
 | 缺失归档目录创建后的路径别名与历史保留 | `AccountContextTests`、`ScannerEquivalenceTests`、CLI/MCP 持久化样例 |
 | 统计不可用时的 GUI credits 提示 | `VerifyMenu.swift` 使用 CLI/MCP 的不可用数据样例 |
+| token 明细缺失/矛盾、差值传播、明细恢复与旧缓存重算 | `InputValidationTests`、`ScannerCompletenessTests`、`WeeklyQuotaSamplingTests`、CLI/MCP/UI 样例 |
+| 官方比例缺失、越界整数、非法计数/余额/日期 | `InputValidationTests`、CLI/MCP/UI 样例 |
 
 `ScannerEquivalenceTests` 使用独立缓存：一侧持续增量读取并重启，另一侧每次完整重建。对比包含 tokens、事件计数、明细、API/credits 金额、诊断、价格信息和周观察；只排除随运行耗时变化的 `ageSeconds`。同时断言独立已知的 tokens 和金额，避免两个实现路径一起算错却通过比较。不能用删除日志或同大小覆写来“证明缓存复用”。
 
@@ -48,7 +50,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 产物写到被 Git 忽略的 `.build/verification/`：
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
-- `menu/`：完整、未知模型、部分扫描、不可用、接口失败、保留的过期数据、清空账户等 7 种场景的浅色/深色 PNG。
+- `menu/`：完整、未知模型、明细缺失、比例缺失、非法数值、部分扫描、不可用、接口失败、保留的过期数据、清空账户，共 10 种场景的浅色/深色 PNG。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 
 AppKit 检查收集 `Sources/CodexRateLimitsBar/` 中除 `main.swift` 外的全部实际实现文件，使用独立验证入口；`main.swift` 仅保留应用启动入口。验证入口不启动菜单栏、登录项或通知。自动检查共享快照的显示标签和状态是否传入视图，生成图像供排版检查；PNG 成功生成不等于已经自动判断所有像素的正确性。

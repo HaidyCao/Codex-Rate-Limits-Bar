@@ -119,7 +119,8 @@ enum LocalUsageLog {
             cacheWriteInputTokens: max(previous.cacheWriteInputTokens, current.cacheWriteInputTokens),
             outputTokens: max(previous.outputTokens, current.outputTokens),
             reasoningOutputTokens: max(previous.reasoningOutputTokens, current.reasoningOutputTokens),
-            totalTokens: max(previous.totalTokens, current.totalTokens)
+            totalTokens: max(previous.totalTokens, current.totalTokens),
+            breakdownUnavailable: current.hasCompleteBreakdown ? nil : true
         )
     }
 
@@ -134,7 +135,8 @@ enum LocalUsageLog {
             cacheWriteInputTokens: current.cacheWriteInputTokens >= previous.cacheWriteInputTokens ? current.cacheWriteInputTokens - previous.cacheWriteInputTokens : (sameSession ? 0 : current.cacheWriteInputTokens),
             outputTokens: current.outputTokens >= previous.outputTokens ? current.outputTokens - previous.outputTokens : (sameSession ? 0 : current.outputTokens),
             reasoningOutputTokens: current.reasoningOutputTokens >= previous.reasoningOutputTokens ? current.reasoningOutputTokens - previous.reasoningOutputTokens : (sameSession ? 0 : current.reasoningOutputTokens),
-            totalTokens: current.totalTokens >= previous.totalTokens ? current.totalTokens - previous.totalTokens : (sameSession ? 0 : current.totalTokens)
+            totalTokens: current.totalTokens >= previous.totalTokens ? current.totalTokens - previous.totalTokens : (sameSession ? 0 : current.totalTokens),
+            breakdownUnavailable: previous.hasCompleteBreakdown && current.hasCompleteBreakdown ? nil : true
         )
         return delta.inputTokens > 0
             || delta.cachedInputTokens > 0

@@ -60,6 +60,13 @@ for line in sys.stdin:
         if os.environ.get('FIXTURE_MODE') == 'missing':
             del result['rateLimits']['credits']
             result['rateLimitResetCredits'] = {}
+        if os.environ.get('FIXTURE_MODE') == 'missing-percent':
+            del result['rateLimits']['secondary']['usedPercent']
+        if os.environ.get('FIXTURE_MODE') == 'invalid-numbers':
+            result['rateLimits']['secondary']['usedPercent'] = 1e100
+            result['rateLimits']['secondary']['resetsAt'] = 1e100
+            result['rateLimits']['credits'] = {'unlimited': 2, 'balance': 'NaN'}
+            result['rateLimitResetCredits'] = {'availableCount': 1e100, 'credits': []}
     else:
         result = {}
     print(json.dumps({'id': request['id'], 'result': result}), flush=True)
@@ -92,9 +99,11 @@ for line in sys.stdin:
             responses = [json.loads(line) for line in run("mcp", input="".join(json.dumps(m) + "\n" for m in messages)).splitlines()]
             return json.loads(next(r for r in responses if r.get("id") == 2)["result"]["content"][0]["text"])
 
-        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard"):
+        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard", breakdown=True):
             context = {"model": model}
             info = {"total_token_usage": {"input_tokens": 1000, "total_tokens": 1000}}
+            if not breakdown:
+                del info["total_token_usage"]["input_tokens"]
             if complete:
                 context["service_tier"] = tier
                 info["last_token_usage"] = {"input_tokens": 1000}
@@ -147,6 +156,15 @@ for line in sys.stdin:
         assert complete["totalTokens"] == 1000
         assert complete["billingAssumptions"]["apiPercent"] == 0
         assert len(complete["topFiles"][0]["sourceFiles"]) == 2
+
+        write_usage(breakdown=False)
+        missing_breakdown = check_shared_status("complete", "missing-breakdown")
+        assert missing_breakdown["totalTokens"] == 1000
+        for key, amount in [("todayCost", "estimatedCostUSD"), ("todayCredits", "estimatedCredits")]:
+            assert missing_breakdown[key].get(amount) is None
+            assert missing_breakdown[key]["coveragePercent"] == 0
+            assert missing_breakdown[key]["unpricedTokens"] == 1000
+        assert {entry["reason"] for entry in missing_breakdown["unpricedUsage"]} == {"incompleteTokenBreakdown"}
 
         write_usage(model="Raw-Private-Model", tier="private-mode")
         unknown = check_shared_status("complete", "unknown")
@@ -216,6 +234,17 @@ for line in sys.stdin:
                 assert value["refresh"][source]["status"] == "unavailable"
                 assert not value["refresh"][source].get("lastSuccessAtIso")
             assert value["resetCredits"].get("availableCount") is None
+        for mode in ["missing-percent", "invalid-numbers"]:
+            env["FIXTURE_MODE"] = mode
+            for value in [json.loads(run("status")), mcp("get_codex_status")]:
+                save(mode, value)
+                assert value["refresh"]["quota"]["status"] == "unavailable"
+                assert value["display"]["primaryLabel"] == "W --"
+                assert not value["refresh"]["quota"].get("lastSuccessAtIso")
+                if mode == "invalid-numbers":
+                    assert value["refresh"]["credits"]["status"] == "unavailable"
+                    assert value["resetCredits"].get("availableCount") is None
+                    assert value["refresh"]["resetCredits"]["status"] == "unavailable"
         env["FIXTURE_MODE"] = "hang"
         env["FIXTURE_PID_FILE"] = str(root / "child.pid")
         started = time.monotonic()

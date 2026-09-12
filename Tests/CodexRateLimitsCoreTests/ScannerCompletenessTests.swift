@@ -60,6 +60,48 @@ final class ScannerCompletenessTests: XCTestCase {
         XCTAssertEqual(spaced.billingAssumptions?.assumedAPITokens, 0)
     }
 
+    func testIncompleteBreakdownSurvivesAppendRestartAndRebuildThenRecovers() throws {
+        func event(total: Int, input: Int?, minute: Int) -> [String: Any] {
+            var counters = ["total_tokens": total]
+            counters["input_tokens"] = input
+            return ["type": "event_msg", "timestamp": "2026-09-11T07:0\(minute):00Z",
+                    "payload": ["type": "token_count", "info": ["total_token_usage": counters,
+                                 "last_token_usage": ["input_tokens": 100]]]]
+        }
+        let file = root.appendingPathComponent("usage.jsonl")
+        try write(Array(events().prefix(2)) + [event(total: 1000, input: nil, minute: 1)])
+        var reader = scanner()
+        let initial = try reader.snapshot()
+        XCTAssertEqual(initial.totalTokens, 1000)
+        XCTAssertNil(initial.todayCost?.estimatedCostUSD)
+        XCTAssertNil(initial.todayCredits?.estimatedCredits)
+        XCTAssertEqual(initial.todayCost?.coveragePercent, 0)
+        XCTAssertTrue(initial.hasIncompleteTokenBreakdown)
+        XCTAssertNil(initial.cacheHitPercent)
+        XCTAssertEqual(initial.diagnostics?.status, .complete)
+        for (total, input, minute) in [(1500, 500, 2), (2000, 2000, 3), (2500, 2500, 4)] {
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: event(total: total, input: input, minute: minute)) + Data([0x0A]))
+            try handle.close()
+            let appended = try reader.snapshot()
+            XCTAssertEqual(appended.totalTokens, Int64(total))
+            if total < 2500 { XCTAssertNil(appended.todayCost?.estimatedCostUSD) }
+            reader = scanner()
+            let restarted = try reader.snapshot()
+            XCTAssertEqual(restarted.todayCost?.estimatedCostUSD, appended.todayCost?.estimatedCostUSD)
+        }
+        for result in [try reader.snapshot(), try reader.snapshot(rebuild: true)] {
+            XCTAssertEqual(result.totalTokens, 2500)
+            XCTAssertEqual(try XCTUnwrap(result.todayCost?.estimatedCostUSD), 0.002, accuracy: 1e-10)
+            XCTAssertEqual(try XCTUnwrap(result.todayCredits?.estimatedCredits), 0.05, accuracy: 1e-10)
+            XCTAssertEqual(result.todayCost?.coveragePercent, 20)
+            XCTAssertEqual(result.todayCredits?.unpricedTokens, 2000)
+            XCTAssertNil(result.cacheHitPercent)
+            XCTAssertEqual(Set(result.unpricedUsage?.map(\.reason) ?? []), ["incompleteTokenBreakdown"])
+        }
+    }
+
     func testUnreadableSingleFileReportsIncompleteAndRecovers() throws {
         let file = root.appendingPathComponent("usage.jsonl")
         try write(events())

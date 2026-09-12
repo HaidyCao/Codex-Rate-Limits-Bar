@@ -92,7 +92,7 @@ public struct UsageBillingAssumptions: Codable, Sendable {
 }
 
 struct UsageFileDiagnostics: Codable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     var version = currentVersion
     var validRecords = 0
     var todayUsageEvents = 0

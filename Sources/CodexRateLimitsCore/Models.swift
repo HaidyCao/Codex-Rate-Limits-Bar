@@ -238,6 +238,10 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public var pricing: UsagePricingMetadata? = nil
     public var unpricedUsage: [UnpricedUsage]? = nil
     public var freshness: DataFreshness? = nil
+
+    public var hasIncompleteTokenBreakdown: Bool {
+        unpricedUsage?.contains { $0.reason == "incompleteTokenBreakdown" } == true
+    }
 }
 
 public struct RuntimeError: Error, LocalizedError {
