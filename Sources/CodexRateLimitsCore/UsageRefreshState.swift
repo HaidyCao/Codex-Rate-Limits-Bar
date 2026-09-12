@@ -10,6 +10,7 @@ public struct UsageRefreshState: Sendable {
     public internal(set) var localUsage: LocalUsageSnapshot?
     public internal(set) var quotaForecast: QuotaForecast?
     public internal(set) var quotaMonitorError: String?
+    public internal(set) var quotaAlertError: String?
 
     public var weeklyRemaining: Int? { weeklyWindow?.remainingPercent }
     public var resetAvailableCount: Int? { resetCredits?.availableCount }

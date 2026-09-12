@@ -85,7 +85,7 @@ final class QuotaForecastTests: XCTestCase {
         let duplicate = QuotaAlertEvaluator.evaluate(
             window: warningWindow,
             forecast: nil,
-            previousState: first.state,
+            previousState: acknowledged(first),
             alertsEnabled: true,
             now: now.addingTimeInterval(60)
         )
@@ -101,7 +101,8 @@ final class QuotaForecastTests: XCTestCase {
         )
         XCTAssertEqual(critical.events.map(\.kind), [.critical])
         XCTAssertTrue(critical.state.deliveredKinds.contains(.warning))
-        XCTAssertTrue(critical.state.deliveredKinds.contains(.critical))
+        XCTAssertFalse(critical.state.deliveredKinds.contains(.critical))
+        XCTAssertTrue(acknowledged(critical).deliveredKinds.contains(.critical))
     }
 
     func testActionableForecastAlertIsSentOnce() throws {
@@ -122,7 +123,7 @@ final class QuotaForecastTests: XCTestCase {
         let duplicate = QuotaAlertEvaluator.evaluate(
             window: window,
             forecast: forecast,
-            previousState: first.state,
+            previousState: acknowledged(first),
             alertsEnabled: true,
             now: now.addingTimeInterval(60)
         )
@@ -213,7 +214,7 @@ final class QuotaForecastTests: XCTestCase {
         let corrected = QuotaAlertEvaluator.evaluate(
             window: correctedWindow,
             forecast: nil,
-            previousState: initial.state,
+            previousState: acknowledged(initial),
             alertsEnabled: true,
             now: now.addingTimeInterval(60)
         )
@@ -246,6 +247,7 @@ final class QuotaForecastTests: XCTestCase {
         XCTAssertEqual(current.forecast?.basis, .recentTrend)
         XCTAssertEqual(current.alerts.map(\.kind), [.projectedExhaustion])
 
+        XCTAssertNil(secondMonitor.acknowledge(try XCTUnwrap(current.alerts.first)))
         let thirdMonitor = QuotaMonitor(fileURL: fileURL)
         let duplicate = thirdMonitor.update(
             window: currentWindow,
@@ -296,6 +298,12 @@ final class QuotaForecastTests: XCTestCase {
         XCTAssertNotNil(snapshot.forecast)
         XCTAssertEqual(snapshot.alerts.map(\.kind), [.warning])
         XCTAssertNotNil(snapshot.persistenceError)
+    }
+
+    private func acknowledged(_ decision: QuotaAlertDecision) -> QuotaAlertState {
+        var state = decision.state
+        for event in decision.events { state.acknowledge(event) }
+        return state
     }
 
     private func makeWindow(resetAt: Date, remaining: Int) -> RateLimitWindow {

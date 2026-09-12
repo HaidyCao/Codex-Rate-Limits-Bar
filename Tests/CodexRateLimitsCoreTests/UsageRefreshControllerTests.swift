@@ -4,6 +4,218 @@ import XCTest
 
 @MainActor
 final class UsageRefreshControllerTests: XCTestCase {
+    func testSleepBeforeCompletionLeavesUndeliveredAlertRetryable() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let h = Harness(monitor: QuotaMonitor(fileURL: directory.appendingPathComponent("history.json")))
+        h.stub.change { $0.remaining = 25 }
+        var alerts: [QuotaAlertEvent] = []
+        h.controller.alertsEnabled = true
+        h.controller.onQuotaAlert = { request, _ in alerts.append(request.event) }
+        h.controller.refreshOfficial()
+        XCTAssertTrue(h.executor.run(.official))
+        h.controller.sleep()
+        await h.flushCompletions()
+        XCTAssertTrue(alerts.isEmpty)
+        h.controller.wake()
+        try await h.complete(.official)
+        XCTAssertEqual(alerts.map(\.kind), [.warning])
+    }
+
+    func testDisablingAlertsBeforeCompletionPreventsSubmission() async throws {
+        let h = Harness()
+        var alerts = 0
+        h.controller.alertsEnabled = true
+        h.controller.onQuotaAlert = { _, _ in alerts += 1 }
+        h.controller.refreshOfficial()
+        XCTAssertTrue(h.executor.run(.official))
+        h.controller.alertsEnabled = false
+        await h.flushCompletions()
+        XCTAssertEqual(alerts, 0)
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(alerts, 1)
+    }
+
+    func testRejectedSubmissionRetriesAndAcceptedSubmissionPersistsDedupe() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 1, "Repeated refresh must not submit while add is pending")
+        h.alerts.finish(0, error: "Notifications unavailable")
+        XCTAssertEqual(h.controller.state.quotaAlertError, "Notifications unavailable")
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        h.alerts.finish(1)
+        h.alerts.finish(1) // A duplicate callback cannot enqueue a second acknowledgement.
+        XCTAssertEqual(h.executor.count(.official), 1)
+        try await h.complete(.official) // Persist acknowledgement on the worker queue.
+        XCTAssertNil(h.controller.state.quotaAlertError)
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        XCTAssertEqual(h.stub.acknowledgements.count, 1)
+        let window = try XCTUnwrap(h.controller.state.weeklyWindow)
+        let restarted = QuotaMonitor(fileURL: h.historyURL).update(window: window, at: h.stub.settings.now,
+            alertsEnabled: true, accountContext: h.controller.state.accountContext)
+        XCTAssertTrue(restarted.alerts.isEmpty)
+    }
+
+    func testDisabledInFlightSubmissionCannotAcknowledgeOrCancelNewAttempt() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.controller.alertsEnabled = false
+        XCTAssertEqual(h.alerts.cancelled, [h.alerts.requests[0].identifier])
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        XCTAssertNotEqual(h.alerts.requests[0].identifier, h.alerts.requests[1].identifier)
+        h.alerts.finish(0, error: "Stale failure")
+        XCTAssertNil(h.controller.state.quotaAlertError)
+        XCTAssertEqual(h.executor.count(.official), 0)
+        XCTAssertFalse(h.alerts.cancelled.contains(h.alerts.requests[1].identifier))
+        h.alerts.finish(1)
+        try await h.complete(.official)
+        XCTAssertEqual(h.stub.acknowledgements.count, 1)
+    }
+
+    func testAccountSwitchRejectsLateConfirmationAndKeepsBothAccountsRetryable() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.stub.change { $0.account = "b" }
+        h.alerts.finish(0)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        XCTAssertNil(h.controller.state.accountContext)
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        XCTAssertNotEqual(h.alerts.requests[0].event.accountScopeKey, h.alerts.requests[1].event.accountScopeKey)
+        h.alerts.finish(1)
+        try await h.complete(.official)
+        h.stub.change { $0.account = "a" }
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 3)
+        XCTAssertEqual(h.alerts.requests[2].event.accountScopeKey, h.alerts.requests[0].event.accountScopeKey)
+    }
+
+    func testServerContextChangeRejectsOldNotificationCallback() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.stub.change { $0.serverAccount = "b" }
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.alerts.finish(0)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        h.alerts.finish(1)
+        try await h.complete(.official)
+        XCTAssertEqual(h.stub.acknowledgements.map(\.accountScopeKey), [h.controller.state.accountContext?.scopeKey])
+    }
+
+    func testSleepAndStopCancelInFlightNotificationsWithoutAcknowledging() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.controller.sleep()
+        h.alerts.finish(0)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        h.controller.wake()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+        h.controller.stop()
+        h.alerts.finish(1)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        XCTAssertTrue(h.alerts.requests.allSatisfy { h.alerts.cancelled.contains($0.identifier) })
+    }
+
+    func testMissingNotificationCallbackTimesOutAndLateReplyDoesNotAcknowledge() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.stub.change { $0.now.addTimeInterval(46) }
+        h.controller.heartbeat()
+        h.alerts.finish(0)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 2)
+    }
+
+    func testQuotaRecoveryAndNewWindowCancelObsoleteNotifications() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.stub.change { $0.remaining = 100 }
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.alerts.finish(0)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        XCTAssertEqual(h.alerts.requests.count, 1)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.stub.change { $0.resetAt += 604800 }
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.alerts.finish(1)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        h.alerts.finish(2)
+        try await h.complete(.official)
+        XCTAssertEqual(h.stub.acknowledgements.map(\.windowID), [h.alerts.requests[2].event.windowID])
+    }
+
+    func testAccountIsRecheckedBeforeAcknowledgementWorkerWritesHistory() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.alerts.finish(0)
+        h.stub.change { $0.account = "b" }
+        try await h.complete(.official)
+        XCTAssertTrue(h.stub.acknowledgements.isEmpty)
+        XCTAssertNil(h.controller.state.accountContext)
+    }
+
+    func testSleepAfterAcceptanceDoesNotRemoveNotificationWhileReceiptIsSaving() async throws {
+        let h = Harness(realHistory: true)
+        h.stub.change { $0.remaining = 25 }
+        h.controller.alertsEnabled = true
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        h.alerts.finish(0)
+        h.controller.sleep()
+        XCTAssertTrue(h.alerts.cancelled.isEmpty)
+        try await h.complete(.official) // Accepted receipt can finish saving during sleep.
+        XCTAssertEqual(h.stub.acknowledgements.count, 1)
+        h.controller.wake()
+        try await h.complete(.official)
+        XCTAssertEqual(h.alerts.requests.count, 1)
+    }
+
     func testFailureRetainsSameAccountDataAndLocalSuccessCannotClearOfficialError() async throws {
         let h = Harness()
         h.controller.refreshOfficial()
@@ -49,7 +261,7 @@ final class UsageRefreshControllerTests: XCTestCase {
         let h = Harness()
         var alerts: [QuotaAlertEvent] = []
         h.controller.alertsEnabled = true
-        h.controller.onQuotaAlert = { alerts.append($0) }
+        h.controller.onQuotaAlert = { request, _ in alerts.append(request.event) }
         h.controller.refreshOfficial()
         XCTAssertTrue(h.executor.run(.official)) // Completion is queued, not delivered yet.
         h.stub.change { $0.account = "b"; $0.balance = "99" }
@@ -108,7 +320,7 @@ final class UsageRefreshControllerTests: XCTestCase {
         let h = Harness()
         var alerts = 0
         h.controller.alertsEnabled = true
-        h.controller.onQuotaAlert = { _ in alerts += 1 }
+        h.controller.onQuotaAlert = { _, _ in alerts += 1 }
         h.controller.refreshOfficial()
         XCTAssertTrue(h.executor.run(.official))
         let cancellation = try XCTUnwrap(h.stub.officialCancellation)
@@ -227,14 +439,29 @@ private final class Harness {
     let stub = StubServices()
     let executor = ManualRefreshExecutor()
     let controller: UsageRefreshController
+    let alerts = AlertSink()
+    private let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    var historyURL: URL { directory.appendingPathComponent("history.json") }
 
-    init() {
+    init(monitor: QuotaMonitor? = nil, realHistory: Bool = false) {
         let stub = stub
+        let monitor = monitor ?? (realHistory ? QuotaMonitor(fileURL: directory.appendingPathComponent("history.json")) : nil)
         controller = UsageRefreshController(services: UsageRefreshServices(
             identity: { stub.settings.account }, official: { try stub.official($0) },
-            local: { try stub.local($0, cancellation: $1) }, history: { stub.history($0, enabled: $1, context: $2) }),
+            local: { try stub.local($0, cancellation: $1) }, history: {
+                monitor?.update(window: $0, at: stub.settings.now, alertsEnabled: $1, accountContext: $2)
+                    ?? stub.history($0, enabled: $1, context: $2)
+            }, acknowledgeAlert: {
+                stub.recordAcknowledgement($0)
+                return monitor?.acknowledge($0)
+            }),
             executor: executor, now: { stub.settings.now })
+        let alerts = alerts
+        controller.onQuotaAlert = { alerts.receive($0, completion: $1) }
+        controller.onCancelQuotaAlerts = { alerts.cancelled.append(contentsOf: $0) }
     }
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
 
     func complete(_ lane: RefreshLane, file: StaticString = #filePath, line: UInt = #line) async throws {
         XCTAssertTrue(executor.run(lane), "No queued \(lane) work", file: file, line: line)
@@ -248,6 +475,20 @@ private final class Harness {
             DispatchQueue.main.async { continuation.resume() }
         }
     }
+}
+
+@MainActor
+private final class AlertSink {
+    var requests: [QuotaAlertRequest] = []
+    var cancelled: [String] = []
+    private var completions: [@MainActor @Sendable (String?) -> Void] = []
+
+    func receive(_ request: QuotaAlertRequest, completion: @escaping @MainActor @Sendable (String?) -> Void) {
+        requests.append(request)
+        completions.append(completion)
+    }
+
+    func finish(_ index: Int, error: String? = nil) { completions[index](error) }
 }
 
 private final class ManualRefreshExecutor: RefreshExecuting, @unchecked Sendable {
@@ -276,6 +517,8 @@ private final class StubServices: @unchecked Sendable {
         var serverAccount: String?
         var balance: String? = "12.5"
         var hasQuota = true
+        var remaining = 75
+        var resetAt = 1_800_400_000
         var officialError: String?
         var resetError: String?
         var localError: String?
@@ -286,9 +529,12 @@ private final class StubServices: @unchecked Sendable {
     private var stored = Settings()
     private var storedRequests: [LocalUsageRequest] = []
     private var storedOfficialCancellation: RefreshCancellation?
+    private var storedAcknowledgements: [QuotaAlertEvent] = []
     var settings: Settings { lock.withLock { stored } }
     var requests: [LocalUsageRequest] { lock.withLock { storedRequests } }
     var officialCancellation: RefreshCancellation? { lock.withLock { storedOfficialCancellation } }
+    var acknowledgements: [QuotaAlertEvent] { lock.withLock { storedAcknowledgements } }
+    func recordAcknowledgement(_ event: QuotaAlertEvent) { lock.withLock { storedAcknowledgements.append(event) } }
     func change(_ update: (inout Settings) -> Void) { lock.withLock { update(&stored) } }
 
     func official(_ cancellation: RefreshCancellation) throws -> OfficialUsageUpdate {
@@ -299,8 +545,8 @@ private final class StubServices: @unchecked Sendable {
             accountKey: s.serverAccount ?? s.account, accountLabel: nil, limitID: "codex")
         let reset = ResetCreditsSnapshot(fetchedAtIso: iso(s.now), availableCount: s.resetError == nil ? 3 : nil,
                                          credits: [], error: s.resetError, display: nil)
-        let quota = s.hasQuota ? RateLimitWindow(usedPercent: 25, remainingPercent: 75, windowDurationMins: 10080,
-                                               resetsAt: 1_800_400_000, resetsAtIso: nil) : nil
+        let quota = s.hasQuota ? RateLimitWindow(usedPercent: 100 - s.remaining, remainingPercent: s.remaining, windowDurationMins: 10080,
+                                               resetsAt: s.resetAt, resetsAtIso: nil) : nil
         let rate = RateLimitSnapshot(limitId: "codex", limitName: nil, planType: nil, rateLimitReachedType: nil,
             primary: quota, secondary: nil, credits: s.balance.map { CreditsSnapshot(hasCredits: true, unlimited: false, balance: $0) }, individualLimit: nil)
         return OfficialUsageUpdate(RateLimitPayload(fetchedAtIso: iso(s.now), rateLimits: rate, rateLimitsByLimitId: nil,

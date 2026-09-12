@@ -36,7 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         setupTokenStatusItem()
         setupMenu()
         refreshController.onChange = { [weak self] in self?.renderRefreshState() }
-        refreshController.onQuotaAlert = { [weak self] in self?.deliverQuotaAlert($0) }
+        refreshController.onQuotaAlert = { [weak self] request, completion in
+            self?.deliverQuotaAlert(request, completion: completion)
+        }
+        refreshController.onCancelQuotaAlerts = { [weak self] in
+            self?.notificationCenter.removePendingNotificationRequests(withIdentifiers: $0)
+        }
         configureAutoLaunch()
         configureLocalUsageStatusItemVisibility()
         configureQuotaAlerts()
@@ -252,18 +257,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         updateCombinedError()
     }
 
-    private func deliverQuotaAlert(_ event: QuotaAlertEvent) {
+    private func deliverQuotaAlert(_ delivery: QuotaAlertRequest,
+                                   completion: @escaping @MainActor @Sendable (String?) -> Void) {
+        let event = delivery.event
         let content = UNMutableNotificationContent()
         content.title = AppText.quotaAlertTitle(event)
         content.body = AppText.quotaAlertBody(event)
         content.sound = .default
         content.threadIdentifier = "quota-alerts"
-        let request = UNNotificationRequest(identifier: event.identifier, content: content, trigger: nil)
-        notificationCenter.add(request) { [weak self] error in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.currentNotificationError = error.map(Self.normalizedErrorText)
-                self.updateCombinedError()
+        let request = UNNotificationRequest(identifier: delivery.identifier, content: content, trigger: nil)
+        notificationCenter.add(request) { error in
+            Task { @MainActor in
+                completion(error.map(Self.normalizedErrorText))
             }
         }
     }
@@ -307,7 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let quotaMonitorError = state.quotaMonitorError, !quotaMonitorError.isEmpty {
             details.append("\(AppText.quotaForecastErrorLabel): \(quotaMonitorError)")
         }
-        if let notificationError = currentNotificationError, !notificationError.isEmpty {
+        if let notificationError = currentNotificationError ?? state.quotaAlertError, !notificationError.isEmpty {
             details.append("\(AppText.quotaAlertsErrorLabel): \(notificationError)")
         }
 

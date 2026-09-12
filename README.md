@@ -8,6 +8,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
 - The Usage card compares the remaining quota with the time budget, learns from recent consumption, and estimates either the remaining quota at reset or an early exhaustion time.
 - Optional system notifications warn at 25% and 10%, when a medium/high-confidence forecast predicts early exhaustion, and shortly after a weekly reset. Alerts are deduplicated per quota window and are disabled by default.
 - Forecast samples and alert state are stored in `~/Library/Application Support/Codex Rate Limits Bar/quota-history.<scope>.json`, isolated by account, Codex home, authentication source and quota bucket. Samples are recorded only when the percentage changes or every 30 minutes and are retained for 60 days.
+- Alerts are deduplicated after the notification center accepts a request. Cancelled or failed submissions remain retryable; pending reset reminders expire 15 minutes after the previous reset. See [alert delivery and recovery](docs/refresh.md#提醒发送与确认).
 - Data source: `codex app-server --stdio` via `account/rateLimits/read`.
 - The Usage card also shows the official purchased-credit balance when returned by Codex, separately from earned rate-limit reset coupons. Missing balances display `--`; zero, negative and unlimited balances stay distinct.
 - A second menu bar item shows today's local machine token usage:

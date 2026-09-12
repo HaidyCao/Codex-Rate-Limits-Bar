@@ -184,6 +184,7 @@ final class AccountContextTests: XCTestCase {
         let first = monitor.update(window: window(20), at: now, alertsEnabled: true, accountContext: a)
         XCTAssertEqual(first.sampleCount, 2)
         XCTAssertEqual(first.alerts.map(\.kind), [.warning])
+        XCTAssertNil(monitor.acknowledge(try XCTUnwrap(first.alerts.first)))
         let second = monitor.update(window: window(20, shift: -2 * 86400), at: now, alertsEnabled: true, accountContext: b)
         XCTAssertEqual(second.sampleCount, 1)
         XCTAssertEqual(second.forecast?.basis, .windowAverage)

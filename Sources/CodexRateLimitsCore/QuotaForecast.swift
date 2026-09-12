@@ -212,6 +212,10 @@ public struct QuotaAlertEvent: Codable, Equatable, Sendable {
     public let projectedExhaustionAt: Date?
 
     public var accountScopeKey: String? = nil
+    // Persist the decision's coverage; a later forecast must not change what an
+    // already submitted notification acknowledges.
+    var coveredKinds: Set<QuotaAlertKind>? = nil
+    var expiresAt: Date? = nil
 
     public var identifier: String {
         "quota-\(accountScopeKey.map { $0 + "-" } ?? "")\(windowID.rawValue)-\(kind.rawValue)"
@@ -223,6 +227,7 @@ public struct QuotaAlertState: Codable, Equatable, Sendable {
     public var resetAt: Date?
     public var deliveredKinds: Set<QuotaAlertKind>
     public var lastRemainingPercent: Int?
+    var pendingAlert: QuotaAlertEvent?
 
     public init(
         windowID: QuotaWindowID? = nil,
@@ -234,6 +239,12 @@ public struct QuotaAlertState: Codable, Equatable, Sendable {
         self.resetAt = resetAt
         self.deliveredKinds = deliveredKinds
         self.lastRemainingPercent = lastRemainingPercent
+    }
+
+    mutating func acknowledge(_ event: QuotaAlertEvent) {
+        guard windowID == event.windowID else { return }
+        deliveredKinds.formUnion(event.coveredKinds ?? [event.kind])
+        if pendingAlert?.kind == event.kind { pendingAlert = nil }
     }
 }
 
@@ -257,7 +268,7 @@ public enum QuotaAlertEvaluator {
         }
 
         var state = previousState
-        var events: [QuotaAlertEvent] = []
+        var resetExpiry = state.pendingAlert.flatMap { $0.kind == .reset ? $0.expiresAt : nil }
         if state.windowID != windowID {
             let previousResetAt = state.resetAt
             let minimumNewWindowAdvance = TimeInterval(windowID.durationMinutes * 60) * 0.5
@@ -276,11 +287,11 @@ public enum QuotaAlertEvaluator {
             state.lastRemainingPercent = nil
             if !shouldPreserveDeliveredKinds {
                 state.deliveredKinds = []
+                resetExpiry = nil
             }
 
             if alertsEnabled, previousState.windowID != nil, isPlausibleReset {
-                events.append(event(kind: .reset, window: window, windowID: windowID, forecast: forecast))
-                state.deliveredKinds.insert(.reset)
+                resetExpiry = previousResetAt?.addingTimeInterval(15 * 60)
             }
         } else {
             state.resetAt = resetAt
@@ -288,36 +299,46 @@ public enum QuotaAlertEvaluator {
 
         let remaining = max(0, min(100, window.remainingPercent))
         state.lastRemainingPercent = remaining
+        state.pendingAlert = nil
+        if let resetExpiry, resetExpiry > now, !state.deliveredKinds.contains(.reset) {
+            var reset = event(kind: .reset, window: window, windowID: windowID, forecast: forecast)
+            reset.expiresAt = resetExpiry
+            state.pendingAlert = reset
+        }
         guard alertsEnabled else {
             return QuotaAlertDecision(events: [], state: state)
         }
-        if !events.isEmpty {
-            return QuotaAlertDecision(events: events, state: state)
+        if let pending = state.pendingAlert {
+            return QuotaAlertDecision(events: [pending], state: state)
+        }
+        guard resetAt > now else {
+            return QuotaAlertDecision(events: [], state: state)
         }
 
         let forecastIsActionable = forecast?.status == .atRisk
             && forecast?.confidence != .low
             && forecast?.projectedExhaustionAt != nil
 
+        let kind: QuotaAlertKind?
         if remaining <= 10, !state.deliveredKinds.contains(.critical) {
-            events.append(event(kind: .critical, window: window, windowID: windowID, forecast: forecast))
-            state.deliveredKinds.insert(.critical)
-            state.deliveredKinds.insert(.warning)
-            if forecastIsActionable {
-                state.deliveredKinds.insert(.projectedExhaustion)
-            }
+            kind = .critical
         } else if remaining <= 25, !state.deliveredKinds.contains(.warning) {
-            events.append(event(kind: .warning, window: window, windowID: windowID, forecast: forecast))
-            state.deliveredKinds.insert(.warning)
-            if forecastIsActionable {
-                state.deliveredKinds.insert(.projectedExhaustion)
-            }
+            kind = .warning
         } else if forecastIsActionable, !state.deliveredKinds.contains(.projectedExhaustion) {
-            events.append(event(kind: .projectedExhaustion, window: window, windowID: windowID, forecast: forecast))
-            state.deliveredKinds.insert(.projectedExhaustion)
+            kind = .projectedExhaustion
+        } else {
+            kind = nil
         }
-
-        return QuotaAlertDecision(events: Array(events.prefix(1)), state: state)
+        if let kind {
+            var pending = event(kind: kind, window: window, windowID: windowID, forecast: forecast)
+            var covered: Set<QuotaAlertKind> = [kind]
+            if kind == .critical { covered.insert(.warning) }
+            if forecastIsActionable { covered.insert(.projectedExhaustion) }
+            pending.coveredKinds = covered
+            pending.expiresAt = resetAt
+            state.pendingAlert = pending
+        }
+        return QuotaAlertDecision(events: state.pendingAlert.map { [$0] } ?? [], state: state)
     }
 
     private static func event(
@@ -426,20 +447,12 @@ public final class QuotaMonitor: @unchecked Sendable {
             isDirty = true
         }
 
-        var persistenceError: String?
-        if isDirty {
-            do {
-                try save()
-                isDirty = false
-            } catch {
-                persistenceError = error.localizedDescription
-            }
-        }
+        let persistenceError = persistIfNeeded()
 
         let alerts = decision.events.map { event in
-            QuotaAlertEvent(kind: event.kind, windowID: event.windowID,
-                            remainingPercent: event.remainingPercent, resetAt: event.resetAt,
-                            projectedExhaustionAt: event.projectedExhaustionAt, accountScopeKey: activeScopeKey)
+            var scoped = event
+            scoped.accountScopeKey = activeScopeKey
+            return scoped
         }
         return QuotaMonitorSnapshot(
             forecast: forecast,
@@ -447,6 +460,29 @@ public final class QuotaMonitor: @unchecked Sendable {
             sampleCount: windowSamples.count,
             persistenceError: persistenceError
         )
+    }
+
+    /// Confirmation means the notification center accepted the request, not
+    /// that the user saw it. Rejected/cancelled requests never call this method.
+    func acknowledge(_ event: QuotaAlertEvent) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isLoaded, activeScopeKey == event.accountScopeKey,
+              document.alertState.windowID == event.windowID else { return nil }
+        document.alertState.acknowledge(event)
+        isDirty = true
+        return persistIfNeeded()
+    }
+
+    private func persistIfNeeded() -> String? {
+        guard isDirty else { return nil }
+        do {
+            try save()
+            isDirty = false
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     private func reconcileShiftedActiveWindow(to windowID: QuotaWindowID, resetAt: Date?) {

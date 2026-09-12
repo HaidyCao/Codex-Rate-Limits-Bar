@@ -26,6 +26,7 @@ struct UsageRefreshServices: Sendable {
     let official: @Sendable (RefreshCancellation) throws -> OfficialUsageUpdate
     let local: @Sendable (LocalUsageRequest, RefreshCancellation) throws -> LocalUsageSnapshot
     let history: @Sendable (RateLimitWindow, Bool, CodexAccountContext?) -> QuotaMonitorSnapshot
+    var acknowledgeAlert: @Sendable (QuotaAlertEvent) -> String? = { _ in nil }
 
     static func live() -> Self {
         let monitor = QuotaMonitor()
@@ -35,7 +36,8 @@ struct UsageRefreshServices: Sendable {
                 try CodexBackend.readLocalTokenUsage(weeklyWindow: request.weeklyWindow, accountContext: request.accountContext,
                     rebuild: request.rebuild, quotaSampleAt: request.quotaSampleAt, cancellation: cancellation)
             },
-            history: { monitor.update(window: $0, alertsEnabled: $1, accountContext: $2) })
+            history: { monitor.update(window: $0, alertsEnabled: $1, accountContext: $2) },
+            acknowledgeAlert: { monitor.acknowledge($0) })
     }
 }
 

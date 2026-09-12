@@ -32,6 +32,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 场景 | 主要测试 |
 | --- | --- |
 | 账户切换、额度类型、提醒去重、认证来源 | `AccountContextTests`、`QuotaForecastTests`、CLI/MCP 持久化样例 |
+| 提醒取消、开关、接收失败、迟到确认、重试、重启及旧历史兼容 | `UsageRefreshControllerTests`、`QuotaAlertDeliveryTests` |
 | 同大小覆写、截断、改名副本、跨 home、归档移动 | `ScannerIdentityTests`、`ScannerEquivalenceTests` |
 | 互补副本、汇合与分叉、跨日/跨 home、旧副本缓存、文件头空行 | `CopyReconciliationTests`、CLI/MCP 持久化样例 |
 | 跨午夜、fork 导入、模型/模式切换、重启 | `LocalUsageScannerTests`、`ScannerEquivalenceTests` |
@@ -57,7 +58,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 AppKit 检查收集 `Sources/CodexRateLimitsBar/` 中除 `main.swift` 外的全部实际实现文件，使用独立验证入口；`main.swift` 仅保留应用启动入口。验证入口不启动菜单栏、登录项或通知。自动检查共享快照的显示标签和状态是否传入视图，生成图像供排版检查；PNG 成功生成不等于已经自动判断所有像素的正确性。
 
-`UsageRefreshControllerTests` 用假客户端、可控工作队列和时钟直接运行实际刷新控制器；工作完成与主线程应用结果可以分开推进，验证账户切换、迟到响应、睡眠/唤醒和退出时的丢弃，以及失败恢复和重建请求合并。队列屏障用于等待完成回调，测试不依赖休眠或真实时间推进。系统通知能否实际送达仍属于人工验收范围。
+`UsageRefreshControllerTests` 用假客户端、可控工作队列和时钟直接运行实际刷新控制器；工作完成与主线程应用结果可以分开推进，验证账户切换、迟到响应、睡眠/唤醒和退出时的丢弃，以及失败恢复和重建请求合并。通知测试接入真实 `QuotaMonitor` 和可控接收回调，检查失败重试、取消、去重及确认落盘，不调用系统通知中心。队列屏障用于等待完成回调，测试不依赖休眠或真实时间推进。系统通知能否实际送达仍属于人工验收范围。
 
 大日志和副本测试对 tokens、API/credits 金额及全量/增量一致性作硬断言，缓存应小于 1 MiB、测试进程峰值 RSS 小于 256 MiB，以识别整文件驻留和逐事件历史落盘。副本对齐仅在重放期间持有累计样本，完全相同的轨迹只对齐一次；无变化时复用精简缓存。耗时只记录，不使用依赖机器速度的固定通过阈值。RSS 是整个测试进程的高水位，包含生成样例及测试框架开销。合成测试不能替代复杂真实会话的所有性能特征。
 
