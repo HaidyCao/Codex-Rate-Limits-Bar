@@ -279,8 +279,8 @@ On another Mac, install Codex first and log in, then run from this repo:
 The installer:
 
 - builds and installs `Codex Rate Limits Bar.app` into `~/Applications`;
-- copies the bundled `plugins/codex-usage-monitor` plugin into `~/plugins`;
-- creates or updates `~/.agents/plugins/marketplace.json` without removing other personal plugins;
+- validates the bundled plugin and personal marketplace, then stages the plugin for replacement under `~/plugins`;
+- creates or updates `~/.agents/plugins/marketplace.json`, preserving other entries and existing plugin policy;
 - refreshes `codex-usage-monitor@personal` with `codex plugin remove` + `codex plugin add`;
 - starts the status bar app.
 
@@ -302,7 +302,10 @@ make install-plugin
 ```
 
 `make install-plugin` also installs the app before refreshing the bundled Codex
-plugin.
+plugin. Failed plugin commands restore the previous plugin, marketplace, selected
+`CODEX_HOME/config.toml`, and this plugin's cache. Invalid marketplace files are
+reported without replacing them. See [installation recovery](docs/plugin-installation.md)
+for backup locations and recovery limits.
 
 For isolated regression checks:
 

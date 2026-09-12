@@ -81,21 +81,3 @@ enum CodexProcess {
     }
 
 }
-
-final class PipeCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
-
-    func append(_ chunk: Data) {
-        guard !chunk.isEmpty else { return }
-        lock.lock()
-        data.append(chunk)
-        lock.unlock()
-    }
-
-    func text() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-}

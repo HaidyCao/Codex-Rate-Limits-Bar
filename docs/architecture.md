@@ -44,6 +44,7 @@ flowchart TD
 | 菜单项、状态栏、通知权限、用户偏好 | `AppDelegate`、`AppPreferences` |
 | 卡片布局和绘制 | `RateLimitsMenuView`、`ResetCreditsMenuView`、`LocalUsageMenuView`、`PreferencesMenuView` |
 | CLI 命令、MCP 协议、插件安装 | `CodexCommandLine`、`CodexMCPServer`、`CodexPluginInstaller` |
+| 插件安装暂存、备份与回滚；插件命令超时和输出 | `PluginInstallTransaction`、`CodexPluginCommand` |
 
 ## 并发与兼容约束
 

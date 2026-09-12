@@ -1,6 +1,6 @@
 # 回归验证
 
-在仓库根目录执行 `make verify`，依次运行常规 Swift 测试、CLI/MCP 集成、AppKit 视图检查和独立应用资源检查。验证不需要 Codex 登录，也不安装应用、切换账户或修改用户日志。
+在仓库根目录执行 `make verify`，依次运行常规 Swift 测试、CLI/MCP 集成、AppKit 视图检查、独立应用资源和隔离插件安装检查。验证不需要 Codex 登录，也不安装应用、切换账户或修改用户日志。
 
 ## 命令
 
@@ -11,6 +11,7 @@
 | `make verify-local-usage` | 打包应用，用假 app-server 和临时日志验证 CLI/MCP |
 | `make verify-ui` | 生成 CLI/MCP 样例，编译实际 AppKit 视图并检查、渲染 |
 | `make verify-bundle` | 将 `.app` 复制到临时位置，禁止访问 `.build` 后读取内置价格 |
+| `make verify-plugin-install` | 假 CLI 验证首次安装、重装、损坏配置、命令失败及状态恢复 |
 | `make benchmark` | release 模式扫描合成的 256 MiB 日志，报告耗时、内存及缓存大小 |
 | `make benchmark BENCHMARK_MIB=1024` | 使用约 1 GiB 合成日志；允许范围为 16～4096 MiB |
 | `make verify-live` | **访问调用者的真实 Codex 账户**，用于主动选择的现场检查 |
@@ -35,6 +36,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 提醒取消、开关、接收失败、迟到确认、重试、重启及旧历史兼容 | `UsageRefreshControllerTests`、`QuotaAlertDeliveryTests` |
 | 缓存保存失败、无变化重试、并发写入、取消及旧快照兼容 | `CachePersistenceTests`、CLI/MCP/UI 样例 |
 | UTF-8 跨块、CRLF、响应边界、超长输出、EOF 及终态保护 | `AppServerCallStateTests`、CLI/MCP 假 app-server 样例 |
+| 插件校验、暂存、失败回滚、符号链接、重复安装及子进程清理 | `CodexPluginInstallerTests`、`CodexPluginCommandTests`、`verify_plugin_install.py` |
 | 同大小覆写、截断、改名副本、跨 home、归档移动 | `ScannerIdentityTests`、`ScannerEquivalenceTests` |
 | 互补副本、汇合与分叉、跨日/跨 home、旧副本缓存、文件头空行 | `CopyReconciliationTests`、CLI/MCP 持久化样例 |
 | 跨午夜、fork 导入、模型/模式切换、重启 | `LocalUsageScannerTests`、`ScannerEquivalenceTests` |
@@ -51,11 +53,14 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 `AppServerCallStateTests` 在包含中日韩文字、emoji 和组合字符的响应上遍历每个字节切分位置，并逐字节推进实际解析器；即时检查完成信号，不依赖睡眠或真实管道分块时机。CLI/MCP 再通过真实管道读取逐字节写入的 Unicode 响应和错误，检查超长行、截断 EOF、无末尾换行及子进程清理。缓冲边界与输出规则见[app-server 输出处理](refresh.md#app-server-输出处理)。
 
+插件安装测试注入命令执行器，检查调用顺序及恢复前后的文件内容；跨进程样例使用会修改配置和缓存的假 CLI，在非默认 `CODEX_HOME` 下验证失败恢复、文件权限及其他插件保留。另以本地 shell 验证 Unicode 错误、输出上限和忽略 SIGTERM 后的超时清理。所有测试均禁止联网，不调用真实 Codex 的安装或卸载命令。恢复边界见[插件安装与恢复](plugin-installation.md)。
+
 ## 产物和性能
 
 产物写到被 Git 忽略的 `.build/verification/`：
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
+- `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
 - `menu/`：完整、未知模型、明细缺失、比例缺失、非法数值、部分扫描、不可用、接口失败、保留的过期数据、清空账户、完整扫描但未保存、部分扫描且未保存，共 12 种场景的浅色/深色 PNG。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。

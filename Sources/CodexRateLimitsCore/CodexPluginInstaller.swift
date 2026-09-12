@@ -1,139 +1,166 @@
 import Foundation
+import Darwin
 
 enum CodexPluginInstaller {
-    static func install(sourcePath: String) throws {
-        let pluginName = "codex-usage-monitor"
-        let marketplaceName = "personal"
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let pluginSource = URL(fileURLWithPath: sourcePath)
-        let installedPluginParent = home.appendingPathComponent("plugins")
-        let installedPluginPath = installedPluginParent.appendingPathComponent(pluginName)
-        let marketplacePath = home
-            .appendingPathComponent(".agents")
-            .appendingPathComponent("plugins")
-            .appendingPathComponent("marketplace.json")
+    private static let pluginName = "codex-usage-monitor"
+    private static let pluginID = "codex-usage-monitor@personal"
 
-        guard FileManager.default.fileExists(atPath: pluginSource.appendingPathComponent(".codex-plugin/plugin.json").path) else {
-            throw RuntimeError("Plugin source is missing: \(pluginSource.path)")
+    static func install(
+        sourcePath: String,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        codexHome: URL? = nil,
+        run: (([String]) throws -> String)? = nil
+    ) throws {
+        let files = FileManager.default
+        let home = CodexPaths.canonical(home)
+        let profile = CodexPaths.canonical(codexHome ?? ProcessInfo.processInfo.environment["CODEX_HOME"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".codex"))
+        let source = CodexPaths.canonical(URL(fileURLWithPath: sourcePath))
+        let parent = home.appendingPathComponent("plugins")
+        let destination = parent.appendingPathComponent(pluginName)
+        let marketplace = home.appendingPathComponent(".agents/plugins/marketplace.json")
+        let config = profile.appendingPathComponent("config.toml")
+        let cache = profile.appendingPathComponent("plugins/cache/personal/\(pluginName)")
+        let paths = [destination, marketplace, config, cache]
+        for (index, path) in paths.enumerated() {
+            guard !paths.dropFirst(index + 1).contains(where: { overlaps(path, $0) }) else {
+                throw RuntimeError("Codex profile must be separate from the installed plugin and marketplace")
+            }
         }
+        for path in paths { try PluginInstallTransaction.checkPath(path) }
+        guard !paths.contains(where: { overlaps(source, $0.resolvingSymlinksInPath()) }) else {
+            throw RuntimeError("Plugin source must be separate from installed files and configuration: \(source.path)")
+        }
+        // Decode existing files before creating staging directories or invoking the CLI.
+        try validatePlugin(source)
+        _ = try updatedMarketplace(at: marketplace)
+        try files.createDirectory(at: parent, withIntermediateDirectories: true)
+        let lockPath = parent.appendingPathComponent(".codex-usage-monitor-install.lock")
+        let lock = Darwin.open(lockPath.path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { throw RuntimeError("Cannot open plugin installation lock: \(lockPath.path)") }
+        defer { Darwin.close(lock) }
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            throw RuntimeError("Another plugin installation is running; retry after it finishes.")
+        }
+        defer { _ = flock(lock, LOCK_UN) }
 
-        try FileManager.default.createDirectory(at: installedPluginParent, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: installedPluginPath)
-        try FileManager.default.copyItem(at: pluginSource, to: installedPluginPath)
-        try stampInstalledPluginVersion(installedPluginPath: installedPluginPath)
-        try ensureMarketplace(marketplacePath: marketplacePath, pluginName: pluginName, marketplaceName: marketplaceName)
-        try refreshCodexPlugin(pluginId: "\(pluginName)@\(marketplaceName)")
-
-        print("Installed \(pluginName)@\(marketplaceName)")
-        print("Marketplace: \(marketplacePath.path)")
-        print("Plugin files: \(installedPluginPath.path)")
+        let marketplaceData = try updatedMarketplace(at: marketplace)
+        let originalMarketplace = try files.fileExists(atPath: marketplace.path) ? Data(contentsOf: marketplace) : nil
+        let transaction = try PluginInstallTransaction(parent: parent, paths: paths)
+        defer { transaction.cleanup() }
+        let stagedPlugin = transaction.directory.appendingPathComponent("new-plugin")
+        try files.copyItem(at: source, to: stagedPlugin)
+        try validatePlugin(stagedPlugin)
+        try stampVersion(at: stagedPlugin)
+        let stagedMarketplace = transaction.directory.appendingPathComponent("new-marketplace.json")
+        try marketplaceData.write(to: stagedMarketplace)
+        if files.fileExists(atPath: marketplace.path) {
+            let attributes = try files.attributesOfItem(atPath: marketplace.path)
+            try files.setAttributes([.posixPermissions: attributes[.posixPermissions] ?? 0o600], ofItemAtPath: stagedMarketplace.path)
+        }
+        try transaction.capture()
+        let command = run ?? { try CodexPluginCommand.run(args: $0, home: home, codexHome: profile) }
+        do {
+            transaction.willModify(config)
+            transaction.willModify(cache)
+            let installed = try isInstalled(run: command)
+            // A second installer or editor may have changed the catalog during preparation.
+            let currentMarketplace = try files.fileExists(atPath: marketplace.path) ? Data(contentsOf: marketplace) : nil
+            guard currentMarketplace == originalMarketplace else {
+                throw RuntimeError("Marketplace changed during installation; retry with the updated configuration.")
+            }
+            try transaction.replace(destination, with: stagedPlugin)
+            try transaction.replace(marketplace, with: stagedMarketplace)
+            if installed { _ = try command(["plugin", "remove", pluginID, "--json"]) }
+            _ = try command(["plugin", "add", pluginID, "--json"])
+        } catch {
+            let failures = transaction.restore()
+            if !failures.isEmpty {
+                transaction.keepForRecovery = true
+                throw RuntimeError("Plugin installation failed: \(errorMessage(error))\nRollback incomplete: \(failures.joined(separator: "; "))\nRecovery files: \(transaction.directory.path)")
+            }
+            throw RuntimeError("Plugin installation failed: \(errorMessage(error))\nInstallation changes rolled back; backups restored for affected paths.")
+        }
+        print("Installed \(pluginID)")
+        print("Marketplace: \(marketplace.path)")
+        print("Plugin files: \(destination.path)")
     }
 
-    private static func stampInstalledPluginVersion(installedPluginPath: URL) throws {
-        let manifestPath = installedPluginPath.appendingPathComponent(".codex-plugin/plugin.json")
-        var manifest = try readJSONObject(manifestPath)
-        let version = stringValue(manifest["version"]) ?? "0.1.0"
-        let baseVersion = version.replacingOccurrences(of: #"\+codex\.\d+$"#, with: "", options: .regularExpression)
-        let stampFormatter = DateFormatter()
-        stampFormatter.locale = Locale(identifier: "en_US_POSIX")
-        stampFormatter.timeZone = TimeZone(secondsFromGMT: 0)
-        stampFormatter.dateFormat = "yyyyMMddHHmmss"
-        manifest["version"] = "\(baseVersion)+codex.\(stampFormatter.string(from: Date()))"
-        try writeJSONObject(manifest, to: manifestPath)
+    private static func overlaps(_ first: URL, _ second: URL) -> Bool {
+        first.path == second.path || first.path.hasPrefix(second.path + "/") || second.path.hasPrefix(first.path + "/")
     }
 
-    private static func ensureMarketplace(marketplacePath: URL, pluginName: String, marketplaceName: String) throws {
-        var marketplace = (try? readJSONObject(marketplacePath)) ?? [
-            "name": marketplaceName,
-            "interface": ["displayName": "Personal"],
-            "plugins": [],
-        ]
-        marketplace["name"] = stringValue(marketplace["name"]) ?? marketplaceName
-        marketplace["interface"] = dictionaryValue(marketplace["interface"]) ?? ["displayName": "Personal"]
-        var plugins = arrayValue(marketplace["plugins"])
-        let entry: [String: Any] = [
+    private static func validatePlugin(_ root: URL) throws {
+        // Copied symlinks could make stamping or a CLI install write outside the bundle.
+        try PluginInstallTransaction.checkTree(root)
+        let manifestPath = root.appendingPathComponent(".codex-plugin/plugin.json")
+        let manifest = try readObject(manifestPath)
+        guard manifest["name"] as? String == pluginName,
+              let version = manifest["version"] as? String, !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              manifest["mcpServers"] as? String == "./.mcp.json"
+        else { throw RuntimeError("Invalid bundled plugin name, version or mcpServers path: \(manifestPath.path)") }
+        let mcpPath = root.appendingPathComponent(".mcp.json")
+        let mcp = try readObject(mcpPath)
+        guard let servers = mcp["mcpServers"] as? [String: [String: Any]], !servers.isEmpty,
+              servers.values.allSatisfy({ ($0["command"] as? String)?.isEmpty == false })
+        else { throw RuntimeError("Invalid bundled MCP server configuration: \(mcpPath.path)") }
+    }
+
+    private static func stampVersion(at root: URL) throws {
+        let path = root.appendingPathComponent(".codex-plugin/plugin.json")
+        var manifest = try readObject(path)
+        let version = manifest["version"] as! String // Validated before staging.
+        let base = version.replacingOccurrences(of: #"[+.]codex\.[A-Za-z0-9.-]+$"#, with: "", options: .regularExpression)
+        let separator = base.contains("+") ? "." : "+"
+        manifest["version"] = "\(base)\(separator)codex.\(UUID().uuidString.lowercased())"
+        try jsonData(manifest).write(to: path, options: .atomic)
+    }
+
+    private static func updatedMarketplace(at path: URL) throws -> Data {
+        var value: [String: Any] = ["name": "personal", "interface": ["displayName": "Personal"], "plugins": []]
+        if FileManager.default.fileExists(atPath: path.path) { value = try readObject(path) }
+        guard value["name"] as? String == "personal",
+              var plugins = value["plugins"] as? [[String: Any]],
+              value["interface"] == nil || value["interface"] is [String: Any]
+        else { throw RuntimeError("Marketplace must have name 'personal' and a plugins array: \(path.path)") }
+        var names = Set<String>()
+        for plugin in plugins {
+            guard let name = plugin["name"] as? String, !name.isEmpty,
+                  names.insert(name).inserted, plugin["source"] is [String: Any]
+            else { throw RuntimeError("Marketplace has an invalid or duplicate plugin entry: \(path.path)") }
+        }
+        let index = plugins.firstIndex { $0["name"] as? String == pluginName }
+        var entry = index.map { plugins[$0] } ?? [
             "name": pluginName,
-            "source": ["source": "local", "path": "./plugins/\(pluginName)"],
             "policy": ["installation": "AVAILABLE", "authentication": "ON_INSTALL"],
             "category": "Productivity",
         ]
-        if let index = plugins.firstIndex(where: { stringValue(dictionaryValue($0)?["name"]) == pluginName }) {
-            plugins[index] = entry
-        } else {
-            plugins.append(entry)
-        }
-        marketplace["plugins"] = plugins
-        try writeJSONObject(marketplace, to: marketplacePath)
+        entry["source"] = ["source": "local", "path": "./plugins/\(pluginName)"]
+        if let index { plugins[index] = entry } else { plugins.append(entry) }
+        value["plugins"] = plugins
+        return try jsonData(value)
     }
 
-    private static func refreshCodexPlugin(pluginId: String) throws {
-        if try isInstalled(pluginId: pluginId) {
-            _ = try runCodex(args: ["plugin", "remove", pluginId, "--json"], allowFailure: true)
-        }
-        _ = try runCodex(args: ["plugin", "add", pluginId, "--json"], allowFailure: false)
-    }
-
-    private static func isInstalled(pluginId: String) throws -> Bool {
-        let output = try runCodex(args: ["plugin", "list", "--json", "--available"], allowFailure: true)
+    private static func isInstalled(run: ([String]) throws -> String) throws -> Bool {
+        let output = try run(["plugin", "list", "--json"])
         guard let data = output.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return false
-        }
-        return arrayValue(payload["installed"]).contains { plugin in
-            stringValue(dictionaryValue(plugin)?["pluginId"]) == pluginId
-        }
+              let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let installed = payload["installed"] as? [[String: Any]],
+              installed.allSatisfy({ ($0["pluginId"] as? String)?.isEmpty == false })
+        else { throw RuntimeError("codex plugin list returned an invalid installed-plugin list") }
+        return installed.contains { $0["pluginId"] as? String == pluginID }
     }
 
-    private static func runCodex(args: [String], allowFailure: Bool) throws -> String {
-        let process = Process()
-        let spec = CodexProcess.commandSpec()
-        process.executableURL = URL(fileURLWithPath: spec.executable)
-        process.arguments = spec.arguments + args
-        var env = [
-            "PATH": "/Applications/Codex.app/Contents/Resources:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:\(ProcessInfo.processInfo.environment["PATH"] ?? "")",
-            "NO_COLOR": "1",
-        ]
-        env.merge(CodexProcess.managedEnvironment(for: spec.executable)) { _, new in new }
-        process.environment = env
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        let stdoutCapture = PipeCapture()
-        let stderrCapture = PipeCapture()
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            stdoutCapture.append(handle.availableData)
-        }
-        stderr.fileHandleForReading.readabilityHandler = { handle in
-            stderrCapture.append(handle.availableData)
-        }
-        try process.run()
-        process.waitUntilExit()
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        stdoutCapture.append(stdout.fileHandleForReading.readDataToEndOfFile())
-        stderrCapture.append(stderr.fileHandleForReading.readDataToEndOfFile())
-        let stdoutText = stdoutCapture.text()
-        let stderrText = stderrCapture.text()
-        if process.terminationStatus != 0 && !allowFailure {
-            let detail = [stdoutText, stderrText]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            throw RuntimeError("codex \(args.joined(separator: " ")) failed\(detail.isEmpty ? "" : ":\n\(detail)")")
-        }
-        return stdoutText
+    private static func readObject(_ path: URL) throws -> [String: Any] {
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any] else {
+                throw RuntimeError("Expected a JSON object")
+            }
+            return object
+        } catch { throw RuntimeError("Cannot read plugin configuration at \(path.path): \(errorMessage(error))") }
     }
 
-    private static func readJSONObject(_ url: URL) throws -> [String: Any] {
-        let data = try Data(contentsOf: url)
-        return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-    }
-
-    private static func writeJSONObject(_ object: [String: Any], to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        try (data + Data("\n".utf8)).write(to: url, options: .atomic)
+    private static func jsonData(_ object: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
     }
 }
