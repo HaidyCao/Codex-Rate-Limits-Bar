@@ -34,6 +34,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 账户切换、额度类型、提醒去重、认证来源 | `AccountContextTests`、`QuotaForecastTests`、CLI/MCP 持久化样例 |
 | 提醒取消、开关、接收失败、迟到确认、重试、重启及旧历史兼容 | `UsageRefreshControllerTests`、`QuotaAlertDeliveryTests` |
 | 缓存保存失败、无变化重试、并发写入、取消及旧快照兼容 | `CachePersistenceTests`、CLI/MCP/UI 样例 |
+| UTF-8 跨块、CRLF、响应边界、超长输出、EOF 及终态保护 | `AppServerCallStateTests`、CLI/MCP 假 app-server 样例 |
 | 同大小覆写、截断、改名副本、跨 home、归档移动 | `ScannerIdentityTests`、`ScannerEquivalenceTests` |
 | 互补副本、汇合与分叉、跨日/跨 home、旧副本缓存、文件头空行 | `CopyReconciliationTests`、CLI/MCP 持久化样例 |
 | 跨午夜、fork 导入、模型/模式切换、重启 | `LocalUsageScannerTests`、`ScannerEquivalenceTests` |
@@ -47,6 +48,8 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 官方比例缺失、越界整数、非法计数/余额/日期 | `InputValidationTests`、CLI/MCP/UI 样例 |
 
 `ScannerEquivalenceTests` 使用独立缓存：一侧持续增量读取并重启，另一侧每次完整重建。对比包含 tokens、事件计数、明细、API/credits 金额、诊断、价格信息和周观察；只排除随运行耗时变化的 `ageSeconds`。同时断言独立已知的 tokens 和金额，避免两个实现路径一起算错却通过比较。不能用删除日志或同大小覆写来“证明缓存复用”。
+
+`AppServerCallStateTests` 在包含中日韩文字、emoji 和组合字符的响应上遍历每个字节切分位置，并逐字节推进实际解析器；即时检查完成信号，不依赖睡眠或真实管道分块时机。CLI/MCP 再通过真实管道读取逐字节写入的 Unicode 响应和错误，检查超长行、截断 EOF、无末尾换行及子进程清理。缓冲边界与输出规则见[app-server 输出处理](refresh.md#app-server-输出处理)。
 
 ## 产物和性能
 

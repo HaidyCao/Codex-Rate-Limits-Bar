@@ -38,7 +38,27 @@ def main():
         fake = root / "fake-codex"
         fake.write_text("""#!/usr/bin/env python3
 import json, os, sys, signal, time
-if os.environ.get('FIXTURE_MODE') == 'hang':
+mode = os.environ.get('FIXTURE_MODE')
+def emit(value, final=False):
+    data = json.dumps(value, ensure_ascii=False).encode('utf-8') + (b'' if final else bytes([10]))
+    if mode in ('unicode', 'unicode-error'):
+        for byte in data:
+            os.write(1, bytes([byte]))
+    else:
+        os.write(1, data)
+if mode in ('oversized-output', 'early-eof'):
+    with open(os.environ['FIXTURE_PID_FILE'], 'w') as handle:
+        handle.write(str(os.getpid()))
+    for _ in range(3):
+        sys.stdin.readline()
+    if mode == 'early-eof':
+        os.write(2, '连接中断🙂'.encode('utf-8'))
+        os.write(1, b'{"id":1,"result":{}}' + bytes([10]) + b'{"id":2,"result":"' + bytes([0xF0, 0x9F]))
+    else:
+        for _ in range(129):
+            os.write(1, b'x' * 65536)
+    sys.exit(0)
+if mode == 'hang':
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     with open(os.environ['FIXTURE_PID_FILE'], 'w') as handle:
         handle.write(str(os.getpid()))
@@ -49,9 +69,12 @@ for line in sys.stdin:
     method = request['method']
     if method == 'account/read':
         result = {'account': {'type': 'chatgpt', 'email': 'fixture@example.invalid', 'planType': 'pro'}}
+        if mode == 'unicode':
+            result['account']['email'] = '测试🙂@example.invalid'
     elif method == 'account/rateLimits/read':
-        if os.environ.get('FIXTURE_MODE') == 'failure':
-            print(json.dumps({'id': request['id'], 'error': {'code': -1, 'message': 'fixture offline'}}), flush=True)
+        if mode in ('failure', 'unicode-error'):
+            message = '请求失败🙂' if mode == 'unicode-error' else 'fixture offline'
+            emit({'id': request['id'], 'error': {'code': -1, 'message': message}})
             continue
         result = {'rateLimits': {'limitId': 'codex', 'secondary': {'usedPercent': 30,
             'windowDurationMins': 10080, 'resetsAt': int(os.environ['FIXTURE_RESET_AT'])},
@@ -69,7 +92,10 @@ for line in sys.stdin:
             result['rateLimitResetCredits'] = {'availableCount': 1e100, 'credits': []}
     else:
         result = {}
-    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+    final = mode == 'unterminated' and method == 'account/rateLimits/read'
+    emit({'id': request['id'], 'result': result}, final=final)
+    if final:
+        sys.exit(0)
 """)
         fake.chmod(0o700)
         env.update(CODEX_BIN=str(fake),
@@ -246,8 +272,33 @@ for line in sys.stdin:
                     assert value["refresh"]["credits"]["status"] == "unavailable"
                     assert value["resetCredits"].get("availableCount") is None
                     assert value["refresh"]["resetCredits"]["status"] == "unavailable"
-        env["FIXTURE_MODE"] = "hang"
         env["FIXTURE_PID_FILE"] = str(root / "child.pid")
+        for mode in ["unicode", "unterminated", "unicode-error", "oversized-output", "early-eof"]:
+            env["FIXTURE_MODE"] = mode
+            for read in [lambda: json.loads(run("status")), lambda: mcp("get_codex_status")]:
+                value = read()
+                quota = value["refresh"]["quota"]
+                assert value["refresh"]["localUsage"]["status"] == "success"
+                if mode in ["unicode", "unterminated"]:
+                    assert quota["status"] == "success", quota
+                    assert value["refresh"]["credits"]["status"] == "success"
+                    if mode == "unicode":
+                        assert value["accountContext"]["accountLabel"] == "测试🙂@example.invalid"
+                else:
+                    assert quota["status"] == "failed", quota
+                    assert "Timed out" not in quota["error"], quota
+                    expected = {"unicode-error": "请求失败🙂", "oversized-output": "stdout line exceeded 8388608 bytes",
+                                "early-eof": "stdout ended before returning"}[mode]
+                    assert expected in quota["error"], quota
+                if mode in ["oversized-output", "early-eof"]:
+                    pid = int((root / "child.pid").read_text())
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        raise AssertionError(f"{mode} app-server process was left running")
+        env["FIXTURE_MODE"] = "hang"
         started = time.monotonic()
         timeout = json.loads(run("status"))
         assert 10 < time.monotonic() - started < 40
@@ -339,7 +390,7 @@ for line in sys.stdin:
         current = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
         for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
             assert current[key] == observation[key]
-    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches, complementary copies and cache persistence failures.")
+    print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches, complementary copies, cache persistence failures and bounded UTF-8 app-server output.")
 
 
 if __name__ == "__main__":

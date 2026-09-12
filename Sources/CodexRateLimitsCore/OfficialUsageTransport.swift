@@ -50,10 +50,14 @@ enum OfficialUsageTransport {
 
         let state = AppServerCallState(labelsById: labelsById)
         stdout.fileHandleForReading.readabilityHandler = { handle in
-            state.processStdout(handle.availableData)
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            state.processStdout(data)
         }
         stderr.fileHandleForReading.readabilityHandler = { handle in
-            state.processStderr(handle.availableData)
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil }
+            state.processStderr(data)
         }
         process.terminationHandler = { terminatedProcess in
             if terminatedProcess.terminationStatus != 0 {
@@ -61,7 +65,6 @@ enum OfficialUsageTransport {
             }
         }
 
-        try process.run()
         defer {
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
@@ -73,6 +76,7 @@ enum OfficialUsageTransport {
                 if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
             }
         }
+        try process.run()
         for request in requests {
             try stdin.fileHandleForWriting.write(contentsOf: request)
         }
@@ -117,95 +121,6 @@ enum OfficialUsageTransport {
         return data
     }
 
-}
-
-private final class AppServerCallState: @unchecked Sendable {
-    private let lock = NSLock()
-    private let labelsById: [Int: String]
-    private var pendingIds: Set<Int>
-    private var stdoutBuffer = ""
-    private var stderrBuffer = ""
-    private var stderrLines: [String] = []
-    private var didSignal = false
-
-    let semaphore = DispatchSemaphore(value: 0)
-    private var results: [String: Any] = [:]
-    private var error: Error?
-
-    init(labelsById: [Int: String]) {
-        self.labelsById = labelsById
-        self.pendingIds = Set(labelsById.keys)
-    }
-
-    func processStdout(_ data: Data) {
-        guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-        lock.lock()
-        stdoutBuffer += chunk
-        while let newline = stdoutBuffer.firstIndex(of: "\n") {
-            let line = String(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let id = intValue(message["id"]),
-                  let label = labelsById[id]
-            else {
-                continue
-            }
-            pendingIds.remove(id)
-            if let rpcError = message["error"] {
-                error = RuntimeError("\(label) failed: \(JSONValue.from(rpcError))")
-                signalIfNeeded()
-                continue
-            }
-            results[label] = message["result"] ?? NSNull()
-            if pendingIds.isEmpty {
-                signalIfNeeded()
-            }
-        }
-        lock.unlock()
-    }
-
-    func processStderr(_ data: Data) {
-        guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-        lock.lock()
-        stderrBuffer += chunk
-        while let newline = stderrBuffer.firstIndex(of: "\n") {
-            let line = String(stderrBuffer[..<newline])
-            stderrBuffer.removeSubrange(...newline)
-            stderrLines.append(line)
-            if stderrLines.count > 50 {
-                stderrLines.removeFirst()
-            }
-        }
-        lock.unlock()
-    }
-
-    func fail(_ failure: Error) {
-        lock.lock()
-        if error == nil {
-            error = failure
-        }
-        signalIfNeeded()
-        lock.unlock()
-    }
-
-    func stderrTail() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        return stderrLines.suffix(50).joined(separator: "\n")
-    }
-
-    func completion() -> (results: [String: Any], error: Error?) {
-        lock.lock()
-        defer { lock.unlock() }
-        return (results, error)
-    }
-
-    private func signalIfNeeded() {
-        if !didSignal {
-            didSignal = true
-            semaphore.signal()
-        }
-    }
 }
 
 private final class URLFetchState: @unchecked Sendable {

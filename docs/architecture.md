@@ -16,6 +16,7 @@ flowchart TD
     Backend --> Scanner[LocalUsageScanner]
     Official --> Account[CodexAccountContext：认证来源]
     Official --> Transport[OfficialUsageTransport：App Server / HTTP]
+    Transport --> Framing[AppServerCallState：字节分行与请求完成状态]
     Official --> Normalize[OfficialResponseNormalizer]
     Scanner --> Store[LocalUsageCacheStore / LocalUsageCache]
     Scanner --> Log[LocalUsageLog / LocalUsagePaths]
@@ -31,6 +32,7 @@ flowchart TD
 | 官方认证归属、额度和重置券回退 | `CodexAccountContext`、`OfficialUsageClient` |
 | 官方响应字段及格式兼容 | `OfficialResponseNormalizer` |
 | 子进程或 HTTP 超时与清理 | `OfficialUsageTransport`；可执行文件发现共用 `CodexProcess` |
+| app-server 输出分行、缓冲限制、响应去重及完成状态 | `AppServerCallState` |
 | 日志解析、文件身份、全量和增量统计 | `LocalUsageScanner`、`LocalUsageLog`、`UsageFileIdentity` |
 | 副本历史对齐、日/周来源范围及贡献归属 | `UsageCopyLedger` |
 | 缓存文档、文件锁、磁盘读写 | `LocalUsageCache`、`LocalUsageCacheStore` |
