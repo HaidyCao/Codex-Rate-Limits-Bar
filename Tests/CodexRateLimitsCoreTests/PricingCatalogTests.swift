@@ -17,11 +17,20 @@ final class PricingCatalogTests: XCTestCase {
         XCTAssertEqual(value.document.schemaVersion, 1)
         XCTAssertEqual(value.metadata.basis, "current-rates")
         XCTAssertEqual(value.metadata.source, "builtin")
-        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-09-12")
-        XCTAssertTrue(value.metadata.credits.sources.contains { $0.contains("11481834") })
+        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-09-23")
+        XCTAssertEqual(value.metadata.credits.verifiedAt, "2026-09-23")
+        XCTAssertTrue(value.metadata.credits.sources.contains { $0 == "https://learn.chatgpt.com/docs/pricing" })
         XCTAssertEqual(value.document.api.models["gpt-6-astra"]?.cacheWriteInput, 12.5)
         XCTAssertEqual(value.document.credits.models["gpt-6-astra"]?.cacheWriteInput, 0)
         XCTAssertNil(value.document.credits.models["gpt-6-astra"]?.contextTier)
+        XCTAssertEqual(value.document.api.models["gpt-6-sol"]?.input, 2)
+        XCTAssertEqual(value.document.api.models["gpt-6-luna"]?.output, 0.5)
+        XCTAssertEqual(value.document.credits.models["gpt-6-sol"]?.cachedInput, 5)
+        XCTAssertEqual(value.document.credits.models["gpt-6-luna"]?.input, 2.5)
+        XCTAssertNil(value.document.credits.models["gpt-6-sol"]?.contextTier)
+        XCTAssertNil(value.document.credits.models["gpt-6-luna"]?.contextTier)
+        XCTAssertEqual(value.document.credits.models["gpt-6-sol"]?.serviceTiers?["fast"], 2.5)
+        XCTAssertEqual(value.document.credits.models["gpt-6-luna"]?.serviceTiers?["fast"], 2.5)
     }
 
     func testCustomCreditsModelDoesNotRequireAnAPIPrice() throws {
@@ -46,6 +55,10 @@ final class PricingCatalogTests: XCTestCase {
         let card = value.document.api
         XCTAssertEqual(card.canonical("LOCAL-MODEL"), "gpt-6-astra")
         XCTAssertEqual(card.canonical("local-model-2026-09-01"), "gpt-6-astra")
+        XCTAssertEqual(card.canonical("gpt-6-sol-2026-09-23"), "gpt-6-sol")
+        XCTAssertEqual(card.canonical("gpt-6-luna-2026-09-23"), "gpt-6-luna")
+        XCTAssertNil(card.canonical("gpt-6-sol-pro"))
+        XCTAssertNil(card.canonical("gpt-6-luna-experimental"))
         XCTAssertNil(card.canonical("local-model-pro"))
         XCTAssertNil(card.canonical("gpt-5.6-terra-2026-09-01"))
         XCTAssertEqual(card.canonical("gpt-5.6-terra"), "gpt-5.6-terra")

@@ -31,6 +31,27 @@ final class CodexCreditEstimatorTests: XCTestCase {
         }
     }
 
+    func testGPT6SolAndLunaCreditRatesUseStandardTokensAndFastMultiplier() throws {
+        let usage = TokenUsage(
+            inputTokens: 1_000_000,
+            cachedInputTokens: 400_000,
+            cacheWriteInputTokens: 100_000,
+            outputTokens: 100_000,
+            reasoningOutputTokens: 80_000,
+            totalTokens: 1_100_000
+        )
+        let cases: [(String, Double)] = [("gpt-6-sol", 52), ("gpt-6-luna", 2.6)]
+
+        for (model, standard) in cases {
+            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
+                usage: usage, model: model, requestInputTokens: 300_001, serviceTier: "standard"
+            )), standard, accuracy: 0.000_001)
+            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
+                usage: usage, model: model, requestInputTokens: 300_001, serviceTier: "fast"
+            )), standard * 2.5, accuracy: 0.000_001)
+        }
+    }
+
     func testCreditsHaveIndependentCoverageAndKeepKnownAmounts() throws {
         var accumulator = TokenCostAccumulator()
         let usage = TokenUsage(inputTokens: 1_000_000, totalTokens: 1_000_000)

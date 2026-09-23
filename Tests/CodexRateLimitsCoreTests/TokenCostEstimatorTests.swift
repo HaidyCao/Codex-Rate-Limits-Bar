@@ -22,6 +22,32 @@ final class TokenCostEstimatorTests: XCTestCase {
         }
     }
 
+    func testGPT6SolAndLunaAPIPricesAtLongContextBoundary() throws {
+        let usage = TokenUsage(
+            inputTokens: 1_000_000,
+            cachedInputTokens: 400_000,
+            cacheWriteInputTokens: 100_000,
+            outputTokens: 100_000,
+            reasoningOutputTokens: 80_000,
+            totalTokens: 1_100_000
+        )
+        let cases: [(String, Double, Double)] = [
+            ("gpt-6-sol", 2.33, 4.16),
+            ("gpt-6-luna", 0.1165, 0.208)
+        ]
+
+        for (model, short, long) in cases {
+            for (requestInput, expected) in [(Int64?(272_000), short), (Int64?(272_001), long)] {
+                let cost = try XCTUnwrap(TokenCostEstimator.estimateUSD(
+                    usage: usage,
+                    model: model,
+                    requestInputTokens: requestInput
+                ))
+                XCTAssertEqual(cost, expected, accuracy: 0.000_000_1, "\(model) at \(requestInput ?? 0) input tokens")
+            }
+        }
+    }
+
     func testAstraModelNamesDoNotPriceUnknownVariants() {
         for model in ["gpt-6-astra", " GPT-6-ASTRA ", "gpt-6-astra-2026-09-03"] {
             XCTAssertEqual(TokenCostEstimator.canonicalModel(model), "gpt-6-astra")

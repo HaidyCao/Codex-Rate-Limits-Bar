@@ -135,12 +135,15 @@ uncached input, cached input, cache writes, and output, and apply the published
 long-context tier only when a request reports more than 272K input tokens.
 Prices come from the [OpenAI API pricing page](https://developers.openai.com/api/docs/pricing).
 
-[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra) is supported
-as `gpt-6-astra`, including dated snapshots. Standard rates verified on 2026-09-05
-are $10 input, $1 cached input, $12.50 cache writes, and $50 output per 1M tokens.
-Above 272K request input tokens, the respective rates are $20, $2, $25, and $75.
-Estimates use Standard API rates; Fast, Batch, Flex, regional surcharges, and tool
-fees are not included.
+[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
+[GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) are supported,
+including dated snapshots. Standard API rates verified on 2026-09-23, per 1M tokens:
+Astra $10 input / $1 cached / $12.50 cache writes / $50 output; Sol $2 / $0.20 /
+$2.50 / $10; Luna $0.10 / $0.01 / $0.125 / $0.50. Above 272K request input
+tokens, Astra, Sol and Luna use 2x input/cache rates and 1.5x output rates.
+Estimates use Standard API rates; Fast, Batch, Flex, regional surcharges, and
+tool fees are not included.
 
 Daybreak Blue (`gpt-daybreak-blue-latest`) currently follows GPT-5.6 Sol pricing;
 Daybreak Red follows GPT-5.6 Cyber. Raw model names are retained in the output.
@@ -186,19 +189,21 @@ use the same values. These are **local usage equivalents at the current purchase
 credit rate card**, not actual deductions, included plan limits, or a fixed value
 of the weekly allowance.
 
-The [official credit rate card](https://help.openai.com/en/articles/11481834)
-is independent of API pricing. The estimate excludes reported cache-write tokens
-from the billable input categories and does not add a cache-write charge. Astra
-keeps standard context rates in Codex; the published long-context tiers apply to
-other eligible models. [Fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed)
-uses 2.5x credits for Astra, GPT-5.6 and GPT-5.5, and 2x for GPT-5.4. Mode changes
+The [official credit rate card](https://learn.chatgpt.com/docs/pricing) is
+independent of API pricing. Per 1M input / cached input / output tokens, GPT-6 Sol
+uses 50 / 5 / 250 credits and GPT-6 Luna 2.5 / 0.25 / 12.5 credits. The estimate
+excludes reported cache-write tokens from billable input and adds no cache-write
+charge. The published Codex credit table has no long-context multiplier for these
+models. [Fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed)
+uses 2.5x credits for GPT-6 Astra, Sol and Luna where available, as well as the
+documented GPT-5.6, GPT-5.5 and GPT-5.4 rates. Mode changes
 are read from each turn/settings event and persisted with the scanner cursor.
 Missing mode or request-context records assume standard rates; missing mode token
 counts are reported. Unrecognized modes stay unpriced. API equivalents continue
 to use Standard API rates regardless of Codex mode.
 
-The built-in rates were verified on 2026-09-12. Historical usage is re-estimated at
-these rates, including current Daybreak aliases and Sol's purchased-credit
+The built-in rates were verified on 2026-09-23. Historical usage is re-estimated at
+these rates, including current Daybreak aliases and GPT-5.6 Sol's purchased-credit
 promotion; it is not a historical billing ledger. Tools, images, voice, regional
 surcharges, cloud/other-device activity, and legacy Enterprise credit pricing are
 not covered. Official balances come directly from `account/rateLimits/read` and
