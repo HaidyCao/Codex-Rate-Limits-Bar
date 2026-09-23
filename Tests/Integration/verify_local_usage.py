@@ -390,6 +390,45 @@ for line in sys.stdin:
         current = json.loads(cache_file.read_text())["cache"]["weeklyCostObservation"]
         for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
             assert current[key] == observation[key]
+        # Independent component corrections must not contaminate later samples.
+        instant = datetime.now(timezone.utc) - timedelta(seconds=5)
+        corrected = []
+        for second, (input_count, cached, output) in enumerate([(1000, 800, 100), (1200, 900, 50), (1300, 950, 60)], 1):
+            value = sample(input_count + output, second)
+            value["payload"]["info"]["total_token_usage"].update(
+                input_tokens=input_count, cached_input_tokens=cached, output_tokens=output)
+            corrected.append(value)
+        context = {"type": "turn_context", "payload": {"model": "gpt-5.6-sol", "service_tier": "standard"}}
+        for path in [archive / "renamed.jsonl", sessions / "renamed-copy.jsonl"]:
+            path.write_text("".join(json.dumps(row) + "\n" for row in [original[0], context, *corrected]))
+        for value in [json.loads(run("status"))["localUsage"], mcp("get_codex_status")["localUsage"],
+                      json.loads(run("local-usage", "--rebuild")), mcp("get_codex_local_usage")]:
+            assert value["totalTokens"] == 1360
+            assert value["todayCost"]["unpricedTokens"] == 150
+            assert abs(value["todayCost"]["estimatedCostUSD"] - 0.00354) < 1e-12
+            assert abs(value["todayCredits"]["estimatedCredits"] - 0.0885) < 1e-12
+            assert {entry["reason"] for entry in value["unpricedUsage"]} == {"incompleteTokenBreakdown"}
+        # Supply recent synthetic quota evidence and an old cache revision. The
+        # actual scanner must replay it and expose the specific pause reason.
+        document = json.loads(cache_file.read_text())
+        old_observation = document["cache"]["weeklyCostObservation"]
+        fixture_now = datetime.now(timezone.utc).timestamp() - 978307200
+        old_observation["startedAt"] = fixture_now - 360
+        old_observation["timelineStartedAt"] = fixture_now - 360
+        old_observation["history"]["samples"] = [{"timestamp": fixture_now - 180,
+                                                    "usedPercent": old_observation["history"]["samples"][-1]["usedPercent"]}]
+        for state in document["cache"]["files"].values():
+            state["diagnostics"]["version"] = 2
+        cache_file.write_text(json.dumps(document))
+        paused = json.loads(run("status"))
+        save("weekly-breakdown", paused)
+        assert paused["localUsage"]["weeklyQuotaCost"]["inferencePauseReason"] == "incompleteTokenBreakdown", paused["localUsage"]["weeklyQuotaCost"]
+        assert mcp("get_codex_status")["localUsage"]["weeklyQuotaCost"]["valuation"]["reason"] == "incompleteTokenBreakdown"
+        assert paused["localUsage"]["todayCost"]["unpricedTokens"] == 150
+        restored = json.loads(cache_file.read_text())["cache"]
+        assert all(state["diagnostics"]["version"] == 3 for state in restored["files"].values())
+        for key in ["windowID", "startedAt", "baselineUsedPercent", "accountScopeKey", "timelineStartedAt"]:
+            assert restored["weeklyCostObservation"][key] == old_observation[key]
     print("CLI/MCP integration passed: completeness, accounts, weekly evidence, pricing, independent freshness, missing fields, timeout cleanup, recovery, persistent restarts, archives, account switches, complementary copies, cache persistence failures and bounded UTF-8 app-server output.")
 
 

@@ -102,9 +102,12 @@ suffixes, including Pro and Spark, never inherit a price by prefix matching.
 The document is limited to 1 MB, with at most 1,000 models and 1,000 aliases per
 card. Duplicate keys and misspelled or unknown structural fields are rejected instead of ignored.
 Supported model rates remain independent: API cache writes may have a charge,
-while the built-in credits card uses zero. Astra's credits entry has no context
-surcharge. Cyber's API table has no published long-context rate, so its pricing
-coverage ends at 272K request input tokens. Those rules are visible in the data.
+while the built-in credits card uses zero. The API cards for GPT-6 Sol and Luna
+apply 2x input/cache and 1.5x output rates above 272K request input tokens. The
+Codex credit card publishes one Standard token rate for GPT-6 Astra, Sol and Luna;
+no long-context credit multiplier is published for those models. Cyber's API
+table has no published long-context rate, so its pricing coverage ends at 272K
+request input tokens. Those rules are visible in the data.
 
 ## Repricing and unknown usage
 
@@ -152,9 +155,36 @@ The first upgrade scans retained logs again. Concurrent CLI reads can reach the
 15-second cache-lock timeout while that scan is running; retry after it finishes.
 Subsequent reads reuse the upgraded cache.
 
+### Cumulative counter corrections
+
+A session's cumulative baseline keeps one recorded sample at the greatest total
+seen so far. A newer sample at the same total can correct the baseline. A lower
+total cannot change any of its components. Taking a separate maximum for input,
+output and cached tokens would combine unrelated samples and could make later
+valid requests look incomplete.
+
+For example, `(input, output, total)` can change from `(1000, 100, 1100)` to
+`(1200, 50, 1250)`. The 150-token transition has no reliable component breakdown
+and remains unpriced. The next sample `(1300, 60, 1360)` adds 100 input and 10
+output tokens, which can be priced normally. Cached, cache-write and reasoning
+counter regressions also make the transition uncertain; `last_token_usage` is
+not substituted for a cumulative delta.
+
+Weekly intervals containing these transitions use reason
+`incompleteTokenBreakdown` and show the corresponding explanation. Other
+unpriced intervals keep `unpricedUsage` with a general unpriced-usage label;
+neither code implies that every affected model is absent from the price table.
+Clean later intervals can qualify for valuation independently.
+
+File diagnostics revision 3 replays old cumulative baselines and minute costs
+once. Cache documents remain v4; prices, account baselines and official quota
+sample timestamps are unchanged by the migration.
+
 ## Sources
 
 The built-in card cites [OpenAI API pricing](https://developers.openai.com/api/docs/pricing),
-the [Codex credit rate card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing)
-and [Codex speed modes](https://learn.chatgpt.com/docs/agent-configuration/speed).
+the [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol) and
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) model pages,
+the [Codex pricing page](https://learn.chatgpt.com/docs/pricing), and
+[Codex speed modes](https://learn.chatgpt.com/docs/agent-configuration/speed).
 API and credits use different rules and remain separate from official balances.

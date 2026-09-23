@@ -92,7 +92,8 @@ public struct UsageBillingAssumptions: Codable, Sendable {
 }
 
 struct UsageFileDiagnostics: Codable {
-    static let currentVersion = 2
+    // Replay old synthesized cumulative baselines and classify minute costs.
+    static let currentVersion = 3
     var version = currentVersion
     var blankLinesChecked: Bool? = true
     var validRecords = 0

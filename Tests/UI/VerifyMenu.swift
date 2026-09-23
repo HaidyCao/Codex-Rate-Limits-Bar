@@ -19,7 +19,7 @@ import Foundation
         let output = URL(fileURLWithPath: CommandLine.arguments[2])
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var scenarios = 0
-        for name in ["complete", "unknown", "missing-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending"] {
+        for name in ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending"] {
             let payload = try JSONDecoder().decode(RateLimitPayload.self, from: Data(contentsOf: fixtures.appendingPathComponent("\(name).json")))
             guard let local = payload.localUsage, let freshness = payload.refresh else { throw RuntimeError("Missing shared snapshot: \(name)") }
             // Independent fixture expectations supplement GUI/CLI/MCP parity.
@@ -43,6 +43,12 @@ import Foundation
                             "Incomplete token breakdown became free usage")
                 try require(localText.contains(AppText.unpricedUsageDetails(local.unpricedUsage) ?? "missing details"),
                             "GUI lost incomplete-breakdown details")
+            }
+            if name == "weekly-breakdown" {
+                try require(local.weeklyQuotaCost?.valuation?.reason == "incompleteTokenBreakdown",
+                            "Weekly pause lost its actual reason")
+                try require(tooltips(rate).contains(AppText.incompleteTokenBreakdown),
+                            "Weekly GUI mislabels incomplete counters as unknown API prices")
             }
             if name == "missing-percent" || name == "invalid-numbers" {
                 try require(payload.selectedRateLimit?.weeklyWindow == nil && freshness.quota.status == .unavailable,

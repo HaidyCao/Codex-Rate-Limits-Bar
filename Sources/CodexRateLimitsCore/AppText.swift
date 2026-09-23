@@ -393,6 +393,7 @@ public enum AppText {
     public static func weeklyValuationDetails(_ value: WeeklyQuotaValuation?) -> String {
         guard let value else { return "" }
         var lines = [weeklyValuationSummary(value)]
+        if let reason = value.reason { lines.append(weeklyValuationReason(reason)) }
         lines.append(weeklyText("官方样本 \(value.sampleCount) 次；排除 \(value.rejectedIntervalCount) 区间；有效额度变化 \(value.effectiveUsedPercent) 个百分点。",
                                 "官方樣本 \(value.sampleCount) 次；排除 \(value.rejectedIntervalCount) 區間；有效額度變化 \(value.effectiveUsedPercent) 個百分點。",
                                 "公式標本 \(value.sampleCount) 回、除外 \(value.rejectedIntervalCount) 区間、有効変化 \(value.effectiveUsedPercent) ポイント。",
@@ -429,7 +430,8 @@ public enum AppText {
         switch reason {
         case "incompleteScan": return weeklyText("统计不完整", "統計不完整", "不完全な統計", "불완전한 통계", "incomplete scan")
         case "billingAssumptions": return weeklyText("API 计费条件缺失", "API 計費條件缺失", "API 料金条件が不足", "API 요율 조건 누락", "API billing assumptions")
-        case "unpricedUsage": return weeklyText("存在未知 API 价格", "存在未知 API 價格", "不明な API 価格", "알 수 없는 API 가격", "unknown API prices")
+        case "unpricedUsage": return weeklyText("存在未计价用量", "存在未計價用量", "未計算の使用量あり", "요금 미산정 사용량 있음", "unpriced usage")
+        case "incompleteTokenBreakdown": return incompleteTokenBreakdown
         case "staleQuota": return weeklyText("额度样本已过期", "額度樣本已過期", "上限標本が古い", "한도 표본 만료", "quota sample expired")
         case "quotaTimestampUnavailable": return weeklyText("缺少额度采样时间", "缺少額度取樣時間", "上限の取得時刻が不明", "한도 표본 시간 누락", "missing quota timestamp")
         case "supersededSample": return weeklyText("等待最新额度样本", "等待最新額度樣本", "最新の上限標本を待機", "최신 한도 표본 대기", "waiting for latest quota sample")

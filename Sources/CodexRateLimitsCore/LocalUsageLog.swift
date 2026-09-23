@@ -134,15 +134,11 @@ enum LocalUsageLog {
 
     static func maxTokenUsage(_ previous: TokenUsage?, _ current: TokenUsage) -> TokenUsage {
         guard let previous else { return current }
-        return TokenUsage(
-            inputTokens: max(previous.inputTokens, current.inputTokens),
-            cachedInputTokens: max(previous.cachedInputTokens, current.cachedInputTokens),
-            cacheWriteInputTokens: max(previous.cacheWriteInputTokens, current.cacheWriteInputTokens),
-            outputTokens: max(previous.outputTokens, current.outputTokens),
-            reasoningOutputTokens: max(previous.reasoningOutputTokens, current.reasoningOutputTokens),
-            totalTokens: max(previous.totalTokens, current.totalTokens),
-            breakdownUnavailable: current.hasCompleteBreakdown ? nil : true
-        )
+        // Counters can be revised independently. Component-wise maxima invent
+        // a sample that never existed and make later valid deltas unpriceable.
+        // Preserve the total high-water mark using one complete recorded sample;
+        // equal-total corrections can repair the baseline without adding usage.
+        return current.totalTokens >= previous.totalTokens ? current : previous
     }
 
     static func positiveDelta(_ previous: TokenUsage?, _ current: TokenUsage, sameSession: Bool) -> TokenUsage? {
@@ -150,6 +146,10 @@ enum LocalUsageLog {
             return nil
         }
         let previous = previous ?? TokenUsage()
+        let componentsRegressed = sameSession && (
+            current.inputTokens < previous.inputTokens || current.cachedInputTokens < previous.cachedInputTokens
+                || current.cacheWriteInputTokens < previous.cacheWriteInputTokens || current.outputTokens < previous.outputTokens
+                || current.reasoningOutputTokens < previous.reasoningOutputTokens)
         let delta = TokenUsage(
             inputTokens: current.inputTokens >= previous.inputTokens ? current.inputTokens - previous.inputTokens : (sameSession ? 0 : current.inputTokens),
             cachedInputTokens: current.cachedInputTokens >= previous.cachedInputTokens ? current.cachedInputTokens - previous.cachedInputTokens : (sameSession ? 0 : current.cachedInputTokens),
@@ -157,7 +157,7 @@ enum LocalUsageLog {
             outputTokens: current.outputTokens >= previous.outputTokens ? current.outputTokens - previous.outputTokens : (sameSession ? 0 : current.outputTokens),
             reasoningOutputTokens: current.reasoningOutputTokens >= previous.reasoningOutputTokens ? current.reasoningOutputTokens - previous.reasoningOutputTokens : (sameSession ? 0 : current.reasoningOutputTokens),
             totalTokens: current.totalTokens >= previous.totalTokens ? current.totalTokens - previous.totalTokens : (sameSession ? 0 : current.totalTokens),
-            breakdownUnavailable: previous.hasCompleteBreakdown && current.hasCompleteBreakdown ? nil : true
+            breakdownUnavailable: previous.hasCompleteBreakdown && current.hasCompleteBreakdown && !componentsRegressed ? nil : true
         )
         return delta.inputTokens > 0
             || delta.cachedInputTokens > 0

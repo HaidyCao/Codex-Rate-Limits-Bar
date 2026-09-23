@@ -220,7 +220,7 @@ final class WeeklyQuotaSamplingTests: XCTestCase {
         let partial = try scanner.snapshot(weeklyWindow: window(95), quotaSampleAt: now)
         XCTAssertEqual(partial.totalTokens, 95_001)
         XCTAssertEqual(partial.weeklyQuotaCost?.unpricedTokens, 1)
-        XCTAssertEqual(partial.weeklyQuotaCost?.inferencePauseReason, "unpricedUsage")
+        XCTAssertEqual(partial.weeklyQuotaCost?.inferencePauseReason, "incompleteTokenBreakdown")
         XCTAssertNil(partial.weeklyQuotaCost?.estimatedQuotaUSD)
         XCTAssertEqual(partial.weeklyQuotaCost?.baselineUsedPercent, trained.weeklyQuotaCost?.baselineUsedPercent)
     }

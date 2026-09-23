@@ -109,6 +109,37 @@ final class WeeklyQuotaEstimatorTests: XCTestCase {
         XCTAssertEqual(result.confidence, .medium)
     }
 
+    func testIncompleteBreakdownsHaveTheirOwnReasonAndCleanIntervalsRecover() throws {
+        let (history, original) = fixture(minutes: 150)
+        var buckets = original
+        var invalid = WeeklyCostBucket()
+        invalid.add(usage: TokenUsage(totalTokens: 1), model: "gpt-5.6-sol", requestInput: 1, tier: "standard")
+        buckets[WeeklyQuotaEstimator.minute(at(149))]?.merge(invalid)
+        let result = evaluate(history, buckets)
+        XCTAssertEqual(result.reason, "incompleteTokenBreakdown")
+        let estimate = WeeklyQuotaCostEstimate(windowStartIso: "", windowEndIso: "", observationStartIso: "",
+            baselineUsedPercent: 10, usedPercent: 35, usedDeltaPercent: 25, observedCostUSD: nil,
+            estimatedQuotaUSD: nil, coveragePercent: 0, pricedTokens: 0, unpricedTokens: 1, valuation: result)
+        XCTAssertTrue(AppText.weeklyQuotaEstimatedCost(estimate).contains(AppText.incompleteTokenBreakdown))
+        XCTAssertTrue(AppText.weeklyValuationDetails(result).contains(AppText.incompleteTokenBreakdown))
+        XCTAssertNil(result.estimatedUSD)
+        let persisted = try JSONDecoder().decode([Int: WeeklyCostBucket].self, from: JSONEncoder().encode(buckets))
+        XCTAssertEqual(evaluate(history, persisted).reason, result.reason)
+        buckets = original
+        buckets[WeeklyQuotaEstimator.minute(at(15))]?.merge(invalid)
+        XCTAssertEqual(evaluate(history, buckets).status, .ready)
+        XCTAssertEqual(evaluate(history, buckets).effectiveIntervalCount, 4)
+    }
+
+    func testLegacyUnpricedMinuteBucketsRemainConservative() throws {
+        let legacy = Data(#"{"costUSD":0,"unpricedTokens":1,"assumedAPITokens":0,"uncertainCreditTokens":0}"#.utf8)
+        let bucket = try JSONDecoder().decode(WeeklyCostBucket.self, from: legacy)
+        var (history, buckets) = fixture()
+        buckets[WeeklyQuotaEstimator.minute(at(89))] = bucket
+        XCTAssertEqual(evaluate(history, buckets).reason, "unpricedUsage")
+        XCTAssertNil(evaluate(history, buckets).estimatedUSD)
+    }
+
     func testAbruptChangesAndUnmatchedQuotaConsumptionAreNotConfidentValues() {
         let (history, original) = fixture()
         var buckets = original

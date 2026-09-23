@@ -26,11 +26,17 @@ struct WeeklyCostBucket: Codable, Sendable {
     var unpricedTokens: Int64 = 0
     var assumedAPITokens: Int64 = 0
     var uncertainCreditTokens: Int64 = 0
+    var incompleteBreakdownTokens: Int64? = nil
 
     mutating func add(usage: TokenUsage, model: String?, requestInput: Int64?, tier: String?) {
         if let value = TokenCostEstimator.estimateUSD(usage: usage, model: model, requestInputTokens: requestInput) {
             costUSD += value
-        } else { unpricedTokens += usage.totalTokens }
+        } else {
+            unpricedTokens += usage.totalTokens
+            if !usage.hasCompleteBreakdown, usage.totalTokens > 0 {
+                incompleteBreakdownTokens = (incompleteBreakdownTokens ?? 0) + usage.totalTokens
+            }
+        }
         if requestInput == nil, TokenCostEstimator.needsRequestContext(model) { assumedAPITokens += usage.totalTokens }
         if tier == nil || (requestInput == nil && CodexCreditEstimator.needsRequestContext(model))
             || CodexCreditEstimator.estimate(usage: usage, model: model, requestInputTokens: requestInput, serviceTier: tier) == nil {
@@ -43,6 +49,9 @@ struct WeeklyCostBucket: Codable, Sendable {
         unpricedTokens += other.unpricedTokens
         assumedAPITokens += other.assumedAPITokens
         uncertainCreditTokens += other.uncertainCreditTokens
+        if let incomplete = other.incompleteBreakdownTokens {
+            incompleteBreakdownTokens = (incompleteBreakdownTokens ?? 0) + incomplete
+        }
     }
 }
 
@@ -135,18 +144,20 @@ enum WeeklyQuotaEstimator {
         // the difference of two rounded/truncated official percentages.
         func bounds(from start: Date, to end: Date) -> (lower: Double, upper: Double, credit: Bool, reason: String?) {
             var lower = 0.0, upper = 0.0, credit = false
-            var unknown = false, assumedAPI = false
+            var unpriced = false, incompleteBreakdown = false, assumedAPI = false
             for (minute, bucket) in buckets {
                 let begin = Date(timeIntervalSince1970: Double(minute) * bucketDuration)
                 let finish = begin.addingTimeInterval(bucketDuration)
                 guard finish > start.addingTimeInterval(-alignmentAllowance), begin < end else { continue }
                 upper += bucket.costUSD
                 if begin >= start, finish <= end.addingTimeInterval(-alignmentAllowance) { lower += bucket.costUSD }
-                unknown = unknown || bucket.unpricedTokens > 0
+                unpriced = unpriced || bucket.unpricedTokens > 0
+                incompleteBreakdown = incompleteBreakdown || (bucket.incompleteBreakdownTokens ?? 0) > 0
                 assumedAPI = assumedAPI || bucket.assumedAPITokens > 0
                 credit = credit || bucket.uncertainCreditTokens > 0
             }
-            return (lower, upper, credit, unknown ? "unpricedUsage" : assumedAPI ? "billingAssumptions" : nil)
+            return (lower, upper, credit, incompleteBreakdown ? "incompleteTokenBreakdown"
+                : unpriced ? "unpricedUsage" : assumedAPI ? "billingAssumptions" : nil)
         }
 
         var anchor = first
