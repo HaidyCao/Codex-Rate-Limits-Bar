@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "api": {
-    "version": "2026-10-06.2",
-    "verifiedAt": "2026-10-06",
+    "version": "2026-10-07.1",
+    "verifiedAt": "2026-10-07",
     "sources": [
       "https://developers.openai.com/api/docs/pricing",
       "https://developers.openai.com/api/docs/models/gpt-6-astra",
@@ -11,14 +11,17 @@
       "https://developers.openai.com/api/docs/models/gpt-6-luna",
       "https://developers.openai.com/api/docs/guides/prompt-caching",
       "https://developers.openai.com/api/docs/models/gpt-5.5",
-      "https://developers.openai.com/api/docs/models/gpt-5.4"
+      "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "https://developers.openai.com/api/docs/models/gpt-5.6-cyber",
+      "https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest"
     ],
     "conditions": [
       "USD per 1M tokens; Standard API equivalents at current rates, including historical logs.",
       "Fast, Ultrafast, Batch, Flex, regional and tool fees are excluded.",
       "Retained models before GPT-5.6 use the ordinary input rate for reported cache writes; GPT-5.6 and later entries use their explicitly configured write premium. Input categories are charged once, not additively.",
       "GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol and Luna use 2x input/cache and 1.5x output above 272K request input tokens.",
-      "Cyber API estimates currently cover requests up to 272K input tokens; larger requests remain unpriced.",
+      "Cyber uses the model page's explicit 2x input/cache and 1.5x output tier above 272K request input; the general pricing table still leaves its long-context cells blank. This estimate follows the model-specific rule.",
+      "The deprecated gpt-daybreak-red-latest alias retains its explicit Cyber mapping for historical local estimates.",
       "Dated snapshots use their explicit base or alias target, never arbitrary name prefixes.",
       "GPT-6.1 Sol uses its exact published model ID; unconfirmed aliases and dated snapshots remain unpriced."
     ],
@@ -29,7 +32,11 @@
         "cacheWriteInput": 15.625,
         "output": 75.0,
         "datedSnapshots": true,
-        "maximumInputTokens": 272000
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
       },
       "gpt-6-astra": {
         "input": 10.0,

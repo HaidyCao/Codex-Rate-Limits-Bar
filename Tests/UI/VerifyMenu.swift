@@ -27,7 +27,7 @@ import Foundation
         let contractNames = ["contract-observed", "contract-modes", "contract-pro-no-five-hour", "contract-weekly-only",
                              "contract-credits-only", "contract-api-key", "contract-unknown-plan", "contract-codex-map", "contract-api-key-error"]
         let names = localized ? ["pricing-reasons", "pricing-config-error", "credit-writes"]
-            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted() + contractNames
+            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "cyber-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted() + contractNames
         for name in names {
             var data = try Data(contentsOf: fixtures.appendingPathComponent("\(name).json"))
             if localized {
@@ -126,13 +126,21 @@ import Foundation
                 try require(localText.contains(AppText.unpricedUsageDetails(local.unpricedUsage) ?? "missing details"),
                             "GUI lost incomplete-breakdown details")
             }
-            if name == "credit-writes" || name == "credit-long-context" {
+            if ["credit-writes", "credit-long-context", "cyber-long-context"].contains(name) {
                 try require(local.todayCost?.coveragePercent == 100 && local.todayCredits?.estimatedCredits == nil,
                             "Unverified credits changed API coverage or became zero cost")
-                let reason = name == "credit-writes" ? "unverifiedCacheWrite" : "unsupportedContext"
+                let reason = name == "credit-long-context" ? "unsupportedContext" : "unverifiedCacheWrite"
                 try require(local.unpricedUsage?.first?.reason == reason
                             && localText.contains(AppText.unpricedUsageDetails(local.unpricedUsage) ?? "missing details"),
                             "GUI lost the unverified credit accounting reason")
+            }
+            if name == "cyber-long-context" {
+                try require(local.totalTokens == 277_001
+                            && abs((local.todayCost?.estimatedCostUSD ?? -1) - 5.687525) < 1e-12
+                            && local.todayCost?.unpricedTokens == 0
+                            && local.todayCredits?.unpricedTokens == 277_001
+                            && localText.contains("gpt-daybreak-red-latest"),
+                            "GUI lost the Cyber long-context estimate or historical alias")
             }
             if name == "weekly-breakdown" {
                 try require(local.weeklyQuotaCost?.valuation?.reason == "incompleteTokenBreakdown",

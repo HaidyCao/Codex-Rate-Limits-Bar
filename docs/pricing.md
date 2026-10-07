@@ -16,6 +16,8 @@ TODO-21/22 add maintenance and client verification. TODO-23's
 [extension assessment](billing-extensions.md) keeps historical valuation and
 official API costs conditional and separate from existing estimates. API card
 `2026-10-06.2` corrects older-model cache writes in [TODO-24](#legacy-api-cache-writes-todo-24).
+API card `2026-10-07.1` then adds the model-specific Cyber long-context rule
+in [TODO-25](#cyber-api-long-context-todo-25); the credits card is unchanged.
 
 [OpenAI's changelog](https://developers.openai.com/api/docs/changelog) records the
 GPT-6.1 Sol release on September 29. The
@@ -95,7 +97,7 @@ the following retained groups. API tiers cannot fill that gap:
 | --- | --- | --- |
 | GPT-6 Astra/Sol/Luna, GPT-6.1 Sol | Published 2x input/cache, 1.5x output above 272K | Up to 272K known request input |
 | GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4 | Published long-context API tiers | Up to 272K; previous borrowed multipliers removed |
-| GPT-5.6 Cyber / Daybreak Red | Current card stops at 272K; published tier pending TODO-25 | Up to 272K |
+| GPT-5.6 Cyber / Daybreak Red | Model-page 2x input/cache, 1.5x output above 272K; see source discrepancy below | Up to 272K |
 | GPT-5.4 mini, GPT-5.3-Codex, GPT-5.2 | Existing Standard API rules | Existing Standard credit rules retained |
 
 API rules are sourced from [API pricing](https://developers.openai.com/api/docs/pricing)
@@ -152,9 +154,45 @@ rollback uses the same replay mechanism. Explicit custom prices keep their
 configured values, and `pricing --health` reports their differences read-only.
 
 During this audit, the [Cyber model page](https://developers.openai.com/api/docs/models/gpt-5.6-cyber)
-also established an API tier above 272K. The current Cyber card retains its
-272K coverage guard pending [TODO-25](../TODO.md#todo-25补齐-cyber-的-api-长上下文计价);
-this is an implementation gap, not a claim that the tier is unpublished.
+also established an API tier above 272K. TODO-24 left the Cyber card's 272K
+coverage guard in place; the following update closes that implementation gap.
+
+### Cyber API long context (TODO-25)
+
+Reviewed on 2026-10-07. The [Cyber model page](https://developers.openai.com/api/docs/models/gpt-5.6-cyber)
+explicitly applies 2x input and 1.5x output prices to the entire request above
+272K input tokens. It also prices cache writes at 1.25x uncached input.
+However, the [general pricing table](https://developers.openai.com/api/docs/pricing)
+still shows dashes in Cyber's long-context cells. This app follows the explicit
+model-specific rule for its Standard API equivalent; the two sources are not
+fully aligned, and this is not invoice verification. With the existing cached
+read and write rules, the resulting rates per million tokens are:
+
+| Request input | Ordinary input | Cache reads | Cache writes | Output |
+| --- | --- | --- | --- | --- |
+| Up to 272,000 | $12.50 | $1.25 | $15.625 | $75 |
+| Above 272,000 | $25 | $2.50 | $31.25 | $112.50 |
+
+The [Daybreak Red model page](https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest)
+marks it deprecated and maps it to Cyber. The existing exact alias
+`gpt-daybreak-red-latest` remains supported for historical logs. No new aliases,
+prefix matching, or dated-snapshot permissions are introduced.
+
+For 80K cached input, 20K writes and 5K output (including 4K reasoning), request
+input of 272,000 / 272,001 / 400,000 yields $2.9375 / $5.687525 / $8.8875.
+Ordinary input is input minus reads and writes; reasoning is already in output.
+The last request's input selects the tier, independently of the cumulative
+counter delta. Missing request context retains the base rate and an assumption.
+Purchased credits remain separate: positive reported writes are
+`unverifiedCacheWrite`; otherwise known input above 272K is `unsupportedContext`.
+
+Only the API card advances to `2026-10-07.1`; credits stays `2026-10-06.3`.
+Schema v1, cache v4 and calculation revision `pricing-v4` are unchanged.
+Cyber and its configured alias change signatures; retained affected logs replay,
+including previously unpriced API usage and weekly minute costs. Tokens,
+account baselines and official observations survive upgrades and rollback.
+Missing history stays `stalePricing` until restored. A custom 272K cap remains
+valid; `pricing --health` reports differences without altering or activating it.
 
 ### Maintenance and compatibility decisions
 
@@ -346,7 +384,7 @@ explicit F name retained by this card. A dash is unpriced, not zero.
 | `gpt-5.6-sol` | 0.212 | 5.3 | S/F | API + credit/speed sources; promotion reviewed 2026-10-06 |
 | `gpt-5.6-terra` | 0.116 | 2.9 | S/F | Retained API base; credit/speed review 2026-10-06 |
 | `gpt-5.6-luna` | 0.0116 | 0.29 | S/F | Same |
-| `gpt-5.6-cyber` | 0.725 | 18.125 | S | API Cyber / credit Daybreak Red; 2026-10-06 review |
+| `gpt-5.6-cyber` | 0.725 | 18.125 | S | API tier reviewed 2026-10-07; credit Daybreak Red review 2026-10-06 |
 | `gpt-5.5` | 0.29 | 7.25 | S/F | Retained API base; credit/retirement review 2026-10-06 |
 | `gpt-5.4` | 0.145 | 3.625 | S/F | Retained historical base and explicit modes |
 | `gpt-5.4-mini` | 0.0435 | 1.09 | S | Retained historical base; credit output is 113/M, not an API conversion |
@@ -385,6 +423,7 @@ Other pricing/accounting tests cover writes, unknown modes and context boundarie
 | Credits `2026-10-06.3` | Clarify estimate scope and contract exclusions only | Metadata-only change; no price replay required. |
 | TODO-21 diagnostics | Read-only comparisons, date reminders, release examples | No card, schema or calculation-signature change. |
 | API `2026-10-06.2` / TODO-24 | GPT-5.5/5.4 writes use ordinary input rates | Replay affected retained logs in either direction; missing logs stay stale. Credits card unchanged. |
+| API `2026-10-07.1` / TODO-25 | Cyber long-context tier follows its model page; general table still blank | Replay Cyber/Daybreak Red logs in either direction; preserve official observations and custom caps. Credits unchanged. |
 
 Preserve the previous app and custom card together. Do not delete caches to force
 a rollback: per-model signatures replay available history in either direction.
@@ -394,7 +433,8 @@ record when changes are committed. TODO-17 through TODO-21 were committed togeth
 as `f8c9368`; the intermediate October card revisions above document development
 steps, not separate published releases. The baseline before TODO-17 was
 `2026-09-23.1` at `7c79417`; before TODO-24 it was API `2026-10-06.1` and
-credits `2026-10-06.3` at `32a0f75`.
+credits `2026-10-06.3` at `32a0f75`. Before TODO-25 it was API `2026-10-06.2`
+and credits `2026-10-06.3` at `3e98529`.
 
 ## Document and model rules
 

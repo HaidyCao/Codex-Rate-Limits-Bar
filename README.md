@@ -141,7 +141,7 @@ Prices come from the [OpenAI API pricing page](https://developers.openai.com/api
 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) are supported,
 with dated snapshots only for explicitly enabled models. GPT-6.1 Sol resolves
 its exact published ID; unconfirmed dated snapshots and aliases stay unpriced.
-Standard API rates in card `2026-10-06.2`, per 1M tokens:
+Standard API rates in card `2026-10-07.1`, per 1M tokens:
 
 | Model | Input | Cached input | Cache writes | Output |
 | --- | --- | --- | --- | --- |
@@ -149,6 +149,7 @@ Standard API rates in card `2026-10-06.2`, per 1M tokens:
 | GPT-6 Astra | $10 | $1 | $12.50 | $50 |
 | GPT-6 Sol | $2 | $0.20 | $2.50 | $10 |
 | GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
+| GPT-5.6 Cyber | $12.50 | $1.25 | $15.625 | $75 |
 | GPT-5.5 | $5 | $0.50 | $5 | $30 |
 | GPT-5.4 | $2.50 | $0.25 | $2.50 | $15 |
 
@@ -157,7 +158,8 @@ output rates for the full request. Estimates use Standard API rates; Fast,
 Ultrafast, Batch, Flex, regional surcharges, and tool fees are not included.
 
 Daybreak Blue (`gpt-daybreak-blue-latest`) currently follows GPT-5.6 Sol pricing;
-Daybreak Red follows GPT-5.6 Cyber. Raw model names are retained in the output.
+The deprecated Daybreak Red alias (`gpt-daybreak-red-latest`) follows GPT-5.6 Cyber
+for historical logs. Raw model names are retained in the output.
 Only explicit aliases and dated snapshots inherit prices. Spark, Pro, and unknown
 variants never inherit a price solely by sharing a model-name prefix.
 
@@ -198,8 +200,10 @@ prices. See the [maintenance checklist](docs/pricing.md#release-maintenance-chec
 `unpricedUsage` lists raw model/mode names, reasons, token counts and percentages,
 separately for API and credits. The weekly estimate has its own scoped list.
 Known amounts remain available when another request for the same model lacks a
-price. Cyber's unpublished long-context API tier stays unpriced rather than using
-a guessed multiplier. Unknown-price details persist across restarts. The first
+price. Cyber's API long-context estimate follows the explicit model-page rule;
+the general pricing table still leaves that tier blank. See the
+[source discrepancy and scope](docs/pricing.md#cyber-api-long-context-todo-25).
+Unknown-price details persist across restarts. The first
 upgrade replays retained cost-bearing files to recover these details and current
 rules, preserving account baselines and timestamped quota evidence.
 
@@ -237,7 +241,8 @@ Missing mode or request-context records assume standard rates; missing mode toke
 counts are reported. Unrecognized modes stay unpriced. API equivalents continue
 to use Standard API rates regardless of Codex mode.
 
-The built-in card was updated on 2026-10-06. Historical usage is re-estimated at
+The built-in API card was updated on 2026-10-07; the credits card remains dated
+2026-10-06. Historical usage is re-estimated at
 these rates, including current Daybreak aliases and GPT-5.6 Sol's purchased-credit
 promotion; it is not a historical billing ledger. Separate tool, image, voice
 and regional charges are excluded; API-key, Enterprise USD and legacy Enterprise

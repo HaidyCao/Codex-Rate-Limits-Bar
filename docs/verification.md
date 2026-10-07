@@ -46,6 +46,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 周金额稳定性、时间对齐、样本失效和重算 | `WeeklyQuotaEstimatorTests`、`WeeklyQuotaSamplingTests` |
 | 价格版本、别名、未知型号、默认费率假设 | `PricingCatalogTests`、价格估算测试、CLI/MCP 样例 |
 | 旧模型写入无溢价、272K 边界、跨卡重定价与回滚、缺日志恢复 | `PricingReleaseTests`、`ScannerEquivalenceTests`、`verify_pricing.py`、`verify_client_contracts.py` |
+| Cyber 长上下文、历史别名、API 与 credits 独立覆盖、旧未计价量恢复 | `TokenCostEstimatorTests`、`CreditAccountingTests`、`ScannerEquivalenceTests`、CLI/MCP/UI 样例 |
 | 重试、独立错误、超时、网络恢复状态、迟到结果 | `RefreshStateTests`、`UsageRefreshControllerTests`、假服务超时清理/恢复样例 |
 | 缺失归档目录创建后的路径别名与历史保留 | `AccountContextTests`、`ScannerEquivalenceTests`、CLI/MCP 持久化样例 |
 | 统计不可用时的 GUI credits 提示 | `VerifyMenu.swift` 使用 CLI/MCP 的不可用数据样例 |
@@ -65,7 +66,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
 - `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
-- `menu/`：原有 22 种场景，以及真实日志投影、合成模式切换、Pro 无五小时窗口、仅周窗口、仅余额、API-key 空额度/错误、未知套餐及按 codex ID 选窗口，共 31 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
+- `menu/`：原有 22 种场景，以及真实日志投影、合成模式切换、Pro 无五小时窗口、仅周窗口、仅余额、API-key 空额度/错误、未知套餐、按 codex ID 选窗口和 Cyber 长上下文，共 32 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
 
@@ -84,6 +85,8 @@ credits 语义回归由 `CreditAccountingTests` 覆盖纯写入、混合输入�
 ## 客户端与套餐契约样例（TODO-22）
 
 TODO-24 另在 `verify_client_contracts.py` 构造纯合成旧模型写入样例：GPT-5.5/5.4 各两次混合读写请求，另有 GPT-6.1 Sol 无写入对照。每份日志有两个副本；去重后为 630,000 tokens、$1.606 API 等值、4.9 credits，credits 未计价 420,000 tokens。先写首条计数、再追加，比较 CLI/MCP、真实进程重启及重建；新增 `fixtures/contract-cache-writes.json` 数值产物，不增加 UI 场景。`verify_pricing.py` 还检查旧自定义卡仅两行 API 写入价不同，credits 无差异，候选文件保持原样。
+
+TODO-25 的 Cyber/Daybreak Red 合成请求使用输入 272,001（cached 80K、write 20K）、输出 5K（含 reasoning 4K）。CLI/MCP 均应得到 277,001 tokens、$5.687525 API 等值及 277,001 credits 未计价 tokens，原因为 `unverifiedCacheWrite`；`cyber-long-context` 场景验证历史别名、金额和原因的双主题显示。单元回归另覆盖 272K 边界、纯读写、缺上下文、无写入长上下文的 credits 保护，以及旧卡升级、追加、重启、重建、回滚和日志恢复。价格健康集成确认显式自定义 272K 上限仍合法，只报告 Cyber 及其别名的 API 规则差异，不改写候选文件。
 
 [client-contracts](../Tests/Fixtures/client-contracts/) 明确区分真实记录投影和合成验证数据：
 

@@ -227,6 +227,127 @@ final class ScannerEquivalenceTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(read(subject).todayCredits?.estimatedCredits), 166.75, accuracy: 1e-12)
     }
 
+    private func legacyCyberPricing() -> PricingSnapshot {
+        var document = PricingCatalog.builtin.document
+        document.api.version = "2026-10-06.2"
+        document.api.models["gpt-5.6-cyber"]?.contextTier = nil
+        document.api.models["gpt-5.6-cyber"]?.maximumInputTokens = 272_000
+        return PricingCatalog.snapshot(document, source: "custom", path: nil, error: nil)
+    }
+
+    private func cyberSample(totalInput: Int, count: Int, requestInput: Int) -> [String: Any] {
+        ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now),
+         "payload": ["type": "token_count", "info": [
+            "total_token_usage": ["input_tokens": totalInput, "cached_input_tokens": 80_000 * count,
+                "cache_write_input_tokens": 20_000 * count, "output_tokens": 5_000 * count,
+                "reasoning_output_tokens": 4_000 * count, "total_tokens": totalInput + 5_000 * count],
+            "last_token_usage": ["input_tokens": requestInput]]]]
+    }
+
+    func testCyberContextMigrationRecoversUnpricedUsageAndPreservesWeeklyEvidence() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        let legacy = legacyCyberPricing()
+        pricing = legacy
+        var subject = scanner("incremental")
+        let reference = scanner("reference")
+        try assertEquivalent(subject, reference, total: 0, stage: "Cyber baseline")
+        now.addTimeInterval(60)
+        let file = sessions.appendingPathComponent("cyber.jsonl")
+        try write([meta("cyber"), model("gpt-5.6-cyber"), cyberSample(totalInput: 272_000, count: 1, requestInput: 272_000)], to: file)
+        try write([meta("known"), model("gpt-6.1-sol"), token(100_000, delta: 100_000)],
+            to: sessions.appendingPathComponent("known.jsonl"))
+        try assertEquivalent(subject, reference, total: 377_000, stage: "Cyber boundary")
+        now.addTimeInterval(60)
+        try write([model("gpt-daybreak-red-latest"), cyberSample(totalInput: 544_001, count: 2, requestInput: 272_001)],
+            to: file, append: true)
+        try assertEquivalent(subject, reference, total: 654_001, stage: "old Cyber cap")
+        let before = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(before.todayCost?.estimatedCostUSD), 3.1375, accuracy: 1e-12)
+        XCTAssertEqual(before.todayCost?.unpricedTokens, 277_001)
+        XCTAssertEqual(before.unpricedUsage?.first { $0.kind == "api" }?.reason, "unsupportedContext")
+        let cacheURL = root.appendingPathComponent("incremental.json")
+        func document() throws -> LocalUsageCacheDocument {
+            try JSONDecoder().decode(LocalUsageCacheDocument.self, from: Data(contentsOf: cacheURL))
+        }
+        let oldCache = try document()
+        XCTAssertEqual(oldCache.cache.weeklyCostObservation?.history?.samples.count, 3)
+        pricing = PricingCatalog.builtin
+        subject = scanner("incremental")
+        try assertEquivalent(subject, reference, total: 654_001, stage: "Cyber tier after restart")
+        let after = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(after.todayCost?.estimatedCostUSD), 8.825025, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(after.weeklyQuotaCost?.observedCostUSD), 8.825025, accuracy: 1e-12)
+        XCTAssertEqual(after.todayCost?.unpricedTokens, 0)
+        XCTAssertEqual(after.todayCredits?.estimatedCredits, 5)
+        XCTAssertEqual(after.todayCredits?.unpricedTokens, 554_001)
+        XCTAssertEqual(Set(after.unpricedUsage?.map(\.reason) ?? []), ["unverifiedCacheWrite"])
+        let updated = try document()
+        XCTAssertEqual(updated.version, 4)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        XCTAssertEqual(try encoder.encode(updated.cache.weeklyCostObservation), try encoder.encode(oldCache.cache.weeklyCostObservation))
+        let minutes = updated.cache.files.values.flatMap { Array(($0.weeklyTimeline ?? [:]).values) }
+        XCTAssertEqual(minutes.reduce(0) { $0 + $1.costUSD }, 8.825025, accuracy: 1e-12)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.unpricedTokens }, 0)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.uncertainCreditTokens }, 554_001)
+        let names = Array(pricing.document.api.models.keys) + ["gpt-daybreak-red-latest"]
+        for name in names {
+            let old = PricingCatalog.$current.withValue(legacy) { TokenCostEstimator.pricingSignature(for: name) }
+            let new = PricingCatalog.$current.withValue(pricing) { TokenCostEstimator.pricingSignature(for: name) }
+            if ["gpt-5.6-cyber", "gpt-daybreak-red-latest"].contains(name) { XCTAssertNotEqual(old, new, name) }
+            else { XCTAssertEqual(old, new, name) }
+        }
+        let unchanged = try Data(contentsOf: cacheURL)
+        _ = try read(scanner("incremental"))
+        XCTAssertEqual(try Data(contentsOf: cacheURL), unchanged)
+
+        now.addTimeInterval(60)
+        try write([cyberSample(totalInput: 944_001, count: 3, requestInput: 400_000)], to: file, append: true)
+        try assertEquivalent(subject, reference, total: 1_059_001, stage: "Cyber append with inherited alias")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), 17.712525, accuracy: 1e-12)
+        let history = try document().cache.weeklyCostObservation?.history?.samples
+        for (card, expected, unpriced, stage) in [
+            (legacy, 3.1375, Int64(682_001), "Cyber rollback"),
+            (PricingCatalog.builtin, 17.712525, 0, "Cyber upgrade again")
+        ] {
+            pricing = card
+            subject = scanner("incremental")
+            try assertEquivalent(subject, reference, total: 1_059_001, stage: stage)
+            XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), expected, accuracy: 1e-12)
+            XCTAssertEqual(try read(subject).todayCost?.unpricedTokens, unpriced)
+            XCTAssertEqual(try document().cache.weeklyCostObservation?.history?.samples, history)
+        }
+    }
+
+    func testCyberContextMigrationKeepsMissingHistoryStaleUntilRestored() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        pricing = legacyCyberPricing()
+        let subject = scanner("incremental")
+        _ = try read(subject)
+        now.addTimeInterval(60)
+        let file = sessions.appendingPathComponent("missing-cyber.jsonl")
+        try write([meta("cyber"), model("gpt-daybreak-red-latest"),
+                   cyberSample(totalInput: 272_001, count: 1, requestInput: 272_001)], to: file)
+        XCTAssertEqual(try read(subject).todayCost?.unpricedTokens, 277_001)
+        let saved = try Data(contentsOf: file)
+        try FileManager.default.removeItem(at: file)
+        pricing = PricingCatalog.builtin
+        for scanner in [subject, scanner("incremental")] {
+            let missing = try read(scanner)
+            XCTAssertEqual(missing.totalTokens, 277_001)
+            XCTAssertNil(missing.todayCost?.estimatedCostUSD)
+            XCTAssertEqual(missing.todayCost?.unpricedTokens, 277_001)
+            XCTAssertEqual(missing.unpricedUsage?.first { $0.kind == "api" }?.reason, "stalePricing")
+        }
+        try saved.write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+        let restored = try read(scanner("incremental"))
+        XCTAssertEqual(restored.totalTokens, 277_001)
+        XCTAssertEqual(try XCTUnwrap(restored.todayCost?.estimatedCostUSD), 5.687525, accuracy: 1e-12)
+        XCTAssertEqual(restored.todayCost?.unpricedTokens, 0)
+        XCTAssertEqual(restored.todayCredits?.unpricedTokens, 277_001)
+    }
+
     private func legacyCacheWritePricing() -> PricingSnapshot {
         var document = PricingCatalog.builtin.document
         document.api.version = "2026-10-06.1"

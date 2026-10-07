@@ -66,6 +66,24 @@ def main():
         assert not report["credits"]["rateDifferences"]
         assert json.loads(legacy_file.read_text()) == legacy, "Health checks must preserve explicit custom prices"
 
+        capped = copy.deepcopy(builtin)
+        capped["api"]["version"] = "2026-10-06.2"
+        del capped["api"]["models"]["gpt-5.6-cyber"]["contextTier"]
+        capped["api"]["models"]["gpt-5.6-cyber"]["maximumInputTokens"] = 272_000
+        capped_file = root / "capped-cyber.json"
+        capped_file.write_text(json.dumps(capped))
+        report = run("--health", capped_file)
+        assert report["configurationStatus"] == "valid"
+        differences = {row["model"]: row for row in report["api"]["rateDifferences"]}
+        assert set(differences) == {"gpt-5.6-cyber", "gpt-daybreak-red-latest"}
+        for row in differences.values():
+            assert row["activeRate"]["maximumInputTokens"] == 272_000
+            assert row["builtinRate"]["contextTier"] == {
+                "threshold": 272_000, "inputMultiplier": 2, "outputMultiplier": 1.5}
+        assert not report["credits"]["rateDifferences"]
+        assert json.loads(capped_file.read_text()) == capped, "Health checks must preserve a custom context cap"
+        assert run("--health")["active"]["source"] == "builtin", "Checking a candidate must not activate it"
+
         custom = copy.deepcopy(builtin)
         for kind in ("api", "credits"):
             del custom[kind]["models"]["gpt-6.1-sol"]

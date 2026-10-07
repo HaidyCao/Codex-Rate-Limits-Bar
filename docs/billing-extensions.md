@@ -2,7 +2,7 @@
 
 评估日期：2026-10-06；代码基线：`eece485`。本项完成范围与迁移评估，尚未实现下文的新视图、数据格式或存储。
 
-后续进展：TODO-24 已完成[旧模型 API 写入修正](pricing.md#legacy-api-cache-writes-todo-24)。下文保留评估时的推进顺序；当前任务状态见 [TODO](../TODO.md#执行顺序)。
+后续进展：TODO-24 已完成[旧模型 API 写入修正](pricing.md#legacy-api-cache-writes-todo-24)，TODO-25 补齐了 [Cyber API 长上下文](pricing.md#cyber-api-long-context-todo-25)。接下来按本评估推进价格来源与版本归档（TODO-26）。下文保留评估时的推进顺序；当前任务状态见 [TODO](../TODO.md#执行顺序)。
 
 ## 决策与推进顺序
 

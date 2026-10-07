@@ -17,7 +17,7 @@ final class PricingCatalogTests: XCTestCase {
         XCTAssertEqual(value.document.schemaVersion, 1)
         XCTAssertEqual(value.metadata.basis, "current-rates")
         XCTAssertEqual(value.metadata.source, "builtin")
-        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-10-06")
+        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-10-07")
         XCTAssertEqual(value.metadata.credits.verifiedAt, "2026-10-06")
         XCTAssertTrue(value.metadata.credits.sources.contains { $0 == "https://learn.chatgpt.com/docs/pricing" })
         XCTAssertEqual(value.document.api.models["gpt-6-astra"]?.cacheWriteInput, 12.5)
@@ -64,16 +64,22 @@ final class PricingCatalogTests: XCTestCase {
         XCTAssertEqual(card.canonical("gpt-5.6-terra"), "gpt-5.6-terra")
     }
 
-    func testCyberUnsupportedContextRetainsKnownAmountsAndExactUnknownShare() {
-        var accumulator = TokenCostAccumulator()
-        accumulator.add(usage: usage, model: "gpt-5.6-cyber", requestInputTokens: 272_000, serviceTier: "standard")
-        accumulator.add(usage: TokenUsage(inputTokens: 1, totalTokens: 1), model: "gpt-5.6-cyber", requestInputTokens: 272_001, serviceTier: "standard")
-        XCTAssertEqual(accumulator.estimate().estimatedCostUSD, 12.5)
-        XCTAssertEqual(accumulator.estimate().unpricedTokens, 1)
-        XCTAssertEqual(accumulator.estimate().models.first?.unpricedTokens, 1)
-        XCTAssertEqual(accumulator.estimate().unpricedModels, ["gpt-5.6-cyber"])
-        XCTAssertEqual(accumulator.unpricedUsage().first?.reason, "unsupportedContext")
-        XCTAssertFalse(accumulator.requiresRepricing, "An unsupported request must not cause perpetual replay")
+    func testCustomCyberContextCapRetainsKnownAmountsAndExactUnknownShare() throws {
+        let capped = try snapshot {
+            $0.api.models["gpt-5.6-cyber"]?.contextTier = nil
+            $0.api.models["gpt-5.6-cyber"]?.maximumInputTokens = 272_000
+        }
+        PricingCatalog.$current.withValue(capped) {
+            var accumulator = TokenCostAccumulator()
+            accumulator.add(usage: usage, model: "gpt-5.6-cyber", requestInputTokens: 272_000, serviceTier: "standard")
+            accumulator.add(usage: TokenUsage(inputTokens: 1, totalTokens: 1), model: "gpt-5.6-cyber", requestInputTokens: 272_001, serviceTier: "standard")
+            XCTAssertEqual(accumulator.estimate().estimatedCostUSD, 12.5)
+            XCTAssertEqual(accumulator.estimate().unpricedTokens, 1)
+            XCTAssertEqual(accumulator.estimate().models.first?.unpricedTokens, 1)
+            XCTAssertEqual(accumulator.estimate().unpricedModels, ["gpt-5.6-cyber"])
+            XCTAssertEqual(accumulator.unpricedUsage().first?.reason, "unsupportedContext")
+            XCTAssertFalse(accumulator.requiresRepricing, "An unsupported request must not cause perpetual replay")
+        }
     }
 
     func testUnknownModelAndModeDetailsSurviveSerializationWithoutDoubleCounting() throws {

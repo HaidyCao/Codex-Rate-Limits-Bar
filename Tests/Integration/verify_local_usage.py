@@ -293,6 +293,21 @@ for line in sys.stdin:
             assert value["todayCredits"]["unpricedTokens"] == usage["total_tokens"]
             assert [(entry["kind"], entry["reason"]) for entry in value["unpricedUsage"]] == [("credits", reason)]
 
+        cyber_usage = {"input_tokens": 272_001, "cached_input_tokens": 80_000,
+                       "cache_write_input_tokens": 20_000, "output_tokens": 5_000,
+                       "reasoning_output_tokens": 4_000, "total_tokens": 277_001}
+        for model, artifact in [("gpt-5.6-cyber", None), ("gpt-daybreak-red-latest", "cyber-long-context")]:
+            write_usage(model=model, tier="standard", usage=cyber_usage)
+            value = check_shared_status("complete", artifact)
+            assert value["totalTokens"] == 277_001
+            assert abs(value["todayCost"]["estimatedCostUSD"] - 5.687525) < 1e-12
+            assert value["todayCost"]["coveragePercent"] == 100
+            assert value["todayCost"]["unpricedTokens"] == 0
+            assert value["todayCredits"].get("estimatedCredits") is None
+            assert value["todayCredits"]["unpricedTokens"] == 277_001
+            assert [(entry["kind"], entry["reason"], entry["model"]) for entry in value["unpricedUsage"]] == [
+                ("credits", "unverifiedCacheWrite", model)]
+
         write_usage(breakdown=False)
         missing_breakdown = check_shared_status("complete", "missing-breakdown")
         assert missing_breakdown["totalTokens"] == 1000

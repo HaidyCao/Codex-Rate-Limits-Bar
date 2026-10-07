@@ -2,6 +2,54 @@ import XCTest
 @testable import CodexRateLimitsCore
 
 final class TokenCostEstimatorTests: XCTestCase {
+    func testCyberAPIMixedInputAndReasoningUseThePublishedContextTier() throws {
+        let models = ["gpt-5.6-cyber", " GPT-5.6-CYBER ", "gpt-daybreak-red-latest", "gpt-5.6-cyber-2026-08-01"]
+        for (input, expected) in [(Int64(272_000), 2.9375), (272_001, 5.687525), (400_000, 8.8875)] {
+            let usage = TokenUsage(inputTokens: input, cachedInputTokens: 80_000, cacheWriteInputTokens: 20_000,
+                outputTokens: 5_000, reasoningOutputTokens: 4_000, totalTokens: input + 5_000)
+            for model in models {
+                XCTAssertEqual(try XCTUnwrap(TokenCostEstimator.estimateUSD(usage: usage, model: model,
+                    requestInputTokens: input)), expected, accuracy: 1e-12, "\(model), \(input)")
+            }
+        }
+    }
+
+    func testCyberAPICacheReadsAndWritesScaleOnceAtTheContextBoundary() throws {
+        for (input, cachedCost, writeCost) in [(Int64(272_000), 0.34, 4.25), (272_001, 0.6800025, 8.50003125)] {
+            let read = TokenUsage(inputTokens: input, cachedInputTokens: input, totalTokens: input)
+            let write = TokenUsage(inputTokens: input, cacheWriteInputTokens: input, totalTokens: input)
+            for (usage, expected) in [(read, cachedCost), (write, writeCost)] {
+                XCTAssertEqual(try XCTUnwrap(TokenCostEstimator.estimateUSD(usage: usage, model: "gpt-5.6-cyber",
+                    requestInputTokens: input)), expected, accuracy: 1e-12)
+            }
+        }
+    }
+
+    func testCyberMissingContextRemainsAssumedAndCreditCoverageStaysIndependent() throws {
+        let usage = TokenUsage(inputTokens: 100_000, cachedInputTokens: 80_000,
+            outputTokens: 5_000, totalTokens: 105_000)
+        var missing = TokenCostAccumulator()
+        missing.add(usage: usage, model: "gpt-daybreak-red-latest", requestInputTokens: nil, serviceTier: "standard")
+        XCTAssertEqual(try XCTUnwrap(missing.estimate().estimatedCostUSD), 0.725, accuracy: 1e-12)
+        XCTAssertEqual(missing.billingAssumptions().assumedAPITokens, 105_000)
+        XCTAssertEqual(missing.billingAssumptions().missingRequestContextTokens, 105_000)
+        XCTAssertEqual(missing.billingAssumptions().missingServiceTierTokens, 0)
+        XCTAssertEqual(try XCTUnwrap(missing.creditEstimate().estimatedCredits), 18.125, accuracy: 1e-12)
+
+        // The cumulative delta is smaller than the last request's full context.
+        var long = TokenCostAccumulator()
+        long.add(usage: usage, model: "gpt-daybreak-red-latest", requestInputTokens: 272_001, serviceTier: "standard")
+        XCTAssertEqual(try XCTUnwrap(long.estimate().estimatedCostUSD), 1.2625, accuracy: 1e-12)
+        XCTAssertEqual(long.billingAssumptions().assumedAPITokens, 0)
+        XCTAssertNil(long.creditEstimate().estimatedCredits)
+        XCTAssertEqual(long.unpricedUsage().map(\.kind), ["credits"])
+        XCTAssertEqual(long.unpricedUsage().map(\.reason), ["unsupportedContext"])
+        XCTAssertFalse(long.requiresRepricing)
+        for model in ["gpt-5.6-cyber-pro", "gpt-5.6-cyber-latest", "gpt-daybreak-red", "gpt-daybreak-red-experimental"] {
+            XCTAssertNil(TokenCostEstimator.estimateUSD(usage: usage, model: model, requestInputTokens: 272_001), model)
+        }
+    }
+
     func testGPT61SolAPIUsesItsOwnCachedRateAndRequestContextBoundary() throws {
         for (input, expected) in [(Int64(100_000), 0.098), (272_000, 0.442), (272_001, 0.859004)] {
             let usage = TokenUsage(inputTokens: input, cachedInputTokens: 80_000,
