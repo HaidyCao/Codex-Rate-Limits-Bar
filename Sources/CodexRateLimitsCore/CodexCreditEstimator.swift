@@ -29,6 +29,6 @@ public enum CreditFormatter {
         formatter.numberStyle = .decimal
         formatter.minimumFractionDigits = 0
         formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: amount)) ?? "--"
+        return formatter.string(from: EstimateDisplayNumber.number(amount)) ?? "--"
     }
 }

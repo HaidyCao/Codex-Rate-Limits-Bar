@@ -1,0 +1,290 @@
+{
+  "provenance": {
+    "kind": "synthetic-contract",
+    "reviewedOn": "2026-10-06",
+    "note": "Numeric fixtures based on observed rollout shapes. Explicit speed tiers are constructed, not captured actual billing metadata."
+  },
+  "files": [
+    {
+      "name": "contract-parent",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:01:00Z",
+          "payload": {
+            "id": "contract-parent",
+            "cli_version": "0.160.0",
+            "source": "cli"
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:01Z",
+          "payload": {
+            "model": "gpt-6.1-sol",
+            "service_tier": "fast"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:03Z",
+          "payload": {
+            "model": "gpt-6-astra",
+            "service_tier": "ultrafast",
+            "type": "thread_settings_applied"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:04Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 200000,
+                "cached_input_tokens": 160000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 10000,
+                "reasoning_output_tokens": 2000,
+                "total_tokens": 210000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:05Z",
+          "payload": {
+            "model": "gpt-6.1-sol"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:06Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 300000,
+                "cached_input_tokens": 240000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 15000,
+                "reasoning_output_tokens": 3000,
+                "total_tokens": 315000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:07Z",
+          "payload": {
+            "model": "gpt-6.1-sol",
+            "service_tier": "ultrafast"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:08Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 400000,
+                "cached_input_tokens": 320000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 20000,
+                "reasoning_output_tokens": 4000,
+                "total_tokens": 420000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:09Z",
+          "payload": {
+            "model": "fixture-unpriced",
+            "service_tier": "standard"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:10Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 500000,
+                "cached_input_tokens": 400000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 25000,
+                "reasoning_output_tokens": 5000,
+                "total_tokens": 525000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "contract-child",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:01:11Z",
+          "payload": {
+            "id": "contract-child",
+            "cli_version": "0.160.1",
+            "source": {
+              "subagent": {
+                "thread_spawn": {
+                  "parent_thread_id": "contract-parent",
+                  "depth": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:12Z",
+          "payload": {
+            "model": "gpt-6-luna",
+            "service_tier": "fast"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:13Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:01:14Z",
+          "payload": {
+            "model": "gpt-6-sol",
+            "service_tier": "fast"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:01:15Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 200000,
+                "cached_input_tokens": 160000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 10000,
+                "reasoning_output_tokens": 2000,
+                "total_tokens": 210000
+              },
+              "last_token_usage": {
+                "input_tokens": 100000,
+                "cached_input_tokens": 80000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 5000,
+                "reasoning_output_tokens": 1000,
+                "total_tokens": 105000
+              },
+              "model_context_window": 1050000
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "totalTokens": 735000,
+    "apiUSD": 0.9353,
+    "credits": 92.415,
+    "apiUnpricedTokens": 105000,
+    "creditUnpricedTokens": 210000,
+    "missingServiceTierTokens": 105000
+  }
+}

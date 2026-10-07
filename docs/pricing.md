@@ -30,6 +30,11 @@ The project's API column continues to mean **Standard equivalent**, excluding
 those processing adjustments, Ultrafast, and tool fees. A new actual-API-bill
 view would require separate scope and reliable request metadata.
 
+Amount labels normalize to ten decimal places before their existing two-decimal
+rounding, so insignificant floating-point summation differences do not flip a
+cent midpoint between CLI/MCP/UI processes. This affects display only; raw JSON
+estimates, tiny-positive-value labels and cached calculations retain their values.
+
 The [Codex/Work token table](https://learn.chatgpt.com/docs/pricing) publishes
 GPT-6.1 Sol Standard credits of **50 input / 2.5 cached input / 250 output** per
 million tokens. It does not publish a separate cache-write charge or a
@@ -247,6 +252,35 @@ tests the committed policy; a passing run cannot establish current online prices
    replace users' custom cards automatically. Retained logs reprice at the newly
    configured rates; unavailable logs remain `stalePricing`.
 
+### Recorded mode and client contract
+
+The [app-server documentation](https://learn.chatgpt.com/docs/app-server) describes
+token updates for the active thread. The installed CLI **0.160.0** schema has
+`threadId`, `turnId` and `tokenUsage` on that notification, with no actual service
+tier. `turn/start.serviceTier` and `serviceTierForTurn` are request overrides;
+their existence does not prove the response's actual billing tier. Local rollout
+projections also lack a tier. Evidence and provenance are in
+[client contract verification](verification.md#客户端与套餐契约样例todo-22).
+
+For the supported rollout fields, selection remains: token `info` mode, token
+payload mode, then the current recorded context. At each level `service_tier`
+precedes `serviceTier`, followed by existing nested settings. A full
+`turn_context` replaces model/mode, including an omitted mode; a sparse
+`thread_settings_applied` changes the tier only when present, and explicit null
+clears that setting. A null token-level value supplies no override, so lookup
+continues to the enclosing context. Unknown requested/actual-tier key names
+are not interpreted. A missing resolved mode uses the configured Standard
+credit estimate and contributes to `missingServiceTierTokens` and
+`assumedCreditTokens`; a present mode remains recorded-setting evidence, not a
+claim of actual billing. The existing fields retain these meanings.
+
+The [plan policy](https://learn.chatgpt.com/docs/pricing#what-are-the-usage-limits-for-my-plan)
+currently describes Pro without a five-hour limit. The app nevertheless derives
+weekly availability solely from returned 10,080-minute windows in either lane,
+selecting the `codex` snapshot when available. Plan names never create windows or
+balances. Confirmed zero credits, missing data and API-key request failures remain
+distinct, and local equivalents remain usable independently.
+
 ### Model and mode inventory with independent examples
 
 For every row below, the sample has 100,000 input tokens including 80,000 cached
@@ -309,7 +343,10 @@ Preserve the previous app and custom card together. Do not delete caches to forc
 a rollback: per-model signatures replay available history in either direction.
 Never remove an uncertainty guard solely to make a new card parse in an older
 app; that changes its accounting meaning. Add the actual release commit to this
-record when changes are committed.
+record when changes are committed. TODO-17 through TODO-21 were committed together
+as `f8c9368`; the intermediate October card revisions above document development
+steps, not separate published releases. The previous committed card is
+`2026-09-23.1` at `7c79417`.
 
 ## Document and model rules
 

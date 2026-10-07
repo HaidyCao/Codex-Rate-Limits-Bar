@@ -79,7 +79,7 @@ public enum USDFormatter {
         formatter.decimalSeparator = "."
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: amount)).map { "$\($0)" }
+        return formatter.string(from: EstimateDisplayNumber.number(amount)).map { "$\($0)" }
             ?? String(format: "$%.2f", amount)
     }
 }

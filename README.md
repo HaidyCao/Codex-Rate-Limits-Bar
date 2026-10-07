@@ -181,6 +181,12 @@ Changes take effect at the next local refresh. Invalid configuration is rejected
 with a visible error and built-in fallback. See [Price configuration](docs/pricing.md)
 for export, validation, manual prices, aliases and independent credits mode rules.
 
+Recorded speed settings are not verified actual billing tiers. Current local
+client samples omit the tier, so their credit estimates explicitly assume
+Standard. See [client evidence and mode precedence](docs/pricing.md#recorded-mode-and-client-contract).
+Returned windows determine quota availability; a plan name never creates a
+missing window or balance. With no weekly estimate, the menu reports it unavailable.
+
 `pricing --health` compares the active card with this app's built-in card;
 `pricing --health FILE` reviews a candidate without activating it. The read-only,
 offline report lists missing models/modes, aliases, intentional rate differences

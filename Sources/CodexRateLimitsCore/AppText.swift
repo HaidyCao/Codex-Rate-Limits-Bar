@@ -331,11 +331,11 @@ public enum AppText {
         }
         guard let estimate else {
             switch language {
-            case .simplifiedChinese: return "正在计算周额度金额"
-            case .traditionalChinese: return "正在計算週額度金額"
-            case .japanese: return "週間上限の金額を計算中"
-            case .korean: return "주간 한도 금액 계산 중"
-            case .english: return "Calculating weekly quota value"
+            case .simplifiedChinese: return "周额度金额不可用"
+            case .traditionalChinese: return "週額度金額無法取得"
+            case .japanese: return "週間上限の推定額を取得できません"
+            case .korean: return "주간 한도 추정 금액을 사용할 수 없음"
+            case .english: return "Weekly quota value unavailable"
             }
         }
         guard let amount = estimate.estimatedQuotaUSD else {

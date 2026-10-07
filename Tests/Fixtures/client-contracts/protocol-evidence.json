@@ -1,0 +1,139 @@
+{
+  "provenance": {
+    "kind": "offline-schema-projection",
+    "clientVersion": "0.160.0",
+    "reviewedOn": "2026-10-06",
+    "command": "codex app-server generate-json-schema --out /tmp/codex-credit-schema"
+  },
+  "schemas": {
+    "ThreadTokenUsageUpdatedNotification": {
+      "fields": [
+        "threadId",
+        "tokenUsage",
+        "turnId"
+      ],
+      "TokenUsageBreakdown": {
+        "fields": [
+          "cacheWriteInputTokens",
+          "cachedInputTokens",
+          "inputTokens",
+          "outputTokens",
+          "reasoningOutputTokens",
+          "totalTokens"
+        ]
+      },
+      "ThreadTokenUsage": {
+        "fields": [
+          "last",
+          "modelContextWindow",
+          "total"
+        ]
+      }
+    },
+    "TurnStartParams": {
+      "fields": [
+        "approvalPolicy",
+        "approvalsReviewer",
+        "clientUserMessageId",
+        "cwd",
+        "disabledPluginIds",
+        "effort",
+        "input",
+        "model",
+        "outputSchema",
+        "personality",
+        "sandboxPolicy",
+        "serviceTier",
+        "serviceTierForTurn",
+        "summary",
+        "threadId",
+        "toolOutput",
+        "turnTrigger"
+      ],
+      "tierFields": {
+        "serviceTier": {
+          "description": "Override the service tier for this turn and subsequent turns.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serviceTierForTurn": {
+          "description": "Override the service tier only when this request starts a new turn. Use \"default\" for standard speed. Omitted or null inherits the thread's tier. Does not change the thread's tier or a turn being steered.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "GetAccountRateLimitsResponse": {
+      "fields": [
+        "accountId",
+        "ordinaryUsageAllowed",
+        "rateLimitResetCredits",
+        "rateLimitUpsell",
+        "rateLimits",
+        "rateLimitsByLimitId"
+      ],
+      "RateLimitSnapshot": {
+        "fields": [
+          "credits",
+          "individualLimit",
+          "limitId",
+          "limitName",
+          "normalModelSlug",
+          "planType",
+          "primary",
+          "rateLimitReachedType",
+          "secondary",
+          "spendControlReached"
+        ]
+      },
+      "RateLimitWindow": {
+        "fields": [
+          "resetsAt",
+          "usedPercent",
+          "windowDurationMins"
+        ]
+      }
+    },
+    "ThreadReadResponse": {
+      "fields": [
+        "thread"
+      ],
+      "Thread": {
+        "fields": [
+          "agentNickname",
+          "agentRole",
+          "cliVersion",
+          "createdAt",
+          "cwd",
+          "ephemeral",
+          "forkedFromId",
+          "gitInfo",
+          "historyMode",
+          "id",
+          "model",
+          "modelProvider",
+          "name",
+          "originator",
+          "parentThreadId",
+          "path",
+          "preview",
+          "projectId",
+          "reasoningEffort",
+          "recencyAt",
+          "section",
+          "sectionEnteredAt",
+          "sessionId",
+          "source",
+          "status",
+          "threadSource",
+          "turns",
+          "updatedAt"
+        ]
+      }
+    }
+  }
+}

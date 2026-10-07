@@ -9,6 +9,7 @@
 | `make verify` | 常规测试、CLI/MCP、AppKit、应用资源的统一入口 |
 | `make test` | 快速 Swift 回归；排除需要显式开启的大日志测试 |
 | `make verify-pricing` | 禁止联网、读取账户和写入样例目录，验证价目表健康诊断 |
+| `make verify-client-contracts` | 真实日志投影与合成套餐样例，跨进程缓存、CLI/MCP 对比 |
 | `make verify-local-usage` | 打包应用，用假 app-server 和临时日志验证 CLI/MCP |
 | `make verify-ui` | 生成 CLI/MCP 样例，编译实际 AppKit 视图并检查、渲染 |
 | `make verify-bundle` | 将 `.app` 复制到临时位置，禁止访问 `.build` 后读取内置价格 |
@@ -17,7 +18,7 @@
 | `make benchmark BENCHMARK_MIB=1024` | 使用约 1 GiB 合成日志；允许范围为 16～4096 MiB |
 | `make verify-live` | **访问调用者的真实 Codex 账户**，用于主动选择的现场检查 |
 
-需要 macOS、Swift 6、Xcode 工具链及 Python 3，无第三方 Python 依赖。AppKit 离屏渲染仍需可用的 macOS 图形会话；没有图形会话的 CI 可以运行 `make test verify-pricing verify-local-usage verify-bundle` 和独立的性能任务。验证退出码非零即失败，子进程错误输出会保留。
+需要 macOS、Swift 6、Xcode 工具链及 Python 3，无第三方 Python 依赖。AppKit 离屏渲染仍需可用的 macOS 图形会话；没有图形会话的 CI 可以运行 `make test verify-pricing verify-local-usage verify-client-contracts verify-bundle` 和独立的性能任务。验证退出码非零即失败，子进程错误输出会保留。
 
 `make verify` 不再隐含真实账户检查；原来的现场读取已拆到 `make verify-live`。`CODEX_HOME`、`CODEX_BIN`、自定义价目表等调用者环境不会影响隔离样例。`verify-live` 则保留调用者环境；要与默认桌面应用的 `.codex` 来源一致，可执行 `env -u CODEX_HOME make verify-live`。
 
@@ -63,7 +64,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
 - `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
-- `menu/`：原有完整/异常/过期/账户清空等 13 种场景，以及 GPT-6.1 Sol Standard/Fast、GPT-6 Sol Fast、Astra Ultrafast、未支持模式、credits 缓存写入待核实和长上下文未计价，加上多种计价原因及配置/读取错误并存，共 22 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
+- `menu/`：原有 22 种场景，以及真实日志投影、合成模式切换、Pro 无五小时窗口、仅周窗口、仅余额、API-key 空额度/错误、未知套餐及按 codex ID 选窗口，共 31 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
 
@@ -78,6 +79,25 @@ credits 语义回归由 `CreditAccountingTests` 覆盖纯写入、混合输入�
 `PricingPresentationTests` 验证原因摘要、API/credits 不重复合计、未记录模式、未来原因代码与旧显示快照兼容。CLI/MCP 对比全部日显示字段，周标签仅在有官方上下文的两个 status 入口比较；跨进程金额按 1e-12 消除求和顺序舍入差异，tokens、覆盖率和原因仍精确比较；新增四请求样例独立核对 1,000 tokens、90% API 覆盖和 40% credits 覆盖。UI 检查各悬停区域的详情、原因摘要宽度及配置/扫描错误的独立提示。语言通过子进程 `-AppleLanguages` 参数选择，不改动用户偏好；其他语言样例移除旧显示文字，检验从原始数据生成的兼容回退。
 
 `PricingHealthTests` 检查遗漏模型/模式、合法自定义覆盖、别名解析和复核日期边界；`PricingReleaseTests` 使用手算金额覆盖全部 21 个 API、13 个 credits 模型和明确支持的模式。`verify_pricing.py` 验证默认路径、环境选择、候选卡不激活、无效卡回退及恢复，逐次核对目录文件哈希；沙箱另行禁止读取隔离账户和写入样例目录。打包检查也执行 `pricing --health`，确认不依赖构建目录。日期提醒不改价格、模型或缓存签名。官方网页调研与离线验收分开，来源、证据缺口及发布步骤见[价目表维护清单](pricing.md#release-maintenance-checklist)。
+
+## 客户端与套餐契约样例（TODO-22）
+
+[client-contracts](../Tests/Fixtures/client-contracts/) 明确区分真实记录投影和合成验证数据：
+
+| 文件 | 来源和用途 |
+| --- | --- |
+| `observed-rollouts.json` | 从本机近期日志提取五份最小投影，仅保留会话 ID/父子关系、来源版本、模型和前两次计数。ID/时间替换，计数保留；不含提示词、回复、路径、昵称、账户数据或凭据。 |
+| `synthetic-modes.json` | 基于观察到的事件结构构造独立数值样例，涵盖 6.1 Sol Fast、Astra Ultrafast、模型切换、模式缺失、未知模型和模式；显式档位为合成输入，不是实际扣费证据。 |
+| `protocol-evidence.json` | 已安装 CLI 0.160.0 离线导出的 app-server schema 字段投影，命令记在文件中；不能视为 rollout 的完整规范。 |
+| `official-accounts.json` | 根据协议构造 Pro 无五小时窗口、仅周窗口、仅余额、API-key 空额度、未知套餐和 codex 映射响应；未采集真实账户接口。API-key 不可用错误另在集成脚本中模拟。 |
+
+2026-10-06 调研的 35 份本机日志包含 0.154.0、0.159.x、0.160.0/0.160.1 的 `session_meta.cli_version`，观察到 6.1 Sol、Astra、Sol/Luna、模型切换及 `source.subagent.thread_spawn.parent_thread_id`。该版本是会话元数据，不能证明后续每个事件都由同一版本写入。五份最小投影包括关联父子记录，以及 0.160.1 元数据的子会话；Astra 投影保留原 0.154.0 来源声明。父子关系用于确认各自 ID，不把子会话当作父会话副本；只有相同会话的副本参与去重。这里只验证本地计数归属，不声称已对账服务端的整棵代理账单。
+
+所查日志及 0.160.0 用量通知均未提供可确认的实际服务档位。应用继续按已记录字段估值，详情见[档位证据边界](pricing.md#recorded-mode-and-client-contract)。真实 Fast/Ultrafast 档位、每请求实际服务层和完整服务端父子计费关系仍待后续证据；合成样例不能填补这个缺口。
+
+`ClientContractTests` 对比增量、实例重建和完整重放；`verify_client_contracts.py` 用实际 CLI/MCP 子进程加载同一个隔离磁盘缓存，对比 tokens、API/credits 金额、独立覆盖、缺失模式假设、未计价原因和日显示字段。先写前缀，再追加末条；无变化跨进程读取必须保持缓存文件字节不变。不同样例集使用不同 home/cache，不通过删除源日志或清缓存来证明复用。独立期望：真实投影去重后 245,087 tokens、$0.30183598、7.5458995 credits；合成切换 735,000 tokens、$0.9353、92.415 credits，其中 API/credits 分别有 105,000/210,000 tokens 未计价。套餐变化不改变本地日估值；无官方周窗口就不构造周估值。
+
+同一批 JSON 进入 AppKit 检查与渲染。浮点金额仍只在跨进程数值比较时按 1e-12 规范化，显示文字必须精确相同；`EstimateFormattingTests` 另锁定 92.415 等半分边界的稳定舍入、真实价格差异、小额和极大有限值。
 
 ## 人工验收
 

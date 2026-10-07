@@ -24,8 +24,10 @@ import Foundation
             "sol-fast": (0.106, 5.30), "astra-ultrafast": (0.53, 79.50)
         ]
         let localized = CommandLine.arguments.contains("--localized")
+        let contractNames = ["contract-observed", "contract-modes", "contract-pro-no-five-hour", "contract-weekly-only",
+                             "contract-credits-only", "contract-api-key", "contract-unknown-plan", "contract-codex-map", "contract-api-key-error"]
         let names = localized ? ["pricing-reasons", "pricing-config-error", "credit-writes"]
-            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted()
+            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted() + contractNames
         for name in names {
             var data = try Data(contentsOf: fixtures.appendingPathComponent("\(name).json"))
             if localized {
@@ -54,6 +56,35 @@ import Foundation
                             && abs((local.todayCost?.estimatedCostUSD ?? -1) - expected.api) < 1e-12
                             && abs((local.todayCredits?.estimatedCredits ?? -1) - expected.credits) < 1e-12
                             && local.unpricedUsage?.isEmpty == true, "Unexpected current-rate amounts: \(name)")
+            }
+            if name.hasPrefix("contract-") {
+                let observed = name == "contract-observed"
+                try require(local.totalTokens == (observed ? 245_087 : 735_000)
+                            && abs((local.todayCost?.estimatedCostUSD ?? -1) - (observed ? 0.30183598 : 0.9353)) < 1e-12
+                            && abs((local.todayCredits?.estimatedCredits ?? -1) - (observed ? 7.5458995 : 92.415)) < 1e-12,
+                            "Client contract lost independent local amounts: \(name)")
+                try require(local.billingAssumptions?.missingServiceTierTokens == (observed ? 245_087 : 105_000)
+                            && local.todayCost?.unpricedTokens == (observed ? 0 : 105_000)
+                            && local.todayCredits?.unpricedTokens == (observed ? 0 : 210_000),
+                            "Client contract lost assumptions or unpriced coverage: \(name)")
+                if ["contract-credits-only", "contract-api-key", "contract-unknown-plan", "contract-api-key-error"].contains(name) {
+                    try require(payload.selectedRateLimit?.weeklyWindow == nil && local.weeklyQuotaCost == nil,
+                                "A plan name invented a weekly quota: \(name)")
+                    try require(freshness.quota.status == (name == "contract-api-key-error" ? .failed : .unavailable),
+                                "Unavailable and failed quota were conflated: \(name)")
+                    try require(local.display?.weeklyQuotaCostLabel == nil
+                                && AppText.weeklyQuotaEstimatedCost(nil) == "Weekly quota value unavailable",
+                                "Missing weekly data was presented as an active calculation: \(name)")
+                }
+                if name == "contract-pro-no-five-hour" {
+                    try require(payload.selectedRateLimit?.primary == nil
+                                && payload.selectedRateLimit?.weeklyWindow?.remainingPercent == 70,
+                                "Pro's absent short window changed the returned weekly quota")
+                }
+                if name == "contract-credits-only" {
+                    try require(payload.selectedRateLimit?.credits?.balance == "0" && freshness.credits.status == .success,
+                                "Confirmed zero balance became unavailable")
+                }
             }
             let rate = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 220))
             let reset = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 90))

@@ -1,0 +1,393 @@
+{
+  "provenance": {
+    "kind": "sanitized-local-projection",
+    "reviewedOn": "2026-10-06",
+    "transformations": [
+      "Only metadata, model context and first two token samples retained.",
+      "IDs and timestamps replaced; counters and source nesting preserved. Only child-observed to parent-observed was cross-matched. The additional 0.160.1 parent identity is omitted as external-parent.",
+      "No prompts, outputs, paths, names, account data or credentials retained."
+    ],
+    "actualServiceTierObserved": false
+  },
+  "files": [
+    {
+      "name": "sol-observed",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:00:00Z",
+          "payload": {
+            "id": "sol-observed",
+            "cli_version": "0.160.0",
+            "source": "vscode"
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:00:01Z",
+          "payload": {
+            "model": "gpt-6.1-sol"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 19881,
+                "cached_input_tokens": 13056,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 195,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 20076
+              },
+              "last_token_usage": {
+                "input_tokens": 19881,
+                "cached_input_tokens": 13056,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 195,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 20076
+              },
+              "model_context_window": 258400
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:03Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 50588,
+                "cached_input_tokens": 32768,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 441,
+                "reasoning_output_tokens": 56,
+                "total_tokens": 51029
+              },
+              "last_token_usage": {
+                "input_tokens": 30707,
+                "cached_input_tokens": 19712,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 246,
+                "reasoning_output_tokens": 56,
+                "total_tokens": 30953
+              },
+              "model_context_window": 258400
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "astra-observed",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:00:00Z",
+          "payload": {
+            "id": "astra-observed",
+            "cli_version": "0.154.0",
+            "source": "cli"
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:00:01Z",
+          "payload": {
+            "model": "gpt-6-astra"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 15133,
+                "cached_input_tokens": 11904,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 298,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 15431
+              },
+              "last_token_usage": {
+                "input_tokens": 15133,
+                "cached_input_tokens": 11904,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 298,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 15431
+              },
+              "model_context_window": 258400
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:03Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 38371,
+                "cached_input_tokens": 23808,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 380,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 38751
+              },
+              "last_token_usage": {
+                "input_tokens": 23238,
+                "cached_input_tokens": 11904,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 82,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 23320
+              },
+              "model_context_window": 258400
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "child-observed",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:00:00Z",
+          "payload": {
+            "id": "child-observed",
+            "cli_version": "0.160.0",
+            "source": {
+              "subagent": {
+                "thread_spawn": {
+                  "parent_thread_id": "parent-observed",
+                  "depth": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:00:01Z",
+          "payload": {
+            "model": "gpt-6-luna"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 24186,
+                "cached_input_tokens": 7936,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 294,
+                "reasoning_output_tokens": 172,
+                "total_tokens": 24480
+              },
+              "last_token_usage": {
+                "input_tokens": 24186,
+                "cached_input_tokens": 7936,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 294,
+                "reasoning_output_tokens": 172,
+                "total_tokens": 24480
+              },
+              "model_context_window": 258400
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:03Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 57829,
+                "cached_input_tokens": 31232,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 708,
+                "reasoning_output_tokens": 384,
+                "total_tokens": 58537
+              },
+              "last_token_usage": {
+                "input_tokens": 33643,
+                "cached_input_tokens": 23296,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 414,
+                "reasoning_output_tokens": 212,
+                "total_tokens": 34057
+              },
+              "model_context_window": 258400
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "parent-observed",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:00:00Z",
+          "payload": {
+            "id": "parent-observed",
+            "cli_version": "0.160.0",
+            "source": "vscode"
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:00:01Z",
+          "payload": {
+            "model": "gpt-6.1-sol"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 19879,
+                "cached_input_tokens": 8832,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 218,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 20097
+              },
+              "last_token_usage": {
+                "input_tokens": 19879,
+                "cached_input_tokens": 8832,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 218,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 20097
+              },
+              "model_context_window": 258400
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:03Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 50500,
+                "cached_input_tokens": 21888,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 632,
+                "reasoning_output_tokens": 194,
+                "total_tokens": 51132
+              },
+              "last_token_usage": {
+                "input_tokens": 30621,
+                "cached_input_tokens": 13056,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 414,
+                "reasoning_output_tokens": 194,
+                "total_tokens": 31035
+              },
+              "model_context_window": 258400
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "child-1601-observed",
+      "events": [
+        {
+          "type": "session_meta",
+          "timestamp": "2026-10-06T12:00:00Z",
+          "payload": {
+            "id": "child-1601-observed",
+            "cli_version": "0.160.1",
+            "source": {
+              "subagent": {
+                "thread_spawn": {
+                  "parent_thread_id": "external-parent",
+                  "depth": 1
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "turn_context",
+          "timestamp": "2026-10-06T12:00:01Z",
+          "payload": {
+            "model": "gpt-6-luna"
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:02Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 22243,
+                "cached_input_tokens": 21248,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 317,
+                "reasoning_output_tokens": 147,
+                "total_tokens": 22560
+              },
+              "last_token_usage": {
+                "input_tokens": 22243,
+                "cached_input_tokens": 21248,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 317,
+                "reasoning_output_tokens": 147,
+                "total_tokens": 22560
+              },
+              "model_context_window": 258400
+            }
+          }
+        },
+        {
+          "type": "event_msg",
+          "timestamp": "2026-10-06T12:00:03Z",
+          "payload": {
+            "type": "token_count",
+            "info": {
+              "total_token_usage": {
+                "input_tokens": 44955,
+                "cached_input_tokens": 42496,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 683,
+                "reasoning_output_tokens": 147,
+                "total_tokens": 45638
+              },
+              "last_token_usage": {
+                "input_tokens": 22712,
+                "cached_input_tokens": 21248,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 366,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 23078
+              },
+              "model_context_window": 258400
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

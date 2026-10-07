@@ -1,0 +1,216 @@
+{
+  "provenance": {
+    "kind": "synthetic-app-server-responses",
+    "clientSchemaVersion": "0.160.0",
+    "reviewedOn": "2026-10-06",
+    "note": "No live account responses were captured. Null API-key limits exercise unavailable-data handling, not a promise about server response shape."
+  },
+  "cases": [
+    {
+      "name": "pro-no-five-hour",
+      "accountResponse": {
+        "account": {
+          "type": "chatgpt",
+          "email": "fixture@example.invalid",
+          "planType": "pro"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": {
+          "limitId": "codex",
+          "planType": "pro",
+          "primary": null,
+          "secondary": {
+            "usedPercent": 30,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791378000
+          },
+          "credits": {
+            "hasCredits": true,
+            "unlimited": false,
+            "balance": "12.5"
+          }
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        }
+      },
+      "expected": {
+        "weeklyRemaining": 70,
+        "balance": "12.5"
+      }
+    },
+    {
+      "name": "weekly-only",
+      "accountResponse": {
+        "account": {
+          "type": "chatgpt",
+          "email": "fixture@example.invalid",
+          "planType": "pro"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": {
+          "limitId": "codex",
+          "planType": "pro",
+          "primary": {
+            "usedPercent": 25,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791378000
+          },
+          "secondary": null,
+          "credits": null
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        }
+      },
+      "expected": {
+        "weeklyRemaining": 75,
+        "balance": null
+      }
+    },
+    {
+      "name": "credits-only",
+      "accountResponse": {
+        "account": {
+          "type": "chatgpt",
+          "email": "fixture@example.invalid",
+          "planType": "business"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": {
+          "limitId": "codex",
+          "planType": "business",
+          "primary": null,
+          "secondary": null,
+          "credits": {
+            "hasCredits": true,
+            "unlimited": false,
+            "balance": "0"
+          }
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        }
+      },
+      "expected": {
+        "weeklyRemaining": null,
+        "balance": "0"
+      }
+    },
+    {
+      "name": "api-key",
+      "accountResponse": {
+        "account": {
+          "type": "apiKey"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": null,
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        }
+      },
+      "expected": {
+        "weeklyRemaining": null,
+        "balance": null
+      }
+    },
+    {
+      "name": "unknown-plan",
+      "accountResponse": {
+        "account": {
+          "type": "chatgpt",
+          "email": "fixture@example.invalid",
+          "planType": "future-plan"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": {
+          "limitId": "codex",
+          "planType": "future-plan",
+          "primary": {
+            "usedPercent": 40,
+            "windowDurationMins": 4320,
+            "resetsAt": 1791378000
+          },
+          "secondary": null,
+          "credits": null
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        }
+      },
+      "expected": {
+        "weeklyRemaining": null,
+        "balance": null
+      }
+    },
+    {
+      "name": "codex-map",
+      "accountResponse": {
+        "account": {
+          "type": "chatgpt",
+          "email": "fixture@example.invalid",
+          "planType": "future-plan"
+        },
+        "requiresOpenaiAuth": true
+      },
+      "rateLimitsResponse": {
+        "rateLimits": {
+          "limitId": "other",
+          "primary": {
+            "usedPercent": 90,
+            "windowDurationMins": 10080,
+            "resetsAt": 1791378000
+          }
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 0,
+          "credits": []
+        },
+        "rateLimitsByLimitId": {
+          "codex": {
+            "limitId": "codex",
+            "planType": "future-plan",
+            "primary": null,
+            "secondary": {
+              "usedPercent": 40,
+              "windowDurationMins": 10080,
+              "resetsAt": 1791378000
+            },
+            "credits": {
+              "hasCredits": true,
+              "unlimited": false,
+              "balance": "7"
+            }
+          },
+          "other": {
+            "limitId": "other",
+            "primary": {
+              "usedPercent": 90,
+              "windowDurationMins": 10080,
+              "resetsAt": 1791378000
+            }
+          }
+        }
+      },
+      "expected": {
+        "weeklyRemaining": 60,
+        "balance": "7"
+      }
+    }
+  ]
+}
