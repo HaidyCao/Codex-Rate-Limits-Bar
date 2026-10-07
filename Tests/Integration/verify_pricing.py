@@ -50,6 +50,22 @@ def main():
         assert len(report["builtinPolicyReviews"]) == 2
         assert all("priceExpiresOn" not in r for r in report["builtinPolicyReviews"])
 
+        legacy = copy.deepcopy(builtin)
+        legacy["api"]["version"] = "2026-10-06.1"
+        legacy["api"]["models"]["gpt-5.5"]["cacheWriteInput"] = 6.25
+        legacy["api"]["models"]["gpt-5.4"]["cacheWriteInput"] = 3.125
+        legacy_file = root / "legacy-write-prices.json"
+        legacy_file.write_text(json.dumps(legacy))
+        report = run("--health", legacy_file)
+        assert report["configurationStatus"] == "valid"
+        differences = {row["model"]: row for row in report["api"]["rateDifferences"]}
+        assert set(differences) == {"gpt-5.5", "gpt-5.4"}
+        for model, old, corrected in [("gpt-5.5", 6.25, 5), ("gpt-5.4", 3.125, 2.5)]:
+            assert differences[model]["activeRate"]["cacheWriteInput"] == old
+            assert differences[model]["builtinRate"]["cacheWriteInput"] == corrected
+        assert not report["credits"]["rateDifferences"]
+        assert json.loads(legacy_file.read_text()) == legacy, "Health checks must preserve explicit custom prices"
+
         custom = copy.deepcopy(builtin)
         for kind in ("api", "credits"):
             del custom[kind]["models"]["gpt-6.1-sol"]

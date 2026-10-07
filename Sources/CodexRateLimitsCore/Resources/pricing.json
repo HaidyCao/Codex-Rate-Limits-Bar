@@ -1,20 +1,24 @@
 {
   "schemaVersion": 1,
   "api": {
-    "version": "2026-10-06.1",
+    "version": "2026-10-06.2",
     "verifiedAt": "2026-10-06",
     "sources": [
       "https://developers.openai.com/api/docs/pricing",
       "https://developers.openai.com/api/docs/models/gpt-6-astra",
       "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
       "https://developers.openai.com/api/docs/models/gpt-6-sol",
-      "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "https://developers.openai.com/api/docs/guides/prompt-caching",
+      "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "https://developers.openai.com/api/docs/models/gpt-5.4"
     ],
     "conditions": [
       "USD per 1M tokens; Standard API equivalents at current rates, including historical logs.",
       "Fast, Ultrafast, Batch, Flex, regional and tool fees are excluded.",
+      "Retained models before GPT-5.6 use the ordinary input rate for reported cache writes; GPT-5.6 and later entries use their explicitly configured write premium. Input categories are charged once, not additively.",
       "GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol and Luna use 2x input/cache and 1.5x output above 272K request input tokens.",
-      "Cyber has no published long-context API tier; requests above 272K remain unpriced.",
+      "Cyber API estimates currently cover requests up to 272K input tokens; larger requests remain unpriced.",
       "Dated snapshots use their explicit base or alias target, never arbitrary name prefixes.",
       "GPT-6.1 Sol uses its exact published model ID; unconfirmed aliases and dated snapshots remain unpriced."
     ],
@@ -114,7 +118,7 @@
       "gpt-5.5": {
         "input": 5.0,
         "cachedInput": 0.5,
-        "cacheWriteInput": 6.25,
+        "cacheWriteInput": 5.0,
         "output": 30.0,
         "datedSnapshots": true,
         "contextTier": {
@@ -126,7 +130,7 @@
       "gpt-5.4": {
         "input": 2.5,
         "cachedInput": 0.25,
-        "cacheWriteInput": 3.125,
+        "cacheWriteInput": 2.5,
         "output": 15.0,
         "datedSnapshots": true,
         "contextTier": {

@@ -227,6 +227,117 @@ final class ScannerEquivalenceTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(read(subject).todayCredits?.estimatedCredits), 166.75, accuracy: 1e-12)
     }
 
+    private func legacyCacheWritePricing() -> PricingSnapshot {
+        var document = PricingCatalog.builtin.document
+        document.api.version = "2026-10-06.1"
+        document.api.models["gpt-5.5"]?.cacheWriteInput = 6.25
+        document.api.models["gpt-5.4"]?.cacheWriteInput = 3.125
+        return PricingCatalog.snapshot(document, source: "custom", path: nil, error: nil)
+    }
+
+    private func cacheWriteSample(_ count: Int) -> [String: Any] {
+        ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now),
+         "payload": ["type": "token_count", "info": [
+            "total_token_usage": ["input_tokens": 100_000 * count, "cached_input_tokens": 40_000 * count,
+                "cache_write_input_tokens": 20_000 * count, "output_tokens": 5_000 * count,
+                "reasoning_output_tokens": 4_000 * count, "total_tokens": 105_000 * count],
+            "last_token_usage": ["input_tokens": 100_000]]]]
+    }
+
+    func testLegacyCacheWriteRepricingPreservesWeeklyEvidenceAcrossAppendRestartAndRollback() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        let legacy = legacyCacheWritePricing()
+        pricing = legacy
+        var subject = scanner("incremental")
+        let reference = scanner("reference")
+        try assertEquivalent(subject, reference, total: 0, stage: "write policy baseline")
+        now.addTimeInterval(60)
+        for name in ["gpt-5.5", "gpt-5.4"] {
+            try write([meta(name), model(name), cacheWriteSample(1)], to: sessions.appendingPathComponent("\(name).jsonl"))
+        }
+        // Unaffected, known-price usage keeps independent credit amounts visible.
+        try write([meta("known"), model("gpt-6.1-sol"), token(100_000, delta: 100_000)],
+            to: sessions.appendingPathComponent("known.jsonl"))
+        try assertEquivalent(subject, reference, total: 310_000, stage: "old write premium")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), 0.9425, accuracy: 1e-12)
+        let cacheURL = root.appendingPathComponent("incremental.json")
+        func document() throws -> LocalUsageCacheDocument {
+            try JSONDecoder().decode(LocalUsageCacheDocument.self, from: Data(contentsOf: cacheURL))
+        }
+        let before = try document()
+        XCTAssertEqual(before.cache.weeklyCostObservation?.history?.samples.count, 2)
+
+        pricing = PricingCatalog.builtin
+        subject = scanner("incremental")
+        try assertEquivalent(subject, reference, total: 310_000, stage: "corrected write rates")
+        let after = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(after.todayCost?.estimatedCostUSD), 0.905, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(after.weeklyQuotaCost?.observedCostUSD), 0.905, accuracy: 1e-12)
+        XCTAssertEqual(after.todayCredits?.estimatedCredits, 5)
+        XCTAssertEqual(after.todayCredits?.unpricedTokens, 210_000)
+        XCTAssertEqual(after.todayCost?.unpricedTokens, 0)
+        XCTAssertEqual(Set(after.unpricedUsage?.map(\.reason) ?? []), ["unverifiedCacheWrite"])
+        let updated = try document()
+        XCTAssertEqual(updated.version, 4)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        XCTAssertEqual(try encoder.encode(updated.cache.weeklyCostObservation),
+                       try encoder.encode(before.cache.weeklyCostObservation))
+        let minutes = updated.cache.files.values.flatMap { Array(($0.weeklyTimeline ?? [:]).values) }
+        XCTAssertEqual(minutes.reduce(0) { $0 + $1.costUSD }, 0.905, accuracy: 1e-12)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.uncertainCreditTokens }, 210_000)
+        for name in pricing.document.api.models.keys {
+            let oldSignature = PricingCatalog.$current.withValue(legacy) { TokenCostEstimator.pricingSignature(for: name) }
+            let newSignature = PricingCatalog.$current.withValue(pricing) { TokenCostEstimator.pricingSignature(for: name) }
+            if ["gpt-5.5", "gpt-5.4"].contains(name) { XCTAssertNotEqual(oldSignature, newSignature, name) }
+            else { XCTAssertEqual(oldSignature, newSignature, name) }
+        }
+        let unchanged = try Data(contentsOf: cacheURL)
+        _ = try read(scanner("incremental"))
+        XCTAssertEqual(try Data(contentsOf: cacheURL), unchanged)
+
+        now.addTimeInterval(60)
+        try write([cacheWriteSample(2)], to: sessions.appendingPathComponent("gpt-5.5.jsonl"), append: true)
+        try assertEquivalent(subject, reference, total: 415_000, stage: "write append")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), 1.375, accuracy: 1e-12)
+        let history = try document().cache.weeklyCostObservation?.history?.samples
+        for (card, expected, stage) in [(legacy, 1.4375, "write rollback"), (PricingCatalog.builtin, 1.375, "write upgrade again")] {
+            pricing = card
+            subject = scanner("incremental")
+            try assertEquivalent(subject, reference, total: 415_000, stage: stage)
+            XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), expected, accuracy: 1e-12)
+            XCTAssertEqual(try document().cache.weeklyCostObservation?.history?.samples, history)
+        }
+    }
+
+    func testLegacyCacheWriteRepricingKeepsMissingLogsStaleUntilRestored() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        pricing = legacyCacheWritePricing()
+        let subject = scanner("incremental")
+        _ = try read(subject)
+        now.addTimeInterval(60)
+        let file = sessions.appendingPathComponent("missing-writes.jsonl")
+        try write([meta("writes"), model("gpt-5.5"), cacheWriteSample(1)], to: file)
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), 0.495, accuracy: 1e-12)
+        let saved = try Data(contentsOf: file)
+        try FileManager.default.removeItem(at: file)
+        pricing = PricingCatalog.builtin
+        for value in [subject, scanner("incremental")] {
+            let missing = try read(value)
+            XCTAssertEqual(missing.totalTokens, 105_000)
+            XCTAssertNil(missing.todayCost?.estimatedCostUSD)
+            XCTAssertEqual(missing.todayCost?.unpricedTokens, 105_000)
+            XCTAssertEqual(missing.unpricedUsage?.first { $0.kind == "api" }?.reason, "stalePricing")
+        }
+        try saved.write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+        let restored = try read(scanner("incremental"))
+        XCTAssertEqual(restored.totalTokens, 105_000)
+        XCTAssertEqual(try XCTUnwrap(restored.todayCost?.estimatedCostUSD), 0.47, accuracy: 1e-12)
+        XCTAssertEqual(restored.todayCost?.unpricedTokens, 0)
+        XCTAssertEqual(restored.todayCredits?.unpricedTokens, 105_000)
+    }
+
     func testMidnightForkCopyArchiveAndRestartMatchFullReplay() throws {
         var subject = scanner("incremental")
         let reference = scanner("reference")

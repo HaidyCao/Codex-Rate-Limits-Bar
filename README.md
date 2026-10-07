@@ -141,7 +141,7 @@ Prices come from the [OpenAI API pricing page](https://developers.openai.com/api
 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) are supported,
 with dated snapshots only for explicitly enabled models. GPT-6.1 Sol resolves
 its exact published ID; unconfirmed dated snapshots and aliases stay unpriced.
-Standard API rates in card `2026-10-06.1`, per 1M tokens:
+Standard API rates in card `2026-10-06.2`, per 1M tokens:
 
 | Model | Input | Cached input | Cache writes | Output |
 | --- | --- | --- | --- | --- |
@@ -149,6 +149,8 @@ Standard API rates in card `2026-10-06.1`, per 1M tokens:
 | GPT-6 Astra | $10 | $1 | $12.50 | $50 |
 | GPT-6 Sol | $2 | $0.20 | $2.50 | $10 |
 | GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
+| GPT-5.5 | $5 | $0.50 | $5 | $30 |
+| GPT-5.4 | $2.50 | $0.25 | $2.50 | $15 |
 
 Above 272K request input tokens, these models use 2x input/cache rates and 1.5x
 output rates for the full request. Estimates use Standard API rates; Fast,

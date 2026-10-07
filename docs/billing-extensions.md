@@ -2,6 +2,8 @@
 
 评估日期：2026-10-06；代码基线：`eece485`。本项完成范围与迁移评估，尚未实现下文的新视图、数据格式或存储。
 
+后续进展：TODO-24 已完成[旧模型 API 写入修正](pricing.md#legacy-api-cache-writes-todo-24)。下文保留评估时的推进顺序；当前任务状态见 [TODO](../TODO.md#执行顺序)。
+
 ## 决策与推进顺序
 
 保留现有 `current-rates`：Standard API 等值、购买 credits 等值、官方额度/余额各自独立。先修正现有估值中有证据可核实的问题，再考虑历史价格与官方费用导入。
@@ -73,6 +75,6 @@
 
 ## 下一项：旧模型缓存写入价格
 
-[Prompt caching 文档](https://developers.openai.com/api/docs/guides/prompt-caching)区分 GPT-5.6 及以后模型的写入倍率与更早模型的无额外写入收费。当前 API 卡仍为 GPT-5.5/5.4 保留输入价的 1.25 倍写入价，因此列为 TODO-24 优先复核。无额外收费不等于这些输入 tokens 免费；必须先核对分项包含关系，再决定写入单价与公式，不能直接改成零，也不能把 API 结论套用到 credits。
+[Prompt caching 文档](https://developers.openai.com/api/docs/guides/prompt-caching)区分 GPT-5.6 及以后模型的写入倍率与更早模型的无额外写入收费。评估基线的 API 卡仍为 GPT-5.5/5.4 保留输入价的 1.25 倍写入价，因此列为 TODO-24 优先复核。无额外收费不等于这些输入 tokens 免费；必须先核对分项包含关系，再决定写入单价与公式，不能直接改成零，也不能把 API 结论套用到 credits。
 
 本次仅完成代码/协议样例对照、官方文档复核及 Markdown 链接和差异检查；未修改运行时逻辑、费率或测试，不重跑构建与性能基准。TODO-22 的 299 项测试及完整 `make verify` 结果作为提交基线保留。

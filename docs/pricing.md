@@ -14,8 +14,8 @@ credits field; cache v4 and Standard API-equivalent semantics remain unchanged.
 TODO-20 clarifies scope and display; its card revision changes only metadata.
 TODO-21/22 add maintenance and client verification. TODO-23's
 [extension assessment](billing-extensions.md) keeps historical valuation and
-official API costs conditional and separate from existing estimates. Track the
-next older-model cache-write audit in [TODO-24](../TODO.md#todo-24复核旧模型-api-缓存写入价格).
+official API costs conditional and separate from existing estimates. API card
+`2026-10-06.2` corrects older-model cache writes in [TODO-24](#legacy-api-cache-writes-todo-24).
 
 [OpenAI's changelog](https://developers.openai.com/api/docs/changelog) records the
 GPT-6.1 Sol release on September 29. The
@@ -95,7 +95,7 @@ the following retained groups. API tiers cannot fill that gap:
 | --- | --- | --- |
 | GPT-6 Astra/Sol/Luna, GPT-6.1 Sol | Published 2x input/cache, 1.5x output above 272K | Up to 272K known request input |
 | GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4 | Published long-context API tiers | Up to 272K; previous borrowed multipliers removed |
-| GPT-5.6 Cyber / Daybreak Red | No published long-context API price | Up to 272K |
+| GPT-5.6 Cyber / Daybreak Red | Current card stops at 272K; published tier pending TODO-25 | Up to 272K |
 | GPT-5.4 mini, GPT-5.3-Codex, GPT-5.2 | Existing Standard API rules | Existing Standard credit rules retained |
 
 API rules are sourced from [API pricing](https://developers.openai.com/api/docs/pricing)
@@ -108,9 +108,53 @@ Above it, credits report `unsupportedContext`; missing request context keeps the
 Standard estimate and contributes to `billingAssumptions.assumedCreditTokens`.
 Future evidence should update the card and replay affected logs.
 
-The review does not change API write rates. Older API cache-write rules and the
-actual client counter schema need a separate follow-up; lack of a write counter
-cannot establish an exact API bill either.
+TODO-19 did not change API write rates; [TODO-24](#legacy-api-cache-writes-todo-24)
+subsequently corrects GPT-5.5/5.4. Client counter evidence remains separate;
+lack of a write counter cannot establish an exact API bill either.
+
+### Legacy API cache writes (TODO-24)
+
+Reviewed on 2026-10-06 against the [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+and the exact [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) and
+[GPT-5.4](https://developers.openai.com/api/docs/models/gpt-5.4) model pages.
+Models before GPT-5.6 have no extra cache-write charge. Under this project's
+exclusive input categories, their reported writes use the **ordinary input
+rate**, not zero or the newer models' premium:
+
+`API input USD = ((input - cached - writes) × inputRate + cached × cachedRate + writes × inputRate) / 1,000,000`
+
+Thus the result is independent of how the non-cached input is split into
+ordinary and written tokens. Invalid/overlapping counters remain unpriced.
+The two corrected rows are GPT-5.5 **$6.25 → $5** and GPT-5.4 **$3.125 → $2.50**
+per million written tokens. The other 11 retained pre-5.6 entries already have
+write rates equal to their input rates; this checks their write policy, not a
+fresh verification of every historical base price. All eight retained 5.6+
+entries keep their explicit premium. No name-prefix fallback is introduced.
+
+| Independent sample | GPT-5.5 API USD | GPT-5.4 API USD |
+| --- | --- | --- |
+| 100K input, all written; no output | 0.50 (was 0.625) | 0.25 (was 0.3125) |
+| 100K input: 40K cached, 20K written; 5K output | 0.47 (was 0.495) | 0.235 (was 0.2475) |
+| Same cached/write/output counts, 272K request input | 1.33 | 0.665 |
+| Same cached/write/output counts, 272,001 request input | 2.58501 | 1.292505 |
+
+The existing 2x input/cache and 1.5x output tier remains above 272K. Output
+already includes reasoning tokens. Zero-write and cached-read-only amounts are
+unchanged. Purchased credits still report positive writes as
+`unverifiedCacheWrite`; this API correction does not resolve Codex deductions.
+
+Only the API card changes to `2026-10-06.2`; credits stays `2026-10-06.3`.
+Schema v1, outer cache v4 and calculation revision `pricing-v4` remain intact.
+Only GPT-5.5/5.4 model signatures change: available affected logs replay under
+the current card, including weekly minute costs. Tokens, account baselines and
+official samples survive. Missing logs report `stalePricing` until restored;
+rollback uses the same replay mechanism. Explicit custom prices keep their
+configured values, and `pricing --health` reports their differences read-only.
+
+During this audit, the [Cyber model page](https://developers.openai.com/api/docs/models/gpt-5.6-cyber)
+also established an API tier above 272K. The current Cyber card retains its
+272K coverage guard pending [TODO-25](../TODO.md#todo-25补齐-cyber-的-api-长上下文计价);
+this is an implementation gap, not a claim that the tier is unpublished.
 
 ### Maintenance and compatibility decisions
 
@@ -319,9 +363,8 @@ Sources: [API pricing](https://developers.openai.com/api/docs/pricing),
 The complete card contains 21 API models, 13 credit models and four aliases per
 card. Historical-base rows are carried from commit `7c79417`, card
 `2026-09-23.1`; the 2026-10-06 date is not a new independent verification of all
-their base prices. In particular, the older GPT-5.5/5.4 API write premium needs
-separate source reconciliation before claiming full API write accuracy. These
-zero-write examples deliberately do not resolve that gap. Credit write and long
+their base prices. The GPT-5.5/5.4 write correction and independent write examples
+are recorded in [TODO-24](#legacy-api-cache-writes-todo-24). Credit write and long
 context gaps remain covered by [explicit guards](#credit-accounting-coverage-todo-19).
 
 For GPT-6.1 Sol, the independent calculations are
@@ -341,6 +384,7 @@ Other pricing/accounting tests cover writes, unknown modes and context boundarie
 | Credits `2026-10-06.2` | Guard unverified writes and long contexts; calculation `pricing-v4` | Older app binaries reject the new optional field; restore the saved compatible custom file with the old app. |
 | Credits `2026-10-06.3` | Clarify estimate scope and contract exclusions only | Metadata-only change; no price replay required. |
 | TODO-21 diagnostics | Read-only comparisons, date reminders, release examples | No card, schema or calculation-signature change. |
+| API `2026-10-06.2` / TODO-24 | GPT-5.5/5.4 writes use ordinary input rates | Replay affected retained logs in either direction; missing logs stay stale. Credits card unchanged. |
 
 Preserve the previous app and custom card together. Do not delete caches to force
 a rollback: per-model signatures replay available history in either direction.
@@ -348,8 +392,9 @@ Never remove an uncertainty guard solely to make a new card parse in an older
 app; that changes its accounting meaning. Add the actual release commit to this
 record when changes are committed. TODO-17 through TODO-21 were committed together
 as `f8c9368`; the intermediate October card revisions above document development
-steps, not separate published releases. The previous committed card is
-`2026-09-23.1` at `7c79417`.
+steps, not separate published releases. The baseline before TODO-17 was
+`2026-09-23.1` at `7c79417`; before TODO-24 it was API `2026-10-06.1` and
+credits `2026-10-06.3` at `32a0f75`.
 
 ## Document and model rules
 

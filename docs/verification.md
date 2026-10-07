@@ -45,6 +45,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 不可读/缺失文件、非法 JSON、合法空白、未完成记录 | `ScannerCompletenessTests`、CLI/MCP 样例 |
 | 周金额稳定性、时间对齐、样本失效和重算 | `WeeklyQuotaEstimatorTests`、`WeeklyQuotaSamplingTests` |
 | 价格版本、别名、未知型号、默认费率假设 | `PricingCatalogTests`、价格估算测试、CLI/MCP 样例 |
+| 旧模型写入无溢价、272K 边界、跨卡重定价与回滚、缺日志恢复 | `PricingReleaseTests`、`ScannerEquivalenceTests`、`verify_pricing.py`、`verify_client_contracts.py` |
 | 重试、独立错误、超时、网络恢复状态、迟到结果 | `RefreshStateTests`、`UsageRefreshControllerTests`、假服务超时清理/恢复样例 |
 | 缺失归档目录创建后的路径别名与历史保留 | `AccountContextTests`、`ScannerEquivalenceTests`、CLI/MCP 持久化样例 |
 | 统计不可用时的 GUI credits 提示 | `VerifyMenu.swift` 使用 CLI/MCP 的不可用数据样例 |
@@ -81,6 +82,8 @@ credits 语义回归由 `CreditAccountingTests` 覆盖纯写入、混合输入�
 `PricingHealthTests` 检查遗漏模型/模式、合法自定义覆盖、别名解析和复核日期边界；`PricingReleaseTests` 使用手算金额覆盖全部 21 个 API、13 个 credits 模型和明确支持的模式。`verify_pricing.py` 验证默认路径、环境选择、候选卡不激活、无效卡回退及恢复，逐次核对目录文件哈希；沙箱另行禁止读取隔离账户和写入样例目录。打包检查也执行 `pricing --health`，确认不依赖构建目录。日期提醒不改价格、模型或缓存签名。官方网页调研与离线验收分开，来源、证据缺口及发布步骤见[价目表维护清单](pricing.md#release-maintenance-checklist)。
 
 ## 客户端与套餐契约样例（TODO-22）
+
+TODO-24 另在 `verify_client_contracts.py` 构造纯合成旧模型写入样例：GPT-5.5/5.4 各两次混合读写请求，另有 GPT-6.1 Sol 无写入对照。每份日志有两个副本；去重后为 630,000 tokens、$1.606 API 等值、4.9 credits，credits 未计价 420,000 tokens。先写首条计数、再追加，比较 CLI/MCP、真实进程重启及重建；新增 `fixtures/contract-cache-writes.json` 数值产物，不增加 UI 场景。`verify_pricing.py` 还检查旧自定义卡仅两行 API 写入价不同，credits 无差异，候选文件保持原样。
 
 [client-contracts](../Tests/Fixtures/client-contracts/) 明确区分真实记录投影和合成验证数据：
 

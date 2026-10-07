@@ -62,6 +62,24 @@ def assert_daily_equal(actual, expected):
     assert left == right, {k: (left.get(k), right.get(k)) for k in left.keys() | right.keys() if left.get(k) != right.get(k)}
 
 
+def synthetic_cache_write_contract():
+    """Construct old-model write cases; these are not observed billing records."""
+    document = {"provenance": {"kind": "synthetic-contract", "reviewedOn": "2026-10-06"}, "files": []}
+    for model in ("gpt-5.5", "gpt-5.4", "gpt-6.1-sol"):
+        def event(kind, payload):
+            return {"type": kind, "timestamp": "2026-10-06T12:00:00Z", "payload": payload}
+        usage = {"input_tokens": 100000, "cached_input_tokens": 80000 if model == "gpt-6.1-sol" else 40000,
+                 "cache_write_input_tokens": 0 if model == "gpt-6.1-sol" else 20000,
+                 "output_tokens": 5000, "reasoning_output_tokens": 4000, "total_tokens": 105000}
+        events = [event("session_meta", {"id": "write-contract-" + model}),
+                  event("turn_context", {"model": model, "service_tier": "standard"})]
+        for count in (1, 2):
+            events.append(event("event_msg", {"type": "token_count", "info": {
+                "total_token_usage": {k: v * count for k, v in usage.items()}, "last_token_usage": usage}}))
+        document["files"].append({"name": model, "events": events})
+    return document
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
@@ -71,7 +89,8 @@ def main():
     fixtures = Path(__file__).resolve().parents[1] / "Fixtures/client-contracts"
     observed = json.loads((fixtures / "observed-rollouts.json").read_text())
     synthetic = json.loads((fixtures / "synthetic-modes.json").read_text())
-    for document in (observed, synthetic): validate_projection(document)
+    cache_writes = synthetic_cache_write_contract()
+    for document in (observed, synthetic, cache_writes): validate_projection(document)
     accounts = json.loads((fixtures / "official-accounts.json").read_text())["cases"]
     artifacts = args.artifacts.resolve() if args.artifacts else None
     if artifacts:
@@ -157,9 +176,10 @@ for line in sys.stdin:
         def save(name, value):
             if artifacts: (artifacts / (name + ".json")).write_text(json.dumps(value, indent=2))
 
-        for document, name, tokens, api, credits, missing, unpriced_api, unpriced_credits in [
-            (observed, "contract-observed", 245087, 0.30183598, 7.5458995, 245087, 0, 0),
-            (synthetic, "contract-modes", 735000, 0.9353, 92.415, 105000, 105000, 210000)
+        for document, name, prefix_tokens, tokens, api, credits, missing, unpriced_api, unpriced_credits in [
+            (cache_writes, "contract-cache-writes", 315000, 630000, 1.606, 4.9, 0, 0, 420000),
+            (observed, "contract-observed", 102644, 245087, 0.30183598, 7.5458995, 245087, 0, 0),
+            (synthetic, "contract-modes", 525000, 735000, 0.9353, 92.415, 105000, 105000, 210000)
         ]:
             # Distinct corpora get distinct homes/caches. Removing source logs
             # from a live cache correctly retains their prior totals as partial.
@@ -172,7 +192,7 @@ for line in sys.stdin:
             select_account(accounts[0])
             install(document, prefix=True)
             prefix = run("local-usage", "--rebuild")
-            assert prefix["totalTokens"] == (102644 if name == "contract-observed" else 525000), (name, prefix["totalTokens"], prefix["diagnostics"])
+            assert prefix["totalTokens"] == prefix_tokens, (name, prefix["totalTokens"], prefix["diagnostics"])
             install(document, append=True)
             incremental = run("local-usage")
             assert incremental["totalTokens"] == tokens
