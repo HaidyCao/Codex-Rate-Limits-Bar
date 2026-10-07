@@ -4,6 +4,63 @@ import XCTest
 @testable import CodexRateLimitsCore
 
 final class ScannerPerformanceTests: XCTestCase {
+    func testFreeApprovalCopiesRemainIncrementalAndBounded() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["USAGE_RUN_BENCHMARKS"] == "1", "Run make benchmark for safety-check performance.")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("AutoReviewBenchmark-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = root.appendingPathComponent("cache.json")
+        let now = ISO8601DateFormatter().date(from: "2026-10-07T12:00:00Z")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        func scanner() -> LocalUsageScanner {
+            LocalUsageScanner(rootURLs: [root], calendar: calendar, now: { now }, cacheFileURL: cache)
+        }
+        func event(_ index: Int) -> Data {
+            Data("{\"timestamp\":\"2026-10-07T11:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"credits\":{\"has_credits\":false,\"unlimited\":false}},\"info\":{\"model\":\"codex-auto-review\",\"total_token_usage\":{\"total_tokens\":\(index * 10)}}}}\n".utf8)
+        }
+        var data = Data("{\"type\":\"session_meta\",\"payload\":{\"id\":\"review\",\"model_provider\":\"openai\",\"source\":{\"subagent\":{\"other\":\"guardian\"}}}}\n".utf8)
+        let count = 10_000
+        for index in 1...count { data.append(event(index)) }
+        let paths = (0..<4).map { root.appendingPathComponent("\($0).jsonl") }
+        for path in paths { try data.write(to: path) }
+        var timings: [String: Double] = [:]
+        func check(_ label: String, expected: Int64, _ body: () throws -> LocalUsageSnapshot) throws {
+            let start = ProcessInfo.processInfo.systemUptime
+            let value = try body()
+            timings[label] = ProcessInfo.processInfo.systemUptime - start
+            XCTAssertEqual(value.totalTokens, expected)
+            XCTAssertEqual(value.autoReviewUsage?.freeTokens, expected)
+            XCTAssertEqual(value.todayCredits?.estimatedCredits, 0)
+            XCTAssertEqual(value.todayCost?.notApplicableTokens, expected)
+            XCTAssertNil(value.todayCost?.estimatedCostUSD)
+            XCTAssertEqual(value.diagnostics?.status, .complete)
+        }
+        let reader = scanner(), expected = Int64(count * 10)
+        try check("coldSeconds", expected: expected) { try reader.snapshot() }
+        try check("unchangedSeconds", expected: expected) { try reader.snapshot() }
+        try check("restartSeconds", expected: expected) { try scanner().snapshot() }
+        for path in paths {
+            let handle = try FileHandle(forWritingTo: path)
+            try handle.seekToEnd(); try handle.write(contentsOf: event(count + 1)); try handle.close()
+        }
+        try check("appendSeconds", expected: expected + 10) { try reader.snapshot() }
+        try check("rebuildSeconds", expected: expected + 10) { try reader.snapshot(rebuild: true) }
+        let cacheBytes = try Data(contentsOf: cache).count
+        var usage = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
+        XCTAssertLessThan(cacheBytes, 1_048_576)
+        XCTAssertLessThan(usage.ru_maxrss, 256 * 1_048_576)
+        var report: [String: Any] = ["samples": count, "copies": paths.count, "cacheBytes": cacheBytes,
+                                   "peakRSSBytes": usage.ru_maxrss, "totalTokens": expected + 10]
+        report.merge(timings) { _, new in new }
+        let output = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        if let path = ProcessInfo.processInfo.environment["USAGE_BENCHMARK_OUTPUT"] {
+            try output.write(to: URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("benchmark-auto-review.json"))
+        }
+        print("Safety-check benchmark:\n" + String(decoding: output, as: UTF8.self))
+    }
+
     func testSparseCopiedHistoriesStayCompactAndMatchRebuild() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["USAGE_RUN_BENCHMARKS"] == "1", "Run make benchmark for copied-history performance.")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("CopyBenchmark-\(UUID())")

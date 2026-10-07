@@ -121,6 +121,7 @@ public struct LocalUsageDisplay: Codable, Sendable {
     public var unpricedUsageDetails: String? = nil
     public var unpricedSummaryLabel: String? = nil
     public var pricingBasisDetails: String? = nil
+    public var autoReviewSummaryLabel: String? = nil
 }
 
 public struct UsageModelCost: Codable, Sendable {
@@ -134,6 +135,7 @@ public struct UsageModelCost: Codable, Sendable {
     public var unpricedTokens: Int64? = nil
     public var canonicalModel: String? = nil
     public var pricingSource: String? = nil
+    public var notApplicableTokens: Int64? = nil
 }
 
 public struct UsageCostEstimate: Codable, Sendable {
@@ -142,6 +144,7 @@ public struct UsageCostEstimate: Codable, Sendable {
     public let pricedTokens: Int64
     public let unpricedTokens: Int64
     public let models: [UsageModelCost]
+    public var notApplicableTokens: Int64? = nil
 
     public var isPartial: Bool {
         unpricedTokens > 0
@@ -159,6 +162,7 @@ public struct UsageModelCredits: Codable, Sendable {
     public let unpricedTokens: Int64
     public var canonicalModel: String? = nil
     public var pricingSource: String? = nil
+    public var exemptTokens: Int64? = nil
 }
 
 public struct UsageCreditEstimate: Codable, Sendable {
@@ -168,6 +172,7 @@ public struct UsageCreditEstimate: Codable, Sendable {
     public let unpricedTokens: Int64
     public let assumedStandardTokens: Int64
     public let models: [UsageModelCredits]
+    public var exemptTokens: Int64? = nil
 
     public var isPartial: Bool { unpricedTokens > 0 }
     public var unpricedModels: [String] {
@@ -195,6 +200,8 @@ public struct WeeklyQuotaCostEstimate: Codable, Sendable {
     public var inferencePauseReason: String? = nil
     public var valuation: WeeklyQuotaValuation? = nil
     public var unpricedUsage: [UnpricedUsage]? = nil
+    public var autoReviewUsage: AutoReviewUsage? = nil
+    public var notApplicableTokens: Int64? = nil
 }
 
 public struct LocalUsageTopFile: Codable, Sendable {
@@ -239,11 +246,13 @@ public struct LocalUsageSnapshot: Codable, Sendable {
     public var billingAssumptions: UsageBillingAssumptions? = nil
     public var pricing: UsagePricingMetadata? = nil
     public var unpricedUsage: [UnpricedUsage]? = nil
+    public var autoReviewUsage: AutoReviewUsage? = nil
+    public var tokenBreakdownUnavailable: Bool? = nil
     public var freshness: DataFreshness? = nil
     public var persistence: UsageCachePersistence? = nil
 
     public var hasIncompleteTokenBreakdown: Bool {
-        unpricedUsage?.contains { $0.reason == "incompleteTokenBreakdown" } == true
+        tokenBreakdownUnavailable == true || unpricedUsage?.contains { $0.reason == "incompleteTokenBreakdown" } == true
     }
 
 }

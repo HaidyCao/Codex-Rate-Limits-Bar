@@ -254,7 +254,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                 guard let state = cache.files[file.url.path] else { return true }
                 return state.fileStamp != file.stamp || state.requiresCostRebuild || state.prefixDigest == nil || state.hasUsageBounds != true
                     || state.diagnostics?.version != UsageFileDiagnostics.currentVersion
-                    || state.copyAlgorithmVersion != UsageCopyLedger.currentVersion || state.requiresBlankLineReplay
+                    || state.requiresCopyRebuild || state.requiresBlankLineReplay
                     || state.copyMembers != paths || state.copyDay != localDate
             })
             let lostCopy = members.first?.sessionID.map { missingSessions.contains($0) } ?? false
@@ -277,7 +277,7 @@ final class LocalUsageScanner: @unchecked Sendable {
                    return state.copyMembers == paths && state.copyDay == localDate && state.hasUsageBounds == true
                        && state.prefixDigest != nil && !state.requiresCostRebuild
                        && state.diagnostics?.version == UsageFileDiagnostics.currentVersion
-                       && state.copyAlgorithmVersion == UsageCopyLedger.currentVersion && !state.requiresBlankLineReplay
+                       && !state.requiresCopyRebuild && !state.requiresBlankLineReplay
                }),
                members.filter({ $0.url.path != changedMembers[0].url.path }).allSatisfy({ file in
                    (cache.files[file.url.path]?.latestUsageAt ?? .distantPast) < activityStart
@@ -376,7 +376,8 @@ final class LocalUsageScanner: @unchecked Sendable {
             if let path = event.dailyOwner, var state = cache.files[path] {
                 state.totals.add(event.usage)
                 var cost = state.dailyCost ?? TokenCostAccumulator()
-                cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
+                cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput,
+                         serviceTier: event.tier, billingClass: event.billingClass)
                 state.dailyCost = cost
                 state.eventCount += 1
                 let latest = latestDates[path] ?? timestampParser.parse(state.lastEventAtIso) ?? .distantPast
@@ -388,20 +389,23 @@ final class LocalUsageScanner: @unchecked Sendable {
             }
             if let path = event.weeklyOwner {
                 var cost = cache.files[path]?.weeklyCost ?? TokenCostAccumulator()
-                cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput, serviceTier: event.tier)
+                cost.add(usage: event.usage, model: event.model, requestInputTokens: event.requestInput,
+                         serviceTier: event.tier, billingClass: event.billingClass)
                 cache.files[path]?.weeklyCost = cost
                 addTimeline(usage: event.usage, model: event.model, requestInput: event.requestInput, tier: event.tier,
-                            at: event.sampledAt, state: &cache.files[path]!)
+                            at: event.sampledAt, state: &cache.files[path]!, billingClass: event.billingClass)
             }
         }
     }
 
     private func addTimeline(usage: TokenUsage, model: String?, requestInput: Int64?, tier: String?,
-                             at timestamp: Date, state: inout LocalUsageFileState) {
+                             at timestamp: Date, state: inout LocalUsageFileState,
+                             billingClass: AutoReviewBillingClass = .regular) {
         guard let timelineStartedAt, timestamp >= timelineStartedAt else { return }
         let minute = WeeklyQuotaEstimator.minute(timestamp)
         if state.weeklyTimeline == nil { state.weeklyTimeline = [:] }
-        state.weeklyTimeline?[minute, default: WeeklyCostBucket()].add(usage: usage, model: model, requestInput: requestInput, tier: tier)
+        state.weeklyTimeline?[minute, default: WeeklyCostBucket()].add(usage: usage, model: model,
+            requestInput: requestInput, tier: tier, billingClass: billingClass)
     }
 
     private func reconcileCachedFiles(
@@ -524,6 +528,12 @@ final class LocalUsageScanner: @unchecked Sendable {
         do {
             let handle = try FileHandle(forReadingFrom: file.url)
             defer { try? handle.close() }
+            if !replay, state.sessionBillingContext == nil, state.activeSessionId == state.primarySessionId,
+               let payload = try UsageFileIdentity.sessionMetadata(at: file.url) {
+                // Recover source predicates for appended legacy files without
+                // rescanning their unrelated token histories.
+                state.sessionBillingContext = SessionBillingContext(payload: payload)
+            }
             var hasher = SHA256()
             if !replay {
                 hasher = try UsageFileIdentity.prefixHasher(handle, count: state.offset)
@@ -714,6 +724,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             }
             state.activeSessionId = sessionId
             state.currentServiceTier = dictionaryValue(object["payload"]).flatMap(LocalUsageLog.serviceTierFromPayload)
+            state.sessionBillingContext = dictionaryValue(object["payload"]).map { SessionBillingContext(payload: $0) }
             if let payload = dictionaryValue(object["payload"]),
                let model = LocalUsageLog.modelFromPayload(payload) {
                 state.currentModel = model
@@ -722,6 +733,7 @@ final class LocalUsageScanner: @unchecked Sendable {
         }
 
         if stringValue(object["type"]) == "session_meta" {
+            state.sessionBillingContext = SessionBillingContext(payload: [:])
             state.diagnostics?.invalidUsageRecords += 1
             return
         }
@@ -784,6 +796,7 @@ final class LocalUsageScanner: @unchecked Sendable {
         let requestInputTokens = TokenUsage.nonnegativeInteger(dictionaryValue(info["last_token_usage"])?["input_tokens"])
         let serviceTier = LocalUsageLog.serviceTierFromPayload(info)
             ?? LocalUsageLog.serviceTierFromPayload(payload) ?? state.currentServiceTier
+        let billingClass = AutoReviewBillingPolicy.classify(model: model, context: state.sessionBillingContext, payload: payload)
         let eventKey = copyLedger.map { _ in
             UsageCopyLedger.eventKey(session: state.primarySessionId, activeSession: state.activeSessionId,
                                      timestamp: timestamp, usage: currentTotalUsage, model: model, tier: serviceTier,
@@ -797,7 +810,7 @@ final class LocalUsageScanner: @unchecked Sendable {
             copyLedger.observe(key: eventKey, current: currentTotalUsage, delta: delta, continuing: sameSession,
                 model: model, tier: serviceTier, requestInput: requestInputTokens, timestamp: timestamp!,
                 timestampText: stringValue(object["timestamp"]), today: isToday && isInHistory,
-                inWeeklyWindow: countWeekly && isInHistory)
+                inWeeklyWindow: countWeekly && isInHistory, billingClass: billingClass)
         }
         if isInHistory {
             if isImportedForkEvent {
@@ -813,7 +826,8 @@ final class LocalUsageScanner: @unchecked Sendable {
                             usage: delta,
                             model: model,
                             requestInputTokens: requestInputTokens,
-                            serviceTier: serviceTier
+                            serviceTier: serviceTier,
+                            billingClass: billingClass
                         )
                         state.dailyCost = dailyCost
                         state.eventCount += 1
@@ -825,12 +839,13 @@ final class LocalUsageScanner: @unchecked Sendable {
                             usage: delta,
                             model: model,
                             requestInputTokens: requestInputTokens,
-                            serviceTier: serviceTier
+                            serviceTier: serviceTier,
+                            billingClass: billingClass
                         )
                         state.weeklyCost = weeklyCost
                         if let timestamp {
                             addTimeline(usage: delta, model: model, requestInput: requestInputTokens, tier: serviceTier,
-                                        at: timestamp, state: &state)
+                                        at: timestamp, state: &state, billingClass: billingClass)
                         }
                     }
                 }
@@ -929,7 +944,10 @@ final class LocalUsageScanner: @unchecked Sendable {
             timeline: weeklyTimeline, quotaSampleAt: quotaSampleAt
         )
         weeklyQuotaCost?.unpricedUsage = weeklyCostAccumulator.unpricedUsage()
+        weeklyQuotaCost?.autoReviewUsage = weeklyCostAccumulator.autoReviewUsage()
+        weeklyQuotaCost?.notApplicableTokens = weeklyCostAccumulator.estimate().notApplicableTokens
         let unpricedUsage = todayCostAccumulator.unpricedUsage()
+        let autoReviewUsage = todayCostAccumulator.autoReviewUsage()
 
         var snapshot = LocalUsageSnapshot(
             fetchedAtIso: ISO8601DateFormatter().string(from: now),
@@ -969,15 +987,18 @@ final class LocalUsageScanner: @unchecked Sendable {
                 pricingVersionLabel: AppText.pricingVersion(cache.pricing),
                 unpricedUsageDetails: AppText.unpricedUsageDetails(unpricedUsage),
                 unpricedSummaryLabel: AppText.unpricedSummary(unpricedUsage),
-                pricingBasisDetails: AppText.pricingBasisDetails
+                pricingBasisDetails: AppText.pricingBasisDetails,
+                autoReviewSummaryLabel: AppText.autoReviewSummary(autoReviewUsage)
             ),
             todayCredits: todayCredits,
             accountContext: accountContext,
             diagnostics: diagnostics,
             billingAssumptions: assumptions,
             pricing: cache.pricing,
-            unpricedUsage: unpricedUsage
+            unpricedUsage: unpricedUsage,
+            autoReviewUsage: autoReviewUsage
         )
+        snapshot.tokenBreakdownUnavailable = totals.hasCompleteBreakdown ? nil : true
         snapshot.freshness = RefreshCoordinator.oneShot([.localUsage: RefreshOutcome.local(snapshot)], attemptedAt: now, now: Date()).localUsage
         return snapshot
     }

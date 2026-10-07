@@ -37,6 +37,7 @@ flowchart TD
 | 子进程或 HTTP 超时与清理 | `OfficialUsageTransport`；可执行文件发现共用 `CodexProcess` |
 | app-server 输出分行、缓冲限制、响应去重及完成状态 | `AppServerCallState` |
 | 日志解析、文件身份、全量和增量统计 | `LocalUsageScanner`、`LocalUsageLog`、`UsageFileIdentity` |
+| 免费安全审批的来源、调用上下文及政策分类 | `AutoReviewBillingPolicy`、`SessionBillingContext`、`TokenCostAccumulator` |
 | 副本历史对齐、日/周来源范围及贡献归属 | `UsageCopyLedger` |
 | 缓存文档、文件锁、磁盘读写 | `LocalUsageCache`、`LocalUsageCacheStore` |
 | 目录发现、显式选择及账户来源范围 | `CodexHomeDiscovery`、`CodexHomeSelection`、`LocalUsagePaths`、`CodexPaths` |

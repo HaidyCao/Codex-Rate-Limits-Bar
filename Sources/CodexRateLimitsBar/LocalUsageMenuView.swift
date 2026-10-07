@@ -28,7 +28,7 @@ final class LocalUsageMenuView: NSView {
 class LocalUsageDrawingView: NSView {
     private var freshness: DataFreshness?
     private var snapshot: LocalUsageSnapshot?
-    private lazy var detailViews: [NSView] = (0..<4).map { _ in
+    private lazy var detailViews: [NSView] = (0..<5).map { _ in
         let view = NSView()
         addSubview(view)
         return view
@@ -46,8 +46,9 @@ class LocalUsageDrawingView: NSView {
     private func layoutDetailViews() {
         let frames = [NSRect(x: bounds.width - 152, y: 12, width: 140, height: 58),
                       NSRect(x: 12, y: 210, width: bounds.width - 24, height: 40),
-                      NSRect(x: 12, y: 298, width: bounds.width - 24, height: 18),
-                      NSRect(x: 12, y: 320, width: bounds.width - 24, height: 18)]
+                      NSRect(x: 12, y: 320, width: bounds.width - 24, height: 18),
+                      NSRect(x: 12, y: 342, width: bounds.width - 24, height: 18),
+                      NSRect(x: 12, y: 298, width: bounds.width - 24, height: 18)]
         for (view, frame) in zip(detailViews, frames) { view.frame = frame }
     }
 
@@ -59,7 +60,8 @@ class LocalUsageDrawingView: NSView {
             .compactMap { $0 }.joined(separator: "\n")
         let unavailable = snapshot == nil || snapshot?.diagnostics?.status == .unavailable
         detailViews[0].toolTip = [AppText.todayEstimatedCost(unavailable ? nil : snapshot?.todayCost),
-                                  AppText.apiEstimateDetails].joined(separator: "\n")
+                                  AppText.apiEstimateDetails,
+                                  AppText.autoReviewDetails(snapshot?.autoReviewUsage)].compactMap { $0 }.joined(separator: "\n")
         detailViews[1].toolTip = [AppText.todayEstimatedCredits(unavailable ? nil : snapshot?.todayCredits),
                                   AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits),
                                   AppText.creditsEstimateDetails].joined(separator: "\n")
@@ -68,6 +70,7 @@ class LocalUsageDrawingView: NSView {
                                   AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits)]
             .compactMap { $0 }.joined(separator: "\n")
         detailViews[3].toolTip = AppText.pricingDetails(snapshot?.pricing)
+        detailViews[4].toolTip = AppText.autoReviewDetails(snapshot?.autoReviewUsage)
         layoutDetailViews()
         needsDisplay = true
     }
@@ -138,13 +141,15 @@ class LocalUsageDrawingView: NSView {
         drawText(AppText.pricingCoverage(cost: snapshot?.todayCost, credits: snapshot?.todayCredits), in: NSRect(x: 12, y: 234, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         drawText(AppText.localScanStatus(snapshot), in: NSRect(x: 12, y: 254, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5, weight: .medium), color: snapshot?.diagnostics?.status.isIncomplete == true || snapshot?.persistence?.status == .pending ? .systemOrange : secondaryColor)
         drawText(AppText.billingAssumptions(snapshot?.billingAssumptions) ?? "", in: NSRect(x: 12, y: 276, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(snapshot?.display?.autoReviewSummaryLabel ?? AppText.autoReviewSummary(snapshot?.autoReviewUsage) ?? "",
+                 in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         let unpricedSummary = snapshot?.display?.unpricedSummaryLabel ?? AppText.unpricedSummary(snapshot?.unpricedUsage)
             ?? AppText.unpricedModels(cost: snapshot?.todayCost, credits: snapshot?.todayCredits) ?? ""
-        drawText(unpricedSummary, in: NSRect(x: 12, y: 298, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
+        drawText(unpricedSummary, in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: secondaryColor)
         let priceLabel = snapshot?.pricing?.configurationError == nil ? AppText.pricingVersion(snapshot?.pricing) : AppText.pricingConfigurationWarning
-        drawText(priceLabel, in: NSRect(x: 12, y: 320, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: snapshot?.pricing?.configurationError == nil ? secondaryColor : .systemOrange)
-        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 342, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
-        drawText(AppText.freshnessSummary(freshness, source: .localUsage), in: NSRect(x: 12, y: 364, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(priceLabel, in: NSRect(x: 12, y: 342, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10.5), color: snapshot?.pricing?.configurationError == nil ? secondaryColor : .systemOrange)
+        drawText(AppText.creditsEstimateNote, in: NSRect(x: 12, y: 364, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
+        drawText(AppText.freshnessSummary(freshness, source: .localUsage), in: NSRect(x: 12, y: 386, width: bounds.width - 24, height: 16), font: .systemFont(ofSize: 10), color: secondaryColor)
     }
 
     private func drawSubCard(_ rect: NSRect, fill: NSColor, stroke: NSColor) {

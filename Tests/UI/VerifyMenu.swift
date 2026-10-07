@@ -26,8 +26,9 @@ import Foundation
         let localized = CommandLine.arguments.contains("--localized")
         let contractNames = ["contract-observed", "contract-modes", "contract-pro-no-five-hour", "contract-weekly-only",
                              "contract-credits-only", "contract-api-key", "contract-unknown-plan", "contract-codex-map", "contract-api-key-error"]
+        let reviewNames = ["auto-review-free", "auto-review-unverified", "auto-review-mixed"]
         let names = localized ? ["pricing-reasons", "pricing-config-error", "credit-writes"]
-            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "cyber-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted() + contractNames
+            + reviewNames : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "cyber-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted() + contractNames + reviewNames
         for name in names {
             var data = try Data(contentsOf: fixtures.appendingPathComponent("\(name).json"))
             if localized {
@@ -88,13 +89,35 @@ import Foundation
             }
             let rate = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 220))
             let reset = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 90))
-            let usage = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 398))
+            let usage = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 420))
             rate.update(weekly: payload.selectedRateLimit?.weeklyWindow, forecast: nil,
                         weeklyQuotaCost: local.weeklyQuotaCost, credits: payload.selectedRateLimit?.credits, freshness: freshness)
             reset.update(payload.resetCredits, freshness: freshness.resetCredits)
             usage.update(local, freshness: freshness.localUsage)
             let localText = tooltips(usage)
             try require(localText.contains(AppText.pricingBasisDetails), "GUI lost valuation basis/scope: \(name)")
+            if reviewNames.contains(name) {
+                guard let review = local.autoReviewUsage, let summary = AppText.autoReviewSummary(review),
+                      let details = AppText.autoReviewDetails(review) else { throw RuntimeError("Missing safety-check details") }
+                try require(localText.contains(summary) && localText.contains(details), "GUI lost safety-check policy/details: \(name)")
+                let width = (summary as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5)]).width
+                try require(width <= 384, "Safety-check summary truncates: \(summary)")
+                if name == "auto-review-free" {
+                    try require(local.totalTokens == 1000 && local.todayCredits?.estimatedCredits == 0
+                                && local.todayCost?.estimatedCostUSD == nil && local.todayCost?.notApplicableTokens == 1000,
+                                "GUI invented an API zero price or lost free tokens")
+                    try require(localText.contains("API N/A") && (local.unpricedUsage ?? []).isEmpty,
+                                "Free safety checks became unknown models")
+                } else if name == "auto-review-unverified" {
+                    try require(review.freeTokens == 0 && review.unverifiedTokens == 1000
+                                && local.todayCredits?.estimatedCredits == nil,
+                                "Unverified safety checks became free")
+                } else {
+                    try require(local.totalTokens == 1400 && review.freeTokens == 300 && review.unverifiedTokens == 100
+                                && local.todayCost?.notApplicableTokens == 300 && local.todayCredits?.exemptTokens == 300,
+                                "GUI lost mixed safety-check scope")
+                }
+            }
             if let summary = AppText.unpricedSummary(local.unpricedUsage) {
                 try require(localText.contains(summary), "GUI lost the unpriced summary")
                 let width = (summary as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5)]).width

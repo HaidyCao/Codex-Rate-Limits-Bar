@@ -5,6 +5,80 @@ configured rates**. Changing a rate can therefore change the amount shown for
 earlier usage. Official balances and quota percentages still come from Codex;
 the app never recalculates or deducts them from local token counts.
 
+## Auto-review billing review (2026-10-07)
+
+The [official credit-based rate card](https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing),
+under **ChatGPT Work and Codex → Notes**, explicitly exempts Auto-review safety
+checks when signed in with a ChatGPT account: they are free and do not count
+toward the plan's usage limits. Ordinary Code Review and other tasks continue
+to follow their applicable rates. This is a feature-specific billing exemption;
+it does not establish an API price for an internal model name.
+
+The [Auto-review documentation](https://learn.chatgpt.com/docs/sandboxing/auto-review)
+describes a separate permission-review agent and retained session transcripts.
+Local records carrying the exact model `codex-auto-review` and the subagent
+source `guardian` identify that review activity. Older builds retained the model
+without its source, classifying it as `unknownModel` for both equivalents.
+
+The [approvals and security guide](https://learn.chatgpt.com/docs/agent-approvals-security)
+also says extra automatic-review calls can add to Codex usage. These official
+pages therefore have different statements about usage. For ChatGPT-sign-in
+safety checks, the rate card provides the specific billing rule. Keep that
+scope explicit; the general guide does not establish API-key billing or a
+public model mapping. Neither the checked
+[API price table](https://developers.openai.com/api/docs/pricing) nor the
+[Codex credit table](https://learn.chatgpt.com/docs/pricing) lists a rate for
+`codex-auto-review`.
+
+The implementation in [TODO-29](../TODO.md#todo-29区分免费安全审批与未知模型p1)
+requires all of the following for each token event:
+
+- The normalized model is exactly `codex-auto-review`, not a prefix or alias.
+- Its `session_meta` records `source.subagent.other = guardian` and
+  `model_provider = openai`.
+- The same `token_count` payload contains `rate_limits.limit_id = codex`, plus
+  either a valid primary/secondary quota window or a credits object with boolean
+  `has_credits` and `unlimited` fields. `plan_type` may be null.
+
+That last check is a local inference from the client's per-call Codex product
+response, rather than a documented historical authentication-mode field. A
+provider name, plan name, creator ID, previous event, or home's current login
+cannot establish eligibility alone. Missing or conflicting evidence produces
+`autoReviewContextUnverified`; ordinary models and ordinary code reviews retain
+their existing pricing behavior. Cache metadata stores only the guardian/provider
+predicates, not account identifiers or credentials.
+
+Eligible calls cost **0 credits** and retain their raw tokens. Optional
+`autoReviewUsage` reports `freeTokens`, `unverifiedTokens`, `policy`, and
+`policyURL` in daily snapshots and the active account's weekly observation.
+`todayCredits.exemptTokens` is a subset of `pricedTokens`, so the existing
+credit coverage denominator still includes all counted tokens. API estimates
+use optional `notApplicableTokens`, also available per model; those tokens are
+neither priced nor unpriced and are excluded from the API coverage denominator.
+An all-exempt API amount is null and the menu shows **API N/A**, while credits
+are zero with 100% coverage. The raw API coverage field remains 100 for an empty
+applicable denominator, preserving the existing empty-range convention.
+
+Thus API `pricedTokens + unpricedTokens + notApplicableTokens` equals the raw
+total; credits `pricedTokens + unpricedTokens` equals that same total, with
+`exemptTokens` already included in `pricedTokens`. Missing token components are
+reported independently through optional `tokenBreakdownUnavailable`; exemption
+never invents input/output components. Optional display labels and reason
+details distinguish free checks, unknown models, and unverified origins.
+
+The feature exemption takes precedence over custom rates for confirmed safety
+checks, without rewriting the configured card. Ordinary or unverified calls
+still use explicit custom rates, and an unverified classification remains visible
+even when such rates produce an estimate. The bundled cards are unchanged.
+
+Only the exact model's calculation signature gains `chatgpt-auto-review-v1`.
+Affected daily/weekly entries replay from retained logs without discarding valid
+quota baselines or official samples; missing logs retain stale, unpriced totals.
+The outer cache stays v4. Copy reconciliation v2 keeps billing classification
+outside token identity, so conflicting copies count once without granting an
+exemption. Unchanged v1 groups without this model remain reusable. Existing
+normal signatures and optional-field decoding remain compatible.
+
 ## Policy review (2026-10-06)
 
 The review started against commit `7c79417`. API card `2026-10-06.1` adds

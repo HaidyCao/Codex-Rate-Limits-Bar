@@ -90,7 +90,8 @@ enum TokenCostEstimator {
         let snapshot = PricingCatalog.current
         let api = canonicalModel(model).flatMap { snapshot.apiSignatures[$0] } ?? "unpriced"
         let credits = snapshot.document.credits.canonical(model).flatMap { snapshot.creditSignatures[$0] } ?? "unpriced"
-        return "pricing-v4|\(api)|\(credits)"
+        let exemption = AutoReviewBillingPolicy.matches(model) ? "|\(AutoReviewBillingPolicy.identifier)" : ""
+        return "pricing-v4|\(api)|\(credits)\(exemption)"
     }
     static func needsRequestContext(_ model: String?) -> Bool {
         PricingCatalog.current.document.api.rate(model)?.needsContext == true
@@ -106,11 +107,15 @@ struct TokenCostAccumulator: Codable {
         var pricedTokens: Int64 = 0
         var unpricedTokens: Int64 = 0
         var assumedStandardTokens: Int64 = 0
+        var notApplicableTokens: Int64?
+        var exemptTokens: Int64?
         mutating func merge(_ other: Totals) {
             amount += other.amount
             pricedTokens += other.pricedTokens
             unpricedTokens += other.unpricedTokens
             assumedStandardTokens += other.assumedStandardTokens
+            if let value = other.notApplicableTokens { notApplicableTokens = (notApplicableTokens ?? 0) + value }
+            if let value = other.exemptTokens { exemptTokens = (exemptTokens ?? 0) + value }
         }
         var estimate: Double? { pricedTokens > 0 ? amount : nil }
     }
@@ -127,8 +132,11 @@ struct TokenCostAccumulator: Codable {
         var credits: Totals?
         var assumptions: UsageBillingAssumptions?
         var missing: [Missing]?
+        var unverifiedAutoReviewTokens: Int64?
     }
     private var buckets: [String: Bucket] = [:]
+
+    var hasAutoReviewUsage: Bool { buckets.keys.contains { AutoReviewBillingPolicy.matches($0) } }
 
     var hasNewlyPricedModels: Bool {
         buckets.contains { model, bucket in
@@ -143,7 +151,8 @@ struct TokenCostAccumulator: Codable {
         }
     }
 
-    mutating func add(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String? = nil) {
+    mutating func add(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String? = nil,
+                      billingClass: AutoReviewBillingClass = .regular) {
         let raw = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = raw.flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"
         let signature = TokenCostEstimator.pricingSignature(for: label)
@@ -151,6 +160,20 @@ struct TokenCostAccumulator: Codable {
                                               assumptions: UsageBillingAssumptions(), missing: [])
         bucket.usage.add(usage)
         bucket.assumptions?.totalTokens += usage.totalTokens
+        if billingClass == .unverifiedSafetyCheck {
+            bucket.unverifiedAutoReviewTokens = (bucket.unverifiedAutoReviewTokens ?? 0) + usage.totalTokens
+        }
+        if billingClass == .freeSafetyCheck, bucket.pricingSignature == signature {
+            // Safety checks are exempt from Codex credits/allowances. They
+            // have no published API equivalent; do not invent a zero API rate.
+            let notApplicableTokens = (bucket.api?.notApplicableTokens ?? 0) + usage.totalTokens
+            let exemptTokens = (bucket.credits?.exemptTokens ?? 0) + usage.totalTokens
+            bucket.api?.notApplicableTokens = notApplicableTokens
+            bucket.credits?.pricedTokens += usage.totalTokens
+            bucket.credits?.exemptTokens = exemptTokens
+            buckets[label] = bucket
+            return
+        }
         if serviceTier == nil { bucket.assumptions?.missingServiceTierTokens += usage.totalTokens }
         if requestInputTokens == nil { bucket.assumptions?.missingRequestContextTokens += usage.totalTokens }
         if requestInputTokens == nil, TokenCostEstimator.needsRequestContext(label) {
@@ -169,7 +192,8 @@ struct TokenCostAccumulator: Codable {
             } else {
                 bucket.api?.unpricedTokens += usage.totalTokens
                 missing("api", !usage.hasCompleteBreakdown ? "incompleteTokenBreakdown"
-                    : TokenCostEstimator.canonicalModel(label) == nil ? "unknownModel" : "unsupportedContext")
+                    : TokenCostEstimator.canonicalModel(label) == nil
+                    ? (billingClass == .unverifiedSafetyCheck ? "autoReviewContextUnverified" : "unknownModel") : "unsupportedContext")
             }
             if let value = CodexCreditEstimator.estimate(usage: usage, model: label,
                                                        requestInputTokens: requestInputTokens, serviceTier: serviceTier) {
@@ -181,8 +205,10 @@ struct TokenCostAccumulator: Codable {
                 }
             } else {
                 bucket.credits?.unpricedTokens += usage.totalTokens
-                missing("credits", !usage.hasCompleteBreakdown ? "incompleteTokenBreakdown"
-                    : CodexCreditEstimator.unpricedReason(usage: usage, model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
+                let reason = CodexCreditEstimator.unpricedReason(usage: usage, model: label,
+                    requestInputTokens: requestInputTokens, serviceTier: serviceTier)
+                missing("credits", reason == "unknownModel" && billingClass == .unverifiedSafetyCheck
+                    ? "autoReviewContextUnverified" : reason)
             }
         } else {
             bucket.pricingSignature = nil
@@ -197,6 +223,9 @@ struct TokenCostAccumulator: Codable {
         for (model, otherBucket) in other.buckets {
             guard var bucket = buckets[model] else { buckets[model] = otherBucket; continue }
             bucket.usage.add(otherBucket.usage)
+            if let value = otherBucket.unverifiedAutoReviewTokens {
+                bucket.unverifiedAutoReviewTokens = (bucket.unverifiedAutoReviewTokens ?? 0) + value
+            }
             if let assumptions = otherBucket.assumptions { bucket.assumptions?.merge(assumptions) }
             else { bucket.assumptions = nil }
             if bucket.pricingSignature == otherBucket.pricingSignature {
@@ -229,13 +258,16 @@ struct TokenCostAccumulator: Codable {
             models.append(UsageModelCost(model: model, inputTokens: bucket.usage.inputTokens,
                 cachedInputTokens: bucket.usage.cachedInputTokens, cacheWriteInputTokens: bucket.usage.cacheWriteInputTokens,
                 outputTokens: bucket.usage.outputTokens, totalTokens: bucket.usage.totalTokens, estimatedCostUSD: value.estimate,
-                unpricedTokens: value.unpricedTokens, canonicalModel: TokenCostEstimator.canonicalModel(model), pricingSource: PricingCatalog.current.metadata.source))
+                unpricedTokens: value.unpricedTokens, canonicalModel: TokenCostEstimator.canonicalModel(model),
+                pricingSource: value.notApplicableTokens == bucket.usage.totalTokens ? AutoReviewBillingPolicy.identifier : PricingCatalog.current.metadata.source,
+                notApplicableTokens: value.notApplicableTokens))
         }
         let total = totals.pricedTokens + totals.unpricedTokens
         models.sort { $0.totalTokens == $1.totalTokens ? $0.model < $1.model : $0.totalTokens > $1.totalTokens }
-        return UsageCostEstimate(estimatedCostUSD: total == 0 ? 0 : totals.estimate,
+        return UsageCostEstimate(estimatedCostUSD: total + (totals.notApplicableTokens ?? 0) == 0 ? 0 : totals.estimate,
             coveragePercent: total > 0 ? Double(totals.pricedTokens) / Double(total) * 100 : 100,
-            pricedTokens: totals.pricedTokens, unpricedTokens: totals.unpricedTokens, models: models)
+            pricedTokens: totals.pricedTokens, unpricedTokens: totals.unpricedTokens, models: models,
+            notApplicableTokens: totals.notApplicableTokens)
     }
 
     func billingAssumptions() -> UsageBillingAssumptions {
@@ -256,14 +288,27 @@ struct TokenCostAccumulator: Codable {
             totals.merge(value)
             models.append(UsageModelCredits(model: model, totalTokens: bucket.usage.totalTokens,
                 estimatedCredits: value.estimate, unpricedTokens: value.unpricedTokens,
-                canonicalModel: PricingCatalog.current.document.credits.canonical(model), pricingSource: PricingCatalog.current.metadata.source))
+                canonicalModel: PricingCatalog.current.document.credits.canonical(model),
+                pricingSource: value.exemptTokens == bucket.usage.totalTokens ? AutoReviewBillingPolicy.identifier : PricingCatalog.current.metadata.source,
+                exemptTokens: value.exemptTokens))
         }
         let total = totals.pricedTokens + totals.unpricedTokens
         models.sort { $0.totalTokens == $1.totalTokens ? $0.model < $1.model : $0.totalTokens > $1.totalTokens }
         return UsageCreditEstimate(estimatedCredits: total == 0 ? 0 : totals.estimate,
             coveragePercent: total > 0 ? Double(totals.pricedTokens) / Double(total) * 100 : 100,
             pricedTokens: totals.pricedTokens, unpricedTokens: totals.unpricedTokens,
-            assumedStandardTokens: totals.assumedStandardTokens, models: models)
+            assumedStandardTokens: totals.assumedStandardTokens, models: models, exemptTokens: totals.exemptTokens)
+    }
+
+    func autoReviewUsage() -> AutoReviewUsage? {
+        var free: Int64 = 0, unverified: Int64 = 0
+        for (model, bucket) in buckets where bucket.pricingSignature == TokenCostEstimator.pricingSignature(for: model) {
+            free += bucket.credits?.exemptTokens ?? 0
+            unverified += bucket.unverifiedAutoReviewTokens ?? 0
+        }
+        guard free > 0 || unverified > 0 else { return nil }
+        return AutoReviewUsage(freeTokens: free, unverifiedTokens: unverified,
+            policy: AutoReviewBillingPolicy.identifier, policyURL: AutoReviewBillingPolicy.source)
     }
 
     func unpricedUsage() -> [UnpricedUsage] {

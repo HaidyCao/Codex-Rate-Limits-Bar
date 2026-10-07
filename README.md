@@ -109,6 +109,9 @@ Local usage exposes three separate measures in the menu, CLI and MCP:
   event is distinct from missing or unreadable logs.
 - API and credit `coveragePercent` describe prices for the tokens already
   counted. **100% price coverage does not imply a complete scan or billing record.**
+  Confirmed free safety checks remain in raw totals and credit coverage; API
+  coverage excludes their `notApplicableTokens`. An all-exempt API range shows
+  N/A rather than a zero API price.
 - `billingAssumptions` reports missing mode/context token counts, the tokens
   whose API or credit price used a default, and `apiPercent`/`creditPercent`.
   These percentages use deduplicated observed tokens as the denominator; missing
@@ -236,6 +239,13 @@ fields. The menu, CLI and MCP use the same daily values; `status` additionally
 has the official weekly context. These are **local usage equivalents at the current purchased
 credit rate card**, not actual deductions, included plan limits, or a fixed value
 of the weekly allowance.
+
+Confirmed ChatGPT `codex-auto-review` safety checks contribute zero credits.
+Optional `autoReviewUsage` explains free/unverified tokens and the policy source;
+`exemptTokens` is included in credit `pricedTokens`. Eligibility requires guardian
+metadata and a per-call Codex quota/credit response. Names or current credentials
+alone do not qualify, and ordinary code reviews retain their applicable rates.
+See [eligibility, API scope, and cache compatibility](docs/pricing.md#auto-review-billing-review-2026-10-07).
 
 The [official credit rate card](https://learn.chatgpt.com/docs/pricing) is
 independent of API pricing. Per 1M input / cached input / output tokens, GPT-6.1 Sol

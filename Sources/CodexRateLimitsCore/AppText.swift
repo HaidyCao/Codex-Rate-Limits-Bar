@@ -831,6 +831,7 @@ public enum AppText {
         let costSuffix = weeklyQuotaCost.map {
             "\n\(weeklyQuotaEstimatedCost($0))\n\(weeklyValuationDetails($0.valuation))\n\(costEstimateDisclaimer)"
                 + (unpricedUsageDetails($0.unpricedUsage).map { "\n" + $0 } ?? "")
+                + (autoReviewDetails($0.autoReviewUsage).map { "\n" + $0 } ?? "")
         } ?? ""
         switch language {
         case .simplifiedChinese:
@@ -1249,6 +1250,7 @@ extension AppText {
         case "unverifiedCacheWrite": return weeklyText("缓存写入计费待核实", "快取寫入計費待核實", "キャッシュ書き込み料金は未確認", "캐시 쓰기 요금 미확인", "cache-write billing unverified")
         case "incompleteTokenBreakdown": return incompleteTokenBreakdown
         case "stalePricing": return weeklyText("等待价格重算", "等待價格重算", "再計算待ち", "요금 재계산 대기", "awaiting repricing")
+        case "autoReviewContextUnverified": return weeklyText("安全审批登录来源待确认", "安全審批登入來源待確認", "安全確認のログイン元は未確認", "안전 검토 로그인 출처 미확인", "safety-check sign-in context unverified")
         default: return weeklyText("未识别计价原因", "未識別計價原因", "不明な料金理由", "알 수 없는 요금 사유", "unrecognized pricing reason") + " (\(reason))"
         }
     }
@@ -1306,7 +1308,9 @@ extension AppText {
     }
 
     public static func pricingCoverage(cost: UsageCostEstimate?, credits: UsageCreditEstimate?) -> String {
-        let values = "API \(CreditFormatter.string(cost?.coveragePercent))% · credits \(CreditFormatter.string(credits?.coveragePercent))%"
+        let api = (cost?.notApplicableTokens ?? 0) > 0 && cost?.pricedTokens == 0 && cost?.unpricedTokens == 0
+            ? "API N/A" : "API \(CreditFormatter.string(cost?.coveragePercent))%"
+        let values = "\(api) · credits \(CreditFormatter.string(credits?.coveragePercent))%"
         switch language {
         case .simplifiedChinese: return "定价覆盖：\(values)"
         case .traditionalChinese: return "定價覆蓋：\(values)"
@@ -1314,6 +1318,41 @@ extension AppText {
         case .korean: return "가격 적용률: \(values)"
         case .english: return "Price coverage: \(values)"
         }
+    }
+
+    public static func autoReviewSummary(_ value: AutoReviewUsage?) -> String? {
+        guard let value else { return nil }
+        if value.freeTokens > 0 {
+            let amount = TokenAmountFormatter.compact(value.freeTokens)
+            let prefix = weeklyText("安全审批免费：", "安全審批免費：", "無料の安全確認：", "무료 안전 검토: ", "Free safety checks: ")
+            let pending = value.unverifiedTokens > 0
+                ? weeklyText(" · 有待确认", " · 有待確認", " · 未確認あり", " · 미확인 있음", " · some unverified") : ""
+            return "\(prefix)\(amount) tokens\(pending)"
+        }
+        guard value.unverifiedTokens > 0 else { return nil }
+        return weeklyText("安全审批：登录来源待确认", "安全審批：登入來源待確認", "安全確認：ログイン元は未確認", "안전 검토: 로그인 출처 미확인", "Safety checks: sign-in context unverified")
+    }
+
+    public static func autoReviewDetails(_ value: AutoReviewUsage?) -> String? {
+        guard let value, let summary = autoReviewSummary(value) else { return nil }
+        let free = weeklyText("免费", "免費", "無料", "무료", "free")
+        let unverified = weeklyText("待确认", "待確認", "未確認", "미확인", "unverified")
+        var lines = [summary, "codex-auto-review · \(value.freeTokens) \(free) tokens · \(value.unverifiedTokens) \(unverified) tokens"]
+        if value.freeTokens > 0 {
+            lines.append(weeklyText(
+                "ChatGPT 登录下的安全审批为 0 credits，不计入套餐额度。tokens 保留在总量中；API 等价不适用，API 覆盖率排除这部分 tokens。",
+                "ChatGPT 登入下的安全審批為 0 credits，不計入方案額度。tokens 保留在總量中；API 等價不適用，API 覆蓋率排除這部分 tokens。",
+                "ChatGPT ログインでの安全確認は 0 credits で、プラン上限に含まれません。tokens は総量に保持し、API 換算と API カバー率から除外します。",
+                "ChatGPT 로그인 안전 검토는 0 credits이며 플랜 한도에서 제외됩니다. tokens는 총량에 유지하며 API 환산 및 API 적용률에서 제외합니다.",
+                "ChatGPT safety checks cost 0 credits and do not use plan limits. Raw tokens are retained; API equivalents are not applicable and API coverage excludes those tokens."))
+        }
+        if value.unverifiedTokens > 0 {
+            lines.append(weeklyText("来源未确认的安全审批保留未计价状态或显式配置的估值。", "來源未確認的安全審批保留未計價狀態或明確設定的估值。",
+                "ログイン元を確認できない安全確認は未計算、または明示された設定料金で換算します。", "출처 미확인 안전 검토는 미산정 또는 명시적 설정 요율로 표시합니다.",
+                "Unverified safety checks remain unpriced or use explicitly configured rates."))
+        }
+        lines.append(value.policyURL)
+        return lines.joined(separator: "\n")
     }
 
     public static func unpricedModels(cost: UsageCostEstimate?, credits: UsageCreditEstimate?) -> String? {

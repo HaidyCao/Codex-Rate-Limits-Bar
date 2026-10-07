@@ -53,12 +53,15 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 归档卡指纹、重复/冲突版本、来源元数据、未知生效期与当前资源一致性、同次提交前验证及复核副本完整性 | `verify_pricing_archive.py`、`test_pricing_archive.py`；`verify_pricing.py` 复用 Swift 校验历史卡和未关联提交的内容快照 |
 | 旧模型写入无溢价、272K 边界、跨卡重定价与回滚、缺日志恢复 | `PricingReleaseTests`、`ScannerEquivalenceTests`、`verify_pricing.py`、`verify_client_contracts.py` |
 | Cyber 长上下文、历史别名、API 与 credits 独立覆盖、旧未计价量恢复 | `TokenCostEstimatorTests`、`CreditAccountingTests`、`ScannerEquivalenceTests`、CLI/MCP/UI 样例 |
+| 免费安全审批、历史调用来源、混合覆盖、副本冲突、选择性缓存迁移与周账户范围 | `AutoReviewBillingTests`、CLI/MCP 的三种 auto-review 样例、五语言双主题菜单、`ScannerPerformanceTests` |
 | 重试、独立错误、超时、网络恢复状态、迟到结果 | `RefreshStateTests`、`UsageRefreshControllerTests`、假服务超时清理/恢复样例 |
 | 缺失归档目录创建后的路径别名与历史保留 | `AccountContextTests`、`ScannerEquivalenceTests`、CLI/MCP 持久化样例 |
 | 统计不可用时的 GUI credits 提示 | `VerifyMenu.swift` 使用 CLI/MCP 的不可用数据样例 |
 | token 明细缺失/矛盾、差值传播、明细恢复与旧缓存重算 | `InputValidationTests`、`ScannerCompletenessTests`、`WeeklyQuotaSamplingTests`、CLI/MCP/UI 样例 |
 | 累计分项修正、总量回退、后续计价恢复及周暂停原因 | `CumulativeUsageCorrectionTests`、`WeeklyQuotaEstimatorTests`、CLI/MCP/UI 样例 |
 | 官方比例缺失、越界整数、非法计数/余额/日期 | `InputValidationTests`、CLI/MCP/UI 样例 |
+
+`AutoReviewBillingTests` 使用调用自身的 Codex 额度/credits 响应验证免费判定；覆盖空套餐、非法布尔/窗口、缺来源、其他 provider、相似模型名、来源变更、creator 标识不落盘、相同与冲突副本、缺日志、自定义价格以及旧 v4 缓存的选择性重放。有效周基线、官方样本与普通 v1 副本缓存保留。共享 CLI/MCP/UI 样例有仅免费、仅待确认与混合三种；混合的独立期望为 1,400 tokens、$0.002、0.05 credits，300 个 API 不适用 tokens，另有 100 个来源未确认 tokens。五语言双主题验证 API N/A、免费行、待确认原因与详情宽度。`benchmark-auto-review.json` 记录 10,000 条审批事件的四份副本，比较冷读、无变化、重启、追加与重建，同时限制内存和缓存大小。
 
 `ScannerEquivalenceTests` 使用独立缓存：一侧持续增量读取并重启，另一侧每次完整重建。对比包含 tokens、事件计数、明细、API/credits 金额、诊断、价格信息和周观察；排除随运行耗时变化的 `ageSeconds`，按文件路径规范化相同 token 数的排名，并将聚合金额对齐到小数点后 12 位，容纳不同求和顺序的浮点末位差异。同时断言独立已知的 tokens 和金额，避免两个实现路径一起算错却通过比较。不能用删除日志或同大小覆写来“证明缓存复用”。新增价目表升级/回滚样例验证旧未知模型、旧 Fast 倍率和 Ultrafast 模式，核对周分钟桶及官方观察样本保留。
 
@@ -72,9 +75,10 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
 - `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
-- `menu/`：32 种共享数据场景及正常/缺失目录两种设置场景，共 34 种英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各有五种关键场景的双主题渲染，检查现有五种语言。
+- `menu/`：35 种共享数据场景及正常/缺失目录两种设置场景，共 37 种英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各有八种关键场景（定价、审批及目录）的双主题渲染，检查现有五种语言。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
+- `benchmark-auto-review.json`：1 万条审批事件的四份副本，记录免费分类、冷读/重启/追加/重建的耗时与资源上限。
 
 AppKit 检查收集 `Sources/CodexRateLimitsBar/` 中除 `main.swift` 外的全部实际实现文件，使用独立验证入口；`main.swift` 仅保留应用启动入口。Core 对象与模块只从 `swift build --show-bin-path` 返回的当前目录读取，兼容 Swift 6.4 Swift Build 的合并对象及旧 SwiftPM 的逐文件对象，不搜索其他可能过期的构建目录。验证入口不启动菜单栏、登录项或通知。自动检查共享快照的显示标签和状态是否传入视图，生成图像供排版检查；PNG 成功生成不等于已经自动判断所有像素的正确性。
 

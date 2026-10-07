@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let localCacheHitItem = NSMenuItem(title: "命中 --", action: nil, keyEquivalent: "")
     private let localUsageDetailItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let localUsagePanelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 398))
+    private let localUsagePanelView = LocalUsageMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 420))
     private let errorItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let preferencesView = PreferencesMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 104))
@@ -321,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         tokenStatusItem.button?.toolTip = [state.localUsage?.display?.estimatedCostLabel,
             state.localUsage?.display?.estimatedCreditsLabel, state.localUsage?.display?.pricingCoverageLabel,
             AppText.unpricedUsageDetails(state.localUsage?.unpricedUsage), AppText.pricingDetails(state.localUsage?.pricing),
+            AppText.autoReviewDetails(state.localUsage?.autoReviewUsage),
             state.localUsage.map(AppText.scanDetails), AppText.refreshDetails(freshness)].compactMap { $0 }.joined(separator: "\n")
         updateCombinedError()
     }

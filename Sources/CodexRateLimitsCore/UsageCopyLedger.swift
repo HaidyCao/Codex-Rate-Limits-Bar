@@ -4,7 +4,7 @@ import Foundation
 /// Replay copied sessions before aggregating them. Daily and weekly histories
 /// have separate source sets; neither can donate or remove the other's usage.
 final class UsageCopyLedger {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     struct Contribution {
         let usage: TokenUsage
@@ -15,6 +15,7 @@ final class UsageCopyLedger {
         let sampledAt: Date
         let dailyOwner: String?
         let weeklyOwner: String?
+        let billingClass: AutoReviewBillingClass
     }
     private struct Sample {
         let usage: TokenUsage
@@ -23,6 +24,7 @@ final class UsageCopyLedger {
         let model: String?
         let tier: String?
         let requestInput: Int64?
+        var billingClass: AutoReviewBillingClass
     }
     private struct OwnedUsage {
         var usage: TokenUsage
@@ -68,7 +70,13 @@ final class UsageCopyLedger {
         var hasConflict = false
 
         func observe(key: Data, sample: Sample, delta: TokenUsage?, path: String, continuing: Bool, include: Bool) {
-            samples[key] = samples[key] ?? sample
+            if var existing = samples[key] {
+                // Source metadata is not part of a token event's identity.
+                // Conflicting copies must neither double count nor upgrade
+                // an unverified call into a free safety check.
+                if existing.billingClass != sample.billingClass { existing.billingClass = .unverifiedSafetyCheck }
+                samples[key] = existing
+            } else { samples[key] = sample }
             if !continuing || currentTraces[path] == nil {
                 currentTraces[path] = traces.count
                 traces.append(Trace(path: path))
@@ -145,7 +153,8 @@ final class UsageCopyLedger {
                 return Contribution(usage: value.usage, model: sample.model, tier: sample.tier,
                     requestInput: sample.requestInput, timestamp: sample.timestampText,
                     sampledAt: sample.timestamp,
-                    dailyOwner: weekly ? nil : value.path, weeklyOwner: weekly ? value.path : nil)
+                    dailyOwner: weekly ? nil : value.path, weeklyOwner: weekly ? value.path : nil,
+                    billingClass: sample.billingClass)
             }
         }
     }
@@ -163,9 +172,9 @@ final class UsageCopyLedger {
 
     func observe(key: Data, current: TokenUsage, delta: TokenUsage?, continuing: Bool,
                  model: String?, tier: String?, requestInput: Int64?, timestamp: Date, timestampText: String?,
-                 today: Bool, inWeeklyWindow: Bool) {
+                 today: Bool, inWeeklyWindow: Bool, billingClass: AutoReviewBillingClass = .regular) {
         let sample = Sample(usage: current, timestamp: timestamp, timestampText: timestampText,
-                            model: model, tier: tier, requestInput: requestInput)
+                            model: model, tier: tier, requestInput: requestInput, billingClass: billingClass)
         daily.observe(key: key, sample: sample, delta: delta, path: path, continuing: continuing, include: today)
         if trackWeekly && isWeeklySource {
             weekly.observe(key: key, sample: sample, delta: delta, path: path, continuing: continuing, include: inWeeklyWindow)

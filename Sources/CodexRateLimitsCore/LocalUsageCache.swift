@@ -71,6 +71,7 @@ struct LocalUsageFileState: Codable {
     var activeSessionId: String?
     var currentModel: String?
     var currentServiceTier: String?
+    var sessionBillingContext: SessionBillingContext?
     var totals = TokenUsage()
     var dailyCost: TokenCostAccumulator?
     var weeklyCost: TokenCostAccumulator?
@@ -84,6 +85,17 @@ struct LocalUsageFileState: Codable {
 
     var requiresCostRebuild: Bool {
         dailyCost?.requiresRepricing == true || weeklyCost?.requiresRepricing == true
+    }
+
+    var requiresCopyRebuild: Bool {
+        if copyAlgorithmVersion == UsageCopyLedger.currentVersion { return false }
+        // Version 2 only changes safety-check source reconciliation. Version 1
+        // histories without that exact model remain compatible until changed.
+        if copyAlgorithmVersion == 1 {
+            return AutoReviewBillingPolicy.matches(currentModel)
+                || dailyCost?.hasAutoReviewUsage == true || weeklyCost?.hasAutoReviewUsage == true
+        }
+        return true
     }
 
     var requiresBlankLineReplay: Bool {

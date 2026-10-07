@@ -27,7 +27,7 @@ Keep `CodexBackend` thin and implementations internal. `RefreshCoordinator` owns
 
 ## Statistics & Compatibility
 
-Keep API-equivalent costs, estimated Codex credits, and official balances distinct. Unknown models remain unpriced unless explicitly configured; never infer prices from name prefixes. Daily totals span selected local homes; weekly observations belong to the active account. Preserve cache compatibility, valid observation baselines, and CLI/MCP contracts when changing behavior.
+Keep API-equivalent costs, estimated Codex credits, and official balances distinct. Unknown models remain unpriced unless explicitly configured; never infer prices from name prefixes. Free safety checks require guardian metadata and per-call Codex product evidence; retain raw tokens and separate API applicability from credit exemption. Daily totals span selected local homes; weekly observations belong to the active account. Preserve cache compatibility, valid observation baselines, and CLI/MCP contracts when changing behavior.
 
 ## Testing Guidelines
 

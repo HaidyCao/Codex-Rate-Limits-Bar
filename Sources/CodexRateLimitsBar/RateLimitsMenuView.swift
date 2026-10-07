@@ -57,6 +57,7 @@ class RateLimitsDrawingView: NSView {
         toolTip = AppText.refreshDetails(freshness) + "\n" + AppText.officialCreditsBalance(credits) + "\n" + AppText.costEstimateDisclaimer
             + "\n" + AppText.weeklyValuationDetails(weeklyQuotaCost?.valuation)
             + (AppText.unpricedUsageDetails(weeklyQuotaCost?.unpricedUsage).map { "\n" + $0 } ?? "")
+            + (AppText.autoReviewDetails(weeklyQuotaCost?.autoReviewUsage).map { "\n" + $0 } ?? "")
             + ((weeklyQuotaCost?.unpricedModels?.isEmpty == false) ? "\n" + (weeklyQuotaCost?.unpricedModels?.joined(separator: ", ") ?? "") : "")
         needsDisplay = true
     }

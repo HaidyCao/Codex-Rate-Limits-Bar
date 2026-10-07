@@ -27,8 +27,14 @@ struct WeeklyCostBucket: Codable, Sendable {
     var assumedAPITokens: Int64 = 0
     var uncertainCreditTokens: Int64 = 0
     var incompleteBreakdownTokens: Int64? = nil
+    var exemptTokens: Int64? = nil
 
-    mutating func add(usage: TokenUsage, model: String?, requestInput: Int64?, tier: String?) {
+    mutating func add(usage: TokenUsage, model: String?, requestInput: Int64?, tier: String?,
+                      billingClass: AutoReviewBillingClass = .regular) {
+        if billingClass == .freeSafetyCheck {
+            exemptTokens = (exemptTokens ?? 0) + usage.totalTokens
+            return
+        }
         if let value = TokenCostEstimator.estimateUSD(usage: usage, model: model, requestInputTokens: requestInput) {
             costUSD += value
         } else {
@@ -49,6 +55,7 @@ struct WeeklyCostBucket: Codable, Sendable {
         unpricedTokens += other.unpricedTokens
         assumedAPITokens += other.assumedAPITokens
         uncertainCreditTokens += other.uncertainCreditTokens
+        if let value = other.exemptTokens { exemptTokens = (exemptTokens ?? 0) + value }
         if let incomplete = other.incompleteBreakdownTokens {
             incompleteBreakdownTokens = (incompleteBreakdownTokens ?? 0) + incomplete
         }

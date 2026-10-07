@@ -126,7 +126,8 @@ for line in sys.stdin:
             responses = [json.loads(line) for line in run("mcp", input="".join(json.dumps(m) + "\n" for m in messages)).splitlines()]
             return json.loads(next(r for r in responses if r.get("id") == 2)["result"]["content"][0]["text"])
 
-        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard", breakdown=True, usage=None):
+        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard", breakdown=True, usage=None,
+                        review=False, quota=False):
             context = {"model": model}
             info = {"total_token_usage": dict(usage) if usage is not None else {"input_tokens": 1000, "total_tokens": 1000}}
             if not breakdown:
@@ -139,6 +140,11 @@ for line in sys.stdin:
                 {"payload": context, "timestamp": timestamp, "type": "turn_context"},
                 {"payload": {"info": info, "type": "token_count"}, "timestamp": timestamp, "type": "event_msg"},
             ]
+            if review:
+                events[0]["payload"].update(model_provider="openai", source={"subagent": {"other": "guardian"}})
+            if quota:
+                events[2]["payload"]["rate_limits"] = {"limit_id": "codex", "plan_type": None,
+                    "primary": {"used_percent": 20, "window_minutes": 300}}
             # Default separators contain legal spaces; root type follows payload.
             data = "".join(json.dumps(event) + "\n" for event in events)
             (sessions / "usage.jsonl").write_text(data)
@@ -170,6 +176,7 @@ for line in sys.stdin:
                 assert bool(value["freshness"].get("dataAtIso")) == (phase != "failed")
                 for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits", "pricing", "unpricedUsage"]:
                     assert comparable(value[key]) == comparable(direct[key]), (key, value[key], direct[key])
+                assert value.get("autoReviewUsage") == direct.get("autoReviewUsage")
                 daily_display = lambda item: {key: text for key, text in item["display"].items() if key != "weeklyQuotaCostLabel"}
                 assert daily_display(value) == daily_display(direct)
                 assert value["pricing"]["basis"] == "current-rates"
@@ -206,6 +213,55 @@ for line in sys.stdin:
         assert len(complete["topFiles"][0]["sourceFiles"]) == 2
         assert "Purchased-credit equivalent" in complete["display"]["estimatedCreditsLabel"]
         assert not complete["display"].get("unpricedSummaryLabel")
+
+        write_usage(model="codex-auto-review", review=True, quota=True)
+        free = check_shared_status("complete", "auto-review-free")
+        assert free["totalTokens"] == 1000
+        assert free["todayCost"].get("estimatedCostUSD") is None
+        assert free["todayCost"]["notApplicableTokens"] == 1000
+        assert free["todayCost"]["unpricedTokens"] == 0
+        assert free["todayCredits"]["estimatedCredits"] == 0
+        assert free["todayCredits"]["exemptTokens"] == free["todayCredits"]["pricedTokens"] == 1000
+        assert free["autoReviewUsage"]["freeTokens"] == 1000
+        assert free["autoReviewUsage"]["policy"] == "chatgpt-auto-review-v1"
+        assert "11481834" in free["autoReviewUsage"]["policyURL"]
+        assert not free["unpricedUsage"]
+        assert "API N/A" in free["display"]["pricingCoverageLabel"]
+        assert free["display"]["autoReviewSummaryLabel"] == "Free safety checks: 1K tokens"
+
+        write_usage(model="codex-auto-review", review=True)
+        unverified = check_shared_status("complete", "auto-review-unverified")
+        assert unverified["totalTokens"] == 1000
+        assert unverified["todayCredits"].get("estimatedCredits") is None
+        assert unverified["todayCredits"]["unpricedTokens"] == 1000
+        assert unverified["autoReviewUsage"]["freeTokens"] == 0
+        assert unverified["autoReviewUsage"]["unverifiedTokens"] == 1000
+        assert {item["reason"] for item in unverified["unpricedUsage"]} == {"autoReviewContextUnverified"}
+
+        # Same-name free and unverified events share raw model buckets while
+        # retaining their independent pricing classifications.
+        free_path = sessions / "free-review.jsonl"
+        pending_path = sessions / "pending-review.jsonl"
+        write_usage(model="codex-auto-review", review=True, quota=True, usage={"input_tokens": 300, "total_tokens": 300})
+        free_path.write_text((sessions / "usage.jsonl").read_text().replace("fixture-session", "free-review"))
+        write_usage(model="codex-auto-review", review=True, usage={"input_tokens": 100, "total_tokens": 100})
+        pending_path.write_text((sessions / "usage.jsonl").read_text().replace("fixture-session", "pending-review"))
+        write_usage(model="gpt-6.1-sol")
+        mixed = check_shared_status("complete", "auto-review-mixed")
+        assert mixed["totalTokens"] == 1400
+        assert abs(mixed["todayCost"]["estimatedCostUSD"] - 0.002) < 1e-12
+        assert abs(mixed["todayCredits"]["estimatedCredits"] - 0.05) < 1e-12
+        assert mixed["todayCost"]["pricedTokens"] == 1000
+        assert mixed["todayCost"]["notApplicableTokens"] == 300
+        assert mixed["todayCost"]["unpricedTokens"] == 100
+        assert mixed["todayCredits"]["pricedTokens"] == 1300
+        assert mixed["todayCredits"]["exemptTokens"] == 300
+        assert mixed["todayCredits"]["unpricedTokens"] == 100
+        assert abs(mixed["todayCost"]["coveragePercent"] - 100000 / 1100) < 1e-10
+        assert abs(mixed["todayCredits"]["coveragePercent"] - 130000 / 1400) < 1e-10
+        for path in [free_path, pending_path]:
+            path.unlink()
+        write_usage()
 
         # Four requests with separate causes; API and credit coverage share a
         # denominator but cannot be added. Missing mode remains an assumption.

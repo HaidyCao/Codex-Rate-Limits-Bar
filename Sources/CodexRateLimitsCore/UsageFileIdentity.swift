@@ -21,6 +21,12 @@ struct UsageFileStamp: Codable, Equatable {
 
 enum UsageFileIdentity {
     static func sessionID(at url: URL) throws -> String? {
+        guard let payload = try sessionMetadata(at: url) else { return nil }
+        let id = ((payload["id"] as? String) ?? (payload["session_id"] as? String))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    static func sessionMetadata(at url: URL) throws -> [String: Any]? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var line = Data()
@@ -39,8 +45,7 @@ enum UsageFileIdentity {
                 guard let event = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
                       event["type"] as? String == "session_meta", let payload = event["payload"] as? [String: Any]
                 else { return nil }
-                let id = ((payload["id"] as? String) ?? (payload["session_id"] as? String))?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return id.flatMap { $0.isEmpty ? nil : $0 }
+                return payload
             }
             line.append(chunk[start...])
         }
