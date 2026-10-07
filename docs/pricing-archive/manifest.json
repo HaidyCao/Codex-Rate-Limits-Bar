@@ -1,0 +1,233 @@
+{
+  "schemaVersion": 1,
+  "scope": "repository-configuration",
+  "sourcePath": "Sources/CodexRateLimitsCore/Resources/pricing.json",
+  "current": "api-2026-10-07.1_credits-2026-10-06.3",
+  "snapshots": [
+    {
+      "id": "api-2026-09-12.1_credits-2026-09-12.1",
+      "file": "cards/api-2026-09-12.1_credits-2026-09-12.1.json",
+      "sha256": "b06deb108ff403341ced8e4b6379c89c5fc020aff28f0ea31c75eccf019760ce",
+      "sourceCommit": "c06dea9a663944163e3ae22096f61ff37631cec8",
+      "archivedOn": "2026-10-07",
+      "repositoryEvidence": [
+        "docs/pricing.md",
+        "TODO.md"
+      ],
+      "api": {
+        "version": "2026-09-12.1",
+        "verifiedAt": "2026-09-12",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://developers.openai.com/api/docs/pricing",
+            "https://developers.openai.com/api/docs/models/gpt-6-astra"
+          ],
+          "summary": "Initial committed configuration. Preserved as repository evidence; no new price review was performed during archival."
+        }
+      },
+      "credits": {
+        "version": "2026-09-12.1",
+        "verifiedAt": "2026-09-12",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://help.openai.com/en/articles/11481834-chatgpt-rate-card-business-enterpriseedu-credit-based-pricing",
+            "https://learn.chatgpt.com/docs/agent-configuration/speed",
+            "https://help.openai.com/en/articles/20001415"
+          ],
+          "summary": "Initial committed credit configuration, including the original context and cache-write assumptions. These were later revised; this is not a historical invoice rate."
+        }
+      }
+    },
+    {
+      "id": "api-2026-09-23.1_credits-2026-09-23.1",
+      "file": "cards/api-2026-09-23.1_credits-2026-09-23.1.json",
+      "sha256": "904f01a32e1a29dafc9c249aed452e68dd91cb716cc82eb1574d289165f5bc7c",
+      "sourceCommit": "7c79417e9f2a4409aa81ac220866fff5fb497047",
+      "archivedOn": "2026-10-07",
+      "repositoryEvidence": [
+        "docs/pricing.md",
+        "TODO.md"
+      ],
+      "api": {
+        "version": "2026-09-23.1",
+        "verifiedAt": "2026-09-23",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://developers.openai.com/api/docs/pricing",
+            "https://developers.openai.com/api/docs/models/gpt-6-astra",
+            "https://developers.openai.com/api/docs/models/gpt-6-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-luna"
+          ],
+          "summary": "Committed GPT-6 Sol/Luna configuration. Base prices for other retained models were carried forward; archival does not independently verify them."
+        }
+      },
+      "credits": {
+        "version": "2026-09-23.1",
+        "verifiedAt": "2026-09-23",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://learn.chatgpt.com/docs/pricing",
+            "https://learn.chatgpt.com/docs/agent-configuration/speed"
+          ],
+          "summary": "Committed Sol/Luna credit configuration. Older Fast multipliers and accounting assumptions remain here exactly as committed, including rules later corrected."
+        }
+      }
+    },
+    {
+      "id": "api-2026-10-06.1_credits-2026-10-06.3",
+      "file": "cards/api-2026-10-06.1_credits-2026-10-06.3.json",
+      "sha256": "da7c63ca5ea0df23f27bd164b80a9f10b6ef19422b235e70eaa756129c8ad477",
+      "sourceCommit": "f8c9368344bad3d1d3e8955dbb8be77099e6867c",
+      "archivedOn": "2026-10-07",
+      "repositoryEvidence": [
+        "docs/pricing.md",
+        "TODO.md"
+      ],
+      "api": {
+        "version": "2026-10-06.1",
+        "verifiedAt": "2026-10-06",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "recorded-review",
+          "reviewedOn": "2026-10-06",
+          "sources": [
+            "https://developers.openai.com/api/docs/pricing",
+            "https://developers.openai.com/api/docs/models/gpt-6-astra",
+            "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-luna"
+          ],
+          "summary": "Recorded October 6 review added exact GPT-6.1 Sol prices and its 272K API tier. The reviewed current-model scope and retained historical bases are distinguished in docs/pricing.md."
+        }
+      },
+      "credits": {
+        "version": "2026-10-06.3",
+        "verifiedAt": "2026-10-06",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "recorded-review",
+          "reviewedOn": "2026-10-06",
+          "sources": [
+            "https://learn.chatgpt.com/docs/pricing",
+            "https://learn.chatgpt.com/docs/agent-configuration/speed"
+          ],
+          "summary": "Recorded October 6 review corrected purchased-credit Fast to 2x and Astra Ultrafast to 6x; positive cache writes and selected long contexts remain unpriced. Version .3 also clarifies scope. Development versions .1/.2 were not separately committed full snapshots."
+        }
+      }
+    },
+    {
+      "id": "api-2026-10-06.2_credits-2026-10-06.3",
+      "file": "cards/api-2026-10-06.2_credits-2026-10-06.3.json",
+      "sha256": "d3d8aa7e58f7deff4b77323e7f7dc90eba3c4489d6d99be7c72bb9d0067bf5d8",
+      "sourceCommit": "3e9852999eda3ca87d24cc1382f1e1374e44d464",
+      "archivedOn": "2026-10-07",
+      "repositoryEvidence": [
+        "docs/pricing.md",
+        "TODO.md"
+      ],
+      "api": {
+        "version": "2026-10-06.2",
+        "verifiedAt": "2026-10-06",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "recorded-review",
+          "reviewedOn": "2026-10-06",
+          "sources": [
+            "https://developers.openai.com/api/docs/pricing",
+            "https://developers.openai.com/api/docs/models/gpt-6-astra",
+            "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-luna",
+            "https://developers.openai.com/api/docs/guides/prompt-caching",
+            "https://developers.openai.com/api/docs/models/gpt-5.5",
+            "https://developers.openai.com/api/docs/models/gpt-5.4"
+          ],
+          "summary": "Recorded TODO-24 review sets GPT-5.5/5.4 cache writes to ordinary input rates. Later models retain their explicit write premium; input components are mutually exclusive. Cyber still has the old 272K cap in this snapshot."
+        }
+      },
+      "credits": {
+        "version": "2026-10-06.3",
+        "verifiedAt": "2026-10-06",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://learn.chatgpt.com/docs/pricing",
+            "https://learn.chatgpt.com/docs/agent-configuration/speed"
+          ],
+          "summary": "Unchanged credit card carried from f8c9368. TODO-24 reviewed API cache writes only; it does not establish Codex credit write charges."
+        }
+      }
+    },
+    {
+      "id": "api-2026-10-07.1_credits-2026-10-06.3",
+      "file": "cards/api-2026-10-07.1_credits-2026-10-06.3.json",
+      "sha256": "60239d944fd8ec98130972e3ba077f0486b187280142620470e89a08edf29928",
+      "sourceCommit": "d5248e6066bd8eb69a676b7c3b318d1520ff7add",
+      "archivedOn": "2026-10-07",
+      "repositoryEvidence": [
+        "docs/pricing.md",
+        "TODO.md"
+      ],
+      "api": {
+        "version": "2026-10-07.1",
+        "verifiedAt": "2026-10-07",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "recorded-review",
+          "reviewedOn": "2026-10-07",
+          "sources": [
+            "https://developers.openai.com/api/docs/pricing",
+            "https://developers.openai.com/api/docs/models/gpt-6-astra",
+            "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-sol",
+            "https://developers.openai.com/api/docs/models/gpt-6-luna",
+            "https://developers.openai.com/api/docs/guides/prompt-caching",
+            "https://developers.openai.com/api/docs/models/gpt-5.5",
+            "https://developers.openai.com/api/docs/models/gpt-5.4",
+            "https://developers.openai.com/api/docs/models/gpt-5.6-cyber",
+            "https://developers.openai.com/api/docs/models/gpt-daybreak-red-latest"
+          ],
+          "summary": "Recorded TODO-25 review uses the Cyber model page: above 272K request input, input/cache rates are 2x and output is 1.5x. The general price table still had blank Cyber long-context cells. This source discrepancy is retained; the deprecated Daybreak Red alias keeps its explicit Cyber mapping."
+        }
+      },
+      "credits": {
+        "version": "2026-10-06.3",
+        "verifiedAt": "2026-10-06",
+        "effectiveFrom": null,
+        "effectiveTo": null,
+        "evidence": {
+          "kind": "configuration-only",
+          "reviewedOn": null,
+          "sources": [
+            "https://learn.chatgpt.com/docs/pricing",
+            "https://learn.chatgpt.com/docs/agent-configuration/speed"
+          ],
+          "summary": "Unchanged credit card carried from f8c9368. Cyber API evidence does not establish a purchased-credit long-context multiplier or cache-write charge."
+        }
+      }
+    }
+  ]
+}

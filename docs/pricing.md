@@ -327,7 +327,9 @@ tests the committed policy; a passing run cannot establish current online prices
    independent `PricingReleaseTests` expectations together. Update only the
    affected card versions. Put published effective/expiry dates in the policy
    record only when established; review reminders must not schedule price changes.
-5. Run isolated pricing tests and `make verify`. For rate/calculation/cache
+5. Run isolated pricing tests, then preserve the committed card and its review
+   using the [archive procedure](pricing-archive/README.md#add-a-reviewed-configuration).
+   Run `make verify` with the matching archive. For rate/calculation/cache
    changes also run the scanner migration/restart/rebuild/rollback cases and
    `make benchmark BENCHMARK_MIB=256`; confirm official observations survive.
    Inspect menu renders if presentation changes. Never regenerate expected
@@ -435,6 +437,23 @@ steps, not separate published releases. The baseline before TODO-17 was
 `2026-09-23.1` at `7c79417`; before TODO-24 it was API `2026-10-06.1` and
 credits `2026-10-06.3` at `32a0f75`. Before TODO-25 it was API `2026-10-06.2`
 and credits `2026-10-06.3` at `3e98529`.
+
+### Repository archive (TODO-26)
+
+TODO-25 was committed as `d5248e6`. The [price archive](pricing-archive/README.md)
+preserves five complete committed configurations, including that revision,
+with byte hashes, exact Git provenance and summaries of existing reviews.
+It distinguishes configuration records from reviewed subsets. Both products'
+official effective periods remain unknown; `verifiedAt` is never promoted to a
+billing start date. Intermediate uncommitted revisions are not reconstructed.
+
+`make verify-pricing-archive` checks the independent manifest and source resource
+offline; `make verify-pricing` also validates every archived card with the current
+Swift parser and compares the built-in export. These checks neither fetch prices
+nor establish whether a policy is still current. The app does not read the archive,
+and current-rate calculations, custom configuration, price schema and cache
+compatibility are unchanged. Follow the archive's add/review/rollback procedure
+when committing a future price revision.
 
 ## Document and model rules
 

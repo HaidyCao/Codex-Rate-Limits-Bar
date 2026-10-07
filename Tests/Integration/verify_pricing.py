@@ -10,6 +10,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "Support"))
 from verification_support import isolated_environment, run_checked
+from verify_pricing_archive import ARCHIVE, REPOSITORY, SOURCE_PATH, read_document, validate_archive
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
         # future implementation accidentally introduces it into this command.
         policy = ('(version 1)(allow default)(deny network*)'
                   '(deny file-read* (subpath ' + json.dumps(str(profile)) + '))'
+                  '(deny file-write* (subpath ' + json.dumps(str(ARCHIVE)) + '))'
                   '(deny file-write* (subpath ' + json.dumps(str(root)) + '))')
 
         def tree():
@@ -43,6 +45,12 @@ def main():
             return json.loads(result.stdout)
 
         builtin = run("--export-builtin")
+        archived = validate_archive()
+        for identifier, path, document in archived:
+            metadata = run("--validate", path)
+            for kind in ("api", "credits"):
+                assert metadata[kind]["version"] == document[kind]["version"], identifier
+        assert builtin == read_document(REPOSITORY / SOURCE_PATH), "Built app must match the current archived resource"
         report = run("--health")
         assert report["schemaVersion"] == 1
         assert report["configurationStatus"] == "valid" and report["active"]["source"] == "builtin"
@@ -125,7 +133,7 @@ def main():
         assert not report["credits"]["rateDifferences"]
         run("--health", candidate, "unexpected", fails=True)
 
-    print("Pricing health verification passed: coverage, overrides, selection, fallback, recovery and read-only isolation.")
+    print(f"Pricing health verification passed: {len(archived)} archived cards, coverage, overrides, selection, fallback, recovery and read-only isolation.")
 
 
 if __name__ == "__main__":

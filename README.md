@@ -196,6 +196,9 @@ missing window or balance. With no weekly estimate, the menu reports it unavaila
 offline report lists missing models/modes, aliases, intentional rate differences
 and policy review dates. Differences do not invalidate or overwrite valid custom
 prices. See the [maintenance checklist](docs/pricing.md#release-maintenance-checklist).
+Committed cards and recorded review evidence are preserved in the
+[repository price archive](docs/pricing-archive/README.md). It is independent of
+runtime estimates; unknown official effective dates remain unset.
 
 `unpricedUsage` lists raw model/mode names, reasons, token counts and percentages,
 separately for API and credits. The weekly estimate has its own scoped list.
@@ -362,6 +365,7 @@ For isolated regression checks:
 
 ```sh
 make verify             # Swift, CLI/MCP, actual AppKit views, relocated app resources
+make verify-pricing-archive # Offline archive integrity and corruption regressions; Python only
 make verify-local-usage # CLI/MCP fixtures only
 make benchmark          # Synthetic 256 MiB log; no real sessions
 make verify-live        # Explicit opt-in: query the current real Codex account
