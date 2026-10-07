@@ -69,6 +69,17 @@ def git_bytes(root, commit, path):
     return result.stdout
 
 
+def check_inventory(archive, directory, expected):
+    folder = archive / directory
+    require(not folder.is_symlink(), f"Symlink in {directory} directory")
+    actual = set()
+    for path in folder.rglob("*"):
+        require(not path.is_symlink(), f"Symlink in {directory} directory: {path.name}")
+        if path.is_file():
+            actual.add(path.relative_to(archive).as_posix())
+    require(actual == expected, f"{directory} inventory differs from manifest (unlisted or missing file)")
+
+
 def validate_archive(archive=ARCHIVE, builtin=REPOSITORY / SOURCE_PATH, git_root=None):
     """Return (snapshot id, file path, full card) after read-only consistency checks.
 
@@ -78,15 +89,19 @@ def validate_archive(archive=ARCHIVE, builtin=REPOSITORY / SOURCE_PATH, git_root
     archive, builtin = Path(archive).resolve(), Path(builtin)
     manifest = read_document(local_path(archive, "manifest.json"))
     fields(manifest, "schemaVersion scope sourcePath current snapshots", "manifest")
-    require(type(manifest["schemaVersion"]) is int and manifest["schemaVersion"] == 1,
+    schema = manifest["schemaVersion"]
+    require(type(schema) is int and schema in (1, 2),
             "Unsupported archive schema")
     require(manifest["scope"] == "repository-configuration", "Archive must describe repository configurations")
     require(manifest["sourcePath"] == SOURCE_PATH, "Unexpected source path")
     require(isinstance(manifest["snapshots"], list) and manifest["snapshots"], "No archived snapshots")
     require(isinstance(manifest["current"], str), "Invalid current snapshot")
     seen_ids, seen_hashes, seen_commits, versions, expected_files, results = set(), set(), set(), {}, set(), []
+    expected_evidence = set()
     for entry in manifest["snapshots"]:
-        fields(entry, "id file sha256 sourceCommit archivedOn repositoryEvidence api credits", "snapshot")
+        content_snapshot = schema == 2 and isinstance(entry, dict) and entry.get("sourceCommit") is None
+        fields(entry, "id file sha256 sourceCommit archivedOn repositoryEvidence api credits"
+               + (" evidenceFiles" if content_snapshot else ""), "snapshot")
         identifier = entry["id"]
         require(isinstance(identifier, str) and re.fullmatch(r"api-[0-9.\-]+_credits-[0-9.\-]+", identifier),
                 "Invalid snapshot id")
@@ -100,13 +115,29 @@ def validate_archive(archive=ARCHIVE, builtin=REPOSITORY / SOURCE_PATH, git_root
         require(digest not in seen_hashes, f"Duplicate card content: {identifier}")
         seen_hashes.add(digest)
         commit = entry["sourceCommit"]
-        require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit), f"Invalid commit: {identifier}")
-        require(commit not in seen_commits, f"Duplicate source commit: {identifier}")
-        seen_commits.add(commit)
+        if not content_snapshot:
+            require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit), f"Invalid commit: {identifier}")
+            require(commit not in seen_commits, f"Duplicate source commit: {identifier}")
+            seen_commits.add(commit)
         archived = valid_date(entry["archivedOn"], identifier)
         strings(entry["repositoryEvidence"], "repository evidence")
         for evidence_path in entry["repositoryEvidence"]:
             require(evidence_path in ("docs/pricing.md", "TODO.md"), f"Unsupported evidence path: {evidence_path}")
+        if content_snapshot:
+            evidence_files = entry["evidenceFiles"]
+            require(isinstance(evidence_files, dict)
+                    and set(evidence_files) == set(entry["repositoryEvidence"]) == {"docs/pricing.md", "TODO.md"},
+                    f"Evidence inventory mismatch: {identifier}")
+            for source, captured in evidence_files.items():
+                fields(captured, "file sha256", "captured evidence")
+                relative = f"evidence/{identifier}/{source.replace('/', '__')}.txt"
+                require(captured["file"] == relative, f"Evidence path mismatch: {identifier}")
+                evidence_path = local_path(archive, relative)
+                raw = evidence_path.read_bytes()
+                require(hashlib.sha256(raw).hexdigest() == captured["sha256"],
+                        f"Evidence SHA-256 mismatch: {identifier}/{source}")
+                require(raw.decode("utf-8").strip(), f"Empty evidence: {identifier}/{source}")
+                expected_evidence.add(relative)
         document = read_document(path)
         fields(document, "schemaVersion api credits", identifier)
         require(type(document["schemaVersion"]) is int and document["schemaVersion"] == 1,
@@ -123,7 +154,7 @@ def validate_archive(archive=ARCHIVE, builtin=REPOSITORY / SOURCE_PATH, git_root
             verified = valid_date(metadata["verifiedAt"], f"{identifier}/{kind}")
             require(verified <= archived, f"Verification after archival: {identifier}/{kind}")
             require(metadata["effectiveFrom"] is None and metadata["effectiveTo"] is None,
-                    "Archive v1 records unknown effective periods; do not infer them from review dates")
+                    "Archive records unknown effective periods; do not infer them from review dates")
             evidence = metadata["evidence"]
             fields(evidence, "kind reviewedOn sources summary", "evidence")
             require(evidence["kind"] in ("configuration-only", "recorded-review"), "Invalid evidence kind")
@@ -146,17 +177,13 @@ def validate_archive(archive=ARCHIVE, builtin=REPOSITORY / SOURCE_PATH, git_root
             versions[key] = card
         expected_id = f"api-{entry['api']['version']}_credits-{entry['credits']['version']}"
         require(identifier == expected_id, f"Version/id mismatch: {identifier}")
-        if git_root is not None:
+        if git_root is not None and not content_snapshot:
             require(git_bytes(git_root, commit, SOURCE_PATH) == path.read_bytes(), f"Git content mismatch: {identifier}")
             for evidence_path in entry["repositoryEvidence"]:
                 git_bytes(git_root, commit, evidence_path)
         results.append((identifier, path, document))
-    actual_files = set()
-    for path in (archive / "cards").rglob("*"):
-        require(not path.is_symlink(), f"Symlink in card directory: {path.name}")
-        if path.is_file():
-            actual_files.add(path.relative_to(archive).as_posix())
-    require(actual_files == expected_files, "Card inventory differs from manifest (unlisted or missing file)")
+    check_inventory(archive, "cards", expected_files)
+    check_inventory(archive, "evidence", expected_evidence)
     require(manifest["current"] in seen_ids, "Current snapshot is missing")
     current = next(path for identifier, path, _ in results if identifier == manifest["current"])
     require(current.read_bytes() == builtin.read_bytes(), "Current archive differs from bundled source bytes")
@@ -167,15 +194,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, default=ARCHIVE)
     parser.add_argument("--builtin", type=Path, default=REPOSITORY / SOURCE_PATH)
-    parser.add_argument("--git-root", type=Path, help="Also verify committed bytes in a local full-history checkout")
+    parser.add_argument("--git-root", type=Path, help="Also check entries with source commits in a local full-history checkout")
     args = parser.parse_args()
     try:
         results = validate_archive(args.archive, args.builtin, args.git_root)
+        entries = read_document(args.archive / "manifest.json")["snapshots"]
+        committed = sum(entry["sourceCommit"] is not None for entry in entries)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         print(f"Pricing archive verification failed: {error}", file=sys.stderr)
         return 1
-    print(f"Pricing archive verification passed: {len(results)} snapshots, hashes, evidence, versions and current resource"
-          + ("; Git provenance checked." if args.git_root else "; Git provenance not checked."))
+    print(f"Pricing archive verification passed: {len(results)} snapshots ({committed} with source commits, "
+          f"{len(results) - committed} content snapshots), hashes, evidence, versions and current resource"
+          + ("; recorded Git commits checked; content snapshots have no commit attribution."
+             if args.git_root else "; Git provenance not checked."))
     return 0
 
 

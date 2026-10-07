@@ -327,9 +327,10 @@ tests the committed policy; a passing run cannot establish current online prices
    independent `PricingReleaseTests` expectations together. Update only the
    affected card versions. Put published effective/expiry dates in the policy
    record only when established; review reminders must not schedule price changes.
-5. Run isolated pricing tests, then preserve the committed card and its review
+5. Run isolated pricing tests, then capture the card and its review
    using the [archive procedure](pricing-archive/README.md#add-a-reviewed-configuration).
-   Run `make verify` with the matching archive. For rate/calculation/cache
+   Run `make verify` with the matching archive before committing them together.
+   For rate/calculation/cache
    changes also run the scanner migration/restart/rebuild/rollback cases and
    `make benchmark BENCHMARK_MIB=256`; confirm official observations survive.
    Inspect menu renders if presentation changes. Never regenerate expected
@@ -454,6 +455,12 @@ nor establish whether a policy is still current. The app does not read the archi
 and current-rate calculations, custom configuration, price schema and cache
 compatibility are unchanged. Follow the archive's add/review/rollback procedure
 when committing a future price revision.
+
+TODO-27 adds archive schema v2 for future changes: a new content snapshot can
+record `sourceCommit: null` and hashed copies of the review documents. This
+removes the commit-hash dependency so prices, evidence and archive can pass full
+verification in the same uncommitted change. The five existing commit-based
+snapshots remain unchanged; content integrity does not imply Git attribution.
 
 ## Document and model rules
 

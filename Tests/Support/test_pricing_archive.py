@@ -1,4 +1,5 @@
 """Behavioral regressions for archive corruption and misleading provenance."""
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -29,6 +30,121 @@ class PricingArchiveTests(unittest.TestCase):
 
     def validate(self):
         return validate_archive(self.archive, self.builtin)
+
+    def addContentSnapshot(self):
+        """Prepare a new rate and its review in one uncommitted fixture tree."""
+        entry = copy.deepcopy(self.manifest["snapshots"][-1])
+        document = json.loads(self.builtin.read_text())
+        document["api"]["version"] = "2026-10-07.2"
+        document["api"]["models"]["gpt-6.1-sol"]["input"] = 3
+        entry["api"]["version"] = document["api"]["version"]
+        entry["id"] = f"api-{document['api']['version']}_credits-{document['credits']['version']}"
+        entry["file"] = f"cards/{entry['id']}.json"
+        raw = (json.dumps(document, indent=2) + "\n").encode()
+        (self.archive / entry["file"]).write_bytes(raw)
+        self.builtin.write_bytes(raw)
+        entry["sha256"] = hashlib.sha256(raw).hexdigest()
+        entry["sourceCommit"] = None
+        entry["evidenceFiles"] = {}
+        for source in entry["repositoryEvidence"]:
+            relative = f"evidence/{entry['id']}/{source.replace('/', '__')}.txt"
+            path = self.archive / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"Synthetic review of {entry['id']} in {source}; not official price evidence.\n")
+            entry["evidenceFiles"][source] = {"file": relative, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        self.manifest["schemaVersion"] = 2
+        self.manifest["snapshots"].append(entry)
+        self.manifest["current"] = entry["id"]
+        self.save()
+        return entry
+
+    def testPriceAndReviewCanValidateTogetherBeforeTheirFirstCommit(self):
+        entry = self.addContentSnapshot()
+        before = {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        result = self.validate()
+        self.assertEqual(result[-1][0], entry["id"])
+        self.assertIsNone(entry["sourceCommit"])
+        self.assertFalse((self.root / ".git").exists())
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
+
+    def testCapturedReviewCannotChangeAfterArchival(self):
+        entry = self.addContentSnapshot()
+        path = self.archive / entry["evidenceFiles"]["docs/pricing.md"]["file"]
+        path.write_text("Different conclusion\n")
+        with self.assertRaisesRegex(ValueError, "Evidence SHA-256 mismatch"):
+            self.validate()
+
+    def testUncommittedSnapshotRequiresCompleteCapturedEvidence(self):
+        entry = self.addContentSnapshot()
+        del entry["evidenceFiles"]["TODO.md"]
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Evidence inventory mismatch"):
+            self.validate()
+
+    def testLegacySchemaCannotSilentlyLoseCommitProvenance(self):
+        self.manifest["snapshots"][0]["sourceCommit"] = None
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Invalid commit"):
+            self.validate()
+
+    def testVersionTwoRetainsCommitRequirementsForHistoricalEntries(self):
+        self.addContentSnapshot()
+        self.manifest["snapshots"][0]["sourceCommit"] = "not-a-commit"
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Invalid commit"):
+            self.validate()
+
+    def testCapturedEvidenceRejectsMissingFilesSymlinksAndCrossSnapshotPaths(self):
+        entry = self.addContentSnapshot()
+        captured = entry["evidenceFiles"]["TODO.md"]
+        path = self.archive / captured["file"]
+        original = path.read_bytes()
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "Missing archive file"):
+            self.validate()
+        outside = self.root / "review.txt"
+        outside.write_bytes(original)
+        path.symlink_to(outside)
+        with self.assertRaisesRegex(ValueError, "Symlink"):
+            self.validate()
+        path.unlink()
+        path.write_bytes(original)
+        captured["file"] = "../review.txt"
+        self.save()
+        with self.assertRaisesRegex(ValueError, "Evidence path mismatch"):
+            self.validate()
+
+    def testUnlistedEvidenceIsRejected(self):
+        entry = self.addContentSnapshot()
+        (self.archive / f"evidence/{entry['id']}/extra.txt").write_text("Unlisted review")
+        with self.assertRaisesRegex(ValueError, "evidence inventory differs"):
+            self.validate()
+
+    def testContentSnapshotSurvivesNewerReviewAndRollback(self):
+        self.addContentSnapshot()
+        # The working documents can evolve; the archived review must stay frozen.
+        (self.root / "TODO.md").write_text("A later working review\n")
+        self.validate()
+        old = self.manifest["snapshots"][0]
+        self.manifest["current"] = old["id"]
+        self.builtin.write_bytes((self.archive / old["file"]).read_bytes())
+        self.save()
+        result = self.validate()
+        self.assertEqual(len(result), len(self.manifest["snapshots"]))
+
+    def testCLIReportsContentIntegrityWithoutClaimingGitProvenance(self):
+        entry = self.addContentSnapshot()
+        # A source-only fixture has no .git, and needs no invented commit hash.
+        for older in self.manifest["snapshots"][:-1]:
+            (self.archive / older["file"]).unlink()
+        self.manifest["snapshots"] = [entry]
+        self.save()
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "Integration/verify_pricing_archive.py"),
+                                 "--archive", str(self.archive), "--builtin", str(self.builtin)],
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("0 with source commits, 1 content snapshots", result.stdout)
+        self.assertIn("Git provenance not checked", result.stdout)
 
     def testValidArchiveIsReadOnlyAndKeepsUnknownEffectiveDates(self):
         before = {str(p): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}

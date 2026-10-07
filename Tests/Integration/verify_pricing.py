@@ -51,6 +51,31 @@ def main():
             for kind in ("api", "credits"):
                 assert metadata[kind]["version"] == document[kind]["version"], identifier
         assert builtin == read_document(REPOSITORY / SOURCE_PATH), "Built app must match the current archived resource"
+
+        # Capture a review before its commit exists, then use the native parser
+        # without selecting the candidate as the user's active configuration.
+        content_archive = root / "candidate-archive"
+        manifest = read_document(ARCHIVE / "manifest.json")
+        entry = copy.deepcopy(next(e for e in manifest["snapshots"] if e["id"] == manifest["current"]))
+        entry["sourceCommit"] = None
+        entry["evidenceFiles"] = {}
+        card_file = content_archive / entry["file"]
+        card_file.parent.mkdir(parents=True)
+        card_file.write_bytes((REPOSITORY / SOURCE_PATH).read_bytes())
+        for source in entry["repositoryEvidence"]:
+            relative = f"evidence/{entry['id']}/{source.replace('/', '__')}.txt"
+            evidence_file = content_archive / relative
+            evidence_file.parent.mkdir(parents=True, exist_ok=True)
+            evidence_file.write_bytes((REPOSITORY / source).read_bytes())
+            entry["evidenceFiles"][source] = {"file": relative, "sha256": hashlib.sha256(evidence_file.read_bytes()).hexdigest()}
+        manifest.update(schemaVersion=2, snapshots=[entry])
+        (content_archive / "manifest.json").write_text(json.dumps(manifest))
+        assert len(validate_archive(content_archive, REPOSITORY / SOURCE_PATH)) == 1
+        metadata = run("--validate", card_file)
+        for kind in ("api", "credits"):
+            assert metadata[kind]["version"] == builtin[kind]["version"]
+        assert run("--export") == builtin, "Content archive validation must not activate a custom card"
+
         report = run("--health")
         assert report["schemaVersion"] == 1
         assert report["configurationStatus"] == "valid" and report["active"]["source"] == "builtin"
@@ -133,7 +158,7 @@ def main():
         assert not report["credits"]["rateDifferences"]
         run("--health", candidate, "unexpected", fails=True)
 
-    print(f"Pricing health verification passed: {len(archived)} archived cards, coverage, overrides, selection, fallback, recovery and read-only isolation.")
+    print(f"Pricing health verification passed: {len(archived)} archived cards, a pre-commit content snapshot, coverage, overrides, selection, fallback, recovery and read-only isolation.")
 
 
 if __name__ == "__main__":

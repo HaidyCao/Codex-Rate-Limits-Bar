@@ -1,7 +1,7 @@
 # Repository price archive
 
-This directory preserves committed **project configurations**, not an official
-billing history. The app does not load it. Existing estimates still use the
+This directory preserves **project configurations and review records**, not an
+official billing history. The app does not load it. Existing estimates still use the
 current bundled or explicitly selected custom card. No account data, credentials,
 personal custom cards, or captured website bodies are stored here.
 
@@ -23,16 +23,23 @@ separately committed full card; they are not reconstructed. Repeated credits
 versions must contain the same complete credit card. Known old mistakes remain
 in their original snapshots so reviewers can trace the corrections.
 
-Each entry records the original file SHA-256, full source commit, archive date,
-and repository evidence paths at that commit. `api` and `credits` separately
+Each entry records the original file SHA-256, archive date and evidence paths.
+Existing entries have a full `sourceCommit` identifying the original card and
+repository evidence. Archive schema v2 also accepts **content snapshots** with
+`sourceCommit: null` and fingerprinted copies of both review documents. This lets
+a new card, evidence and archive pass verification before being committed together;
+no future commit hash or intermediate failing commit is needed. A null commit
+means no recorded commit attribution, even after the files are committed.
+
+`api` and `credits` separately
 record their version, original `verifiedAt`, source links and a concise evidence
 summary. `configuration-only` preserves a configuration without claiming a new
 policy review. `recorded-review` summarizes an existing review documented at the
-source commit; `reviewedOn` is that review's date, not today's archive check.
+source commit or captured documents; `reviewedOn` is that review's date, not today's archive check.
 Carried-forward model prices are not implicitly reverified.
 
-`effectiveFrom` and `effectiveTo` are **null** for both products. The archive's v1
-contract deliberately accepts only unknown effective periods: archive, review,
+`effectiveFrom` and `effectiveTo` are **null** for both products. Both archive
+schemas deliberately accept only unknown effective periods: archive, review,
 commit and version dates cannot establish when an official price applied. Adding
 supported periods requires an explicit schema/design review. Credit prices and
 API equivalents remain separate; this data cannot reconstruct invoices.
@@ -41,6 +48,11 @@ Official source links are copied from the original cards and are not downloaded
 by the checks. They are live references, not frozen evidence of page contents.
 Summaries preserve the recorded findings and limitations, including the Cyber
 model-page/general-table disagreement. See the [policy review](../pricing.md).
+
+The existing manifest and five historical files remain in their original v1
+format. Adding the first content snapshot sets the manifest schema to 2; all
+existing entries retain their commits and unchanged bytes. Runtime price schema
+v1 is independent of this archive schema and does not change.
 
 ## Offline verification
 
@@ -54,9 +66,12 @@ python3 Tests/Integration/verify_pricing_archive.py --git-root .
 The first command needs neither a build nor Git history. It checks strict
 manifest fields, JSON duplicates, dates, evidence metadata, byte hashes, duplicate
 snapshots, per-product version conflicts, file inventory and the current source
-resource, then runs corruption regressions. It rejects symlink substitutions.
+resource, then runs corruption regressions. It rejects symlink substitutions,
+missing/modified review copies and unlisted evidence files.
 The optional second command additionally compares every card with its local
-Git blob and checks the cited repository documents exist at that commit. Missing
+Git blob and checks the cited repository documents exist at that commit, for
+entries with a `sourceCommit`. Content snapshots get integrity checks and are
+counted separately; they do not receive Git attribution. Missing
 history is a failure with a diagnostic; no fetch occurs automatically. A source
 archive or shallow checkout can run the first command without claiming Git proof.
 
@@ -70,28 +85,45 @@ commands checks whether a web page has changed or verifies an invoice.
 ## Add a reviewed configuration
 
 1. Review the relevant policy sources and update the bundled card, its versions,
-   tests and [pricing notes](../pricing.md). Preserve uncertainties and exact
-   model scope. Commit that reviewed configuration so it has a stable source
-   commit; use targeted pricing tests before that commit. Full verification will
-   fail until the matching archive is added in the follow-up change.
-2. Extract the complete file from that commit into `cards/` with the name
-   `api-VERSION_credits-VERSION.json`; preserve the original bytes. For example:
+   tests, [pricing notes](../pricing.md) and [TODO](../../TODO.md). Preserve
+   uncertainties and exact model scope. Finalize the review text before capturing
+   it; no commit is required yet.
+2. Copy the complete working price file into `cards/api-VERSION_credits-VERSION.json`
+   without reformatting it. For that identifier, copy `docs/pricing.md` and
+   `TODO.md` to `evidence/ID/docs__pricing.md.txt` and `evidence/ID/TODO.md.txt`.
+   These are raw UTF-8 repository document copies, not downloaded web pages.
+   Compute each file's original-byte hash with `shasum -a 256 FILE`.
+3. Set manifest `schemaVersion` to 2 and append an entry with `sourceCommit: null`.
+   Keep the existing entry fields, including both `repositoryEvidence` paths,
+   and add the following map (replace `ID` and hashes with actual values):
 
-   ```sh
-   git show d5248e6:Sources/CodexRateLimitsCore/Resources/pricing.json > /tmp/reviewed-pricing.json
-   shasum -a 256 /tmp/reviewed-pricing.json
-   git rev-parse d5248e6
+   ```json
+   "evidenceFiles": {
+     "docs/pricing.md": {
+       "file": "evidence/ID/docs__pricing.md.txt",
+       "sha256": "SHA256_OF_CAPTURED_PRICING_DOCUMENT"
+     },
+     "TODO.md": {
+       "file": "evidence/ID/TODO.md.txt",
+       "sha256": "SHA256_OF_CAPTURED_TODO"
+     }
+   }
    ```
 
-3. Append a manifest entry with that hash/commit and the **actual** archive date.
-   Copy both products' versions, `verifiedAt` and sources exactly; describe what
-   was reviewed versus inherited. Keep effective periods null, name the evidence
-   documents at that commit, and update `current` to the entry matching the source
-   resource. Update the inventory table above. Do not add duplicate copies merely
-   for unchanged commits, or rewrite existing archived bytes to fix old prices.
-4. Run both commands above and `make verify-pricing`; run full `make verify` for
-   the associated runtime/rate change. Commit the archive and maintenance notes.
-   Neither check updates the manifest or the user's active custom configuration.
+   Record the **actual** archive date and card hash. Copy both products' versions,
+   `verifiedAt` and sources exactly; describe reviewed versus inherited facts.
+   Keep effective periods null. Set `current` to the matching entry and update the
+   inventory table above. Existing commit-based entries do not add `evidenceFiles`.
+4. Run `make verify-pricing-archive`, optional local Git verification, and
+   `make verify-pricing`. For the associated runtime/rate change run full
+   `make verify` **before committing** the card, archive, evidence and notes together.
+   Re-capture documents if correcting that review before commit. Once accepted,
+   keep archived bytes immutable as working documents evolve. Do not invent a
+   commit hash, change old snapshots, or weaken a failed validation to publish.
+
+Historical backfills can still use a known commit and the original schema-v1
+entry shape, extracting bytes with `git show COMMIT:PATH`. The checks do not
+write files, change Git history, select custom prices, or update the manifest.
 
 ## Rollback
 

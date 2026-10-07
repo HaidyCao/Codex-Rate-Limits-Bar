@@ -21,7 +21,7 @@
 
 需要 macOS、Swift 6、Xcode 工具链及 Python 3，无第三方 Python 依赖。AppKit 离屏渲染仍需可用的 macOS 图形会话；没有图形会话的 CI 可以运行 `make test verify-pricing verify-local-usage verify-client-contracts verify-bundle` 和独立的性能任务。验证退出码非零即失败，子进程错误输出会保留。
 
-`make verify-pricing-archive` 单独运行只需 Python 3，可用于没有图形会话、构建产物或 Git 历史的环境。另运行 `python3 Tests/Integration/verify_pricing_archive.py --git-root .` 可核对本地完整历史中的原始卡与证据文档；缺历史会明确失败，不自动联网。归档校验不代表重新核实网页政策。字段、来源范围和维护步骤见[归档说明](pricing-archive/README.md)。
+`make verify-pricing-archive` 单独运行只需 Python 3，可用于没有图形会话、构建产物或 Git 历史的环境。另运行 `python3 Tests/Integration/verify_pricing_archive.py --git-root .` 可核对已关联提交的原始卡与证据文档；缺历史会明确失败，不自动联网。v2 内容快照没有提交归属，以原始字节及复核文档副本的指纹校验，两类来源在输出中分别计数。归档校验不代表重新核实网页政策。字段、来源范围和维护步骤见[归档说明](pricing-archive/README.md)。
 
 `make verify` 不再隐含真实账户检查；原来的现场读取已拆到 `make verify-live`。`CODEX_HOME`、`CODEX_BIN`、自定义价目表等调用者环境不会影响隔离样例。`verify-live` 则保留调用者环境；要与默认桌面应用的 `.codex` 来源一致，可执行 `env -u CODEX_HOME make verify-live`。
 
@@ -48,7 +48,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 不可读/缺失文件、非法 JSON、合法空白、未完成记录 | `ScannerCompletenessTests`、CLI/MCP 样例 |
 | 周金额稳定性、时间对齐、样本失效和重算 | `WeeklyQuotaEstimatorTests`、`WeeklyQuotaSamplingTests` |
 | 价格版本、别名、未知型号、默认费率假设 | `PricingCatalogTests`、价格估算测试、CLI/MCP 样例 |
-| 归档卡指纹、重复/冲突版本、来源元数据、未知生效期与当前资源一致性 | `verify_pricing_archive.py`、`test_pricing_archive.py`；`verify_pricing.py` 复用 Swift 校验全部历史卡 |
+| 归档卡指纹、重复/冲突版本、来源元数据、未知生效期与当前资源一致性、同次提交前验证及复核副本完整性 | `verify_pricing_archive.py`、`test_pricing_archive.py`；`verify_pricing.py` 复用 Swift 校验历史卡和未关联提交的内容快照 |
 | 旧模型写入无溢价、272K 边界、跨卡重定价与回滚、缺日志恢复 | `PricingReleaseTests`、`ScannerEquivalenceTests`、`verify_pricing.py`、`verify_client_contracts.py` |
 | Cyber 长上下文、历史别名、API 与 credits 独立覆盖、旧未计价量恢复 | `TokenCostEstimatorTests`、`CreditAccountingTests`、`ScannerEquivalenceTests`、CLI/MCP/UI 样例 |
 | 重试、独立错误、超时、网络恢复状态、迟到结果 | `RefreshStateTests`、`UsageRefreshControllerTests`、假服务超时清理/恢复样例 |
