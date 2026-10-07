@@ -245,6 +245,9 @@ are never inferred from local token counts or subtracted by this app. Personal
 plans generally use included allowances before deducting purchased credits.
 See the [policy review](docs/pricing.md#policy-review-2026-10-06) for sources,
 remaining assumptions, and the next maintenance tasks.
+The [billing extension assessment](docs/billing-extensions.md) records the
+evidence, storage and compatibility requirements for possible historical-rate
+and official API-cost views; these views are not implemented.
 
 ### Weekly quota valuation
 

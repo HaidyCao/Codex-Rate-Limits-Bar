@@ -12,7 +12,10 @@ GPT-6.1 Sol; credits card `2026-10-06.3` includes the corrected speed rates and
 conservative accounting coverage from TODO-19. Price schema v1 gains one optional
 credits field; cache v4 and Standard API-equivalent semantics remain unchanged.
 TODO-20 clarifies scope and display; its card revision changes only metadata.
-Track subsequent work in [TODO-21 through TODO-23](../TODO.md#执行顺序).
+TODO-21/22 add maintenance and client verification. TODO-23's
+[extension assessment](billing-extensions.md) keeps historical valuation and
+official API costs conditional and separate from existing estimates. Track the
+next older-model cache-write audit in [TODO-24](../TODO.md#todo-24复核旧模型-api-缓存写入价格).
 
 [OpenAI's changelog](https://developers.openai.com/api/docs/changelog) records the
 GPT-6.1 Sol release on September 29. The
