@@ -950,7 +950,9 @@ final class LocalUsageScanner: @unchecked Sendable {
                 scanStatusLabel: AppText.scanStatus(diagnostics),
                 billingAssumptionsLabel: AppText.billingAssumptions(assumptions),
                 pricingVersionLabel: AppText.pricingVersion(cache.pricing),
-                unpricedUsageDetails: AppText.unpricedUsageDetails(unpricedUsage)
+                unpricedUsageDetails: AppText.unpricedUsageDetails(unpricedUsage),
+                unpricedSummaryLabel: AppText.unpricedSummary(unpricedUsage),
+                pricingBasisDetails: AppText.pricingBasisDetails
             ),
             todayCredits: todayCredits,
             accountContext: accountContext,

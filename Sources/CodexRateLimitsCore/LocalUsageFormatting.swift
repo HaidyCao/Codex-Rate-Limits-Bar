@@ -48,7 +48,8 @@ enum LocalUsageFormatting {
                 cacheHitLabel: AppText.cacheHit(nil),
                 estimatedCostLabel: nil,
                 weeklyQuotaCostLabel: nil,
-                scanStatusLabel: AppText.scanStatus(diagnostics)
+                scanStatusLabel: AppText.scanStatus(diagnostics),
+                pricingBasisDetails: AppText.pricingBasisDetails
             ),
             diagnostics: diagnostics
         )

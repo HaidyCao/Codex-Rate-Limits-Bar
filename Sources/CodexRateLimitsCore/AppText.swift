@@ -272,41 +272,35 @@ public enum AppText {
     }
 
     public static func todayEstimatedCostCardTitle(requests: Int) -> String {
-        switch language {
-        case .simplifiedChinese: return "API 等价 · \(requests) 次"
-        case .traditionalChinese: return "API 等價 · \(requests) 次"
-        case .japanese: return "API 相当 · \(requests)件"
-        case .korean: return "API 상당 · \(requests)회"
-        case .english: return "API equiv. · \(requests)"
-        }
+        "Standard API · \(requests)"
     }
 
     public static func todayEstimatedCost(_ estimate: UsageCostEstimate?) -> String {
         guard let estimate, let amount = estimate.estimatedCostUSD else {
             switch language {
-            case .simplifiedChinese: return "今日 API 等价金额暂不可估算"
-            case .traditionalChinese: return "今日 API 等價金額暫無法估算"
-            case .japanese: return "今日の API 相当額は推定できません"
-            case .korean: return "오늘 API 상당 금액을 추정할 수 없음"
-            case .english: return "Today's API-equivalent cost is unavailable"
+            case .simplifiedChinese: return "今日 Standard API 等值金额暂不可估算"
+            case .traditionalChinese: return "今日 Standard API 等值金額暫無法估算"
+            case .japanese: return "今日の Standard API 相当額は推定できません"
+            case .korean: return "오늘 Standard API 상당 금액을 추정할 수 없음"
+            case .english: return "Today's Standard API-equivalent cost is unavailable"
             }
         }
         let value = USDFormatter.string(amount)
         if estimate.isPartial {
             switch language {
-            case .simplifiedChinese: return "今日已知部分约 \(value)"
-            case .traditionalChinese: return "今日已知部分約 \(value)"
-            case .japanese: return "今日の既知分は約 \(value)"
-            case .korean: return "오늘 확인된 부분 약 \(value)"
-            case .english: return "Known usage today about \(value)"
+            case .simplifiedChinese: return "今日 Standard API 已知部分约 \(value)"
+            case .traditionalChinese: return "今日 Standard API 已知部分約 \(value)"
+            case .japanese: return "今日の Standard API 既知分は約 \(value)"
+            case .korean: return "오늘 Standard API 확인된 부분 약 \(value)"
+            case .english: return "Known Standard API equivalent today about \(value)"
             }
         }
         switch language {
-        case .simplifiedChinese: return "今日 API 等价约 \(value)"
-        case .traditionalChinese: return "今日 API 等價約 \(value)"
-        case .japanese: return "今日の API 相当額は約 \(value)"
-        case .korean: return "오늘 API 상당 금액 약 \(value)"
-        case .english: return "API equivalent today about \(value)"
+        case .simplifiedChinese: return "今日 Standard API 等值约 \(value)"
+        case .traditionalChinese: return "今日 Standard API 等值約 \(value)"
+        case .japanese: return "今日の Standard API 相当額は約 \(value)"
+        case .korean: return "오늘 Standard API 상당 금액 약 \(value)"
+        case .english: return "Standard API equivalent today about \(value)"
         }
     }
 
@@ -1210,25 +1204,45 @@ extension AppText {
                                    "料金表の変更に伴い、対象ログを再計算。", "요금표 변경으로 영향을 받는 로그를 재계산합니다.", "The rate card changed; affected logs are recalculated with the new rules."))
         }
         if let path = pricing.configurationPath { lines.append(path) }
-        if let error = pricing.configurationError { lines.append(error) }
+        if let error = pricing.configurationError { lines.append(pricingConfigurationWarning + "\n" + error) }
         lines += ["API: " + pricing.api.conditions.joined(separator: " "), "credits: " + pricing.credits.conditions.joined(separator: " ")]
         lines += Array(Set(pricing.api.sources + pricing.credits.sources)).sorted()
         return lines.joined(separator: "\n")
     }
 
+    public static func unpricedReason(_ reason: String) -> String {
+        switch reason {
+        case "unknownModel": return weeklyText("缺少模型价格", "缺少模型價格", "モデル料金なし", "모델 요금 없음", "model price missing")
+        case "unknownServiceTier": return weeklyText("缺少模式价格", "缺少模式價格", "モード料金なし", "모드 요금 없음", "mode price missing")
+        case "unsupportedContext": return weeklyText("上下文超出计价范围", "上下文超出計價範圍", "コンテキストが料金範囲外", "컨텍스트가 요금 범위 밖", "context outside pricing coverage")
+        case "unverifiedCacheWrite": return weeklyText("缓存写入计费待核实", "快取寫入計費待核實", "キャッシュ書き込み料金は未確認", "캐시 쓰기 요금 미확인", "cache-write billing unverified")
+        case "incompleteTokenBreakdown": return incompleteTokenBreakdown
+        case "stalePricing": return weeklyText("等待价格重算", "等待價格重算", "再計算待ち", "요금 재계산 대기", "awaiting repricing")
+        default: return weeklyText("未识别计价原因", "未識別計價原因", "不明な料金理由", "알 수 없는 요금 사유", "unrecognized pricing reason") + " (\(reason))"
+        }
+    }
+
+    public static func unpricedSummary(_ entries: [UnpricedUsage]?) -> String? {
+        let entries = (entries ?? []).filter { $0.totalTokens > 0 }
+        guard let first = entries.sorted(by: {
+            $0.totalTokens == $1.totalTokens ? $0.reason < $1.reason : $0.totalTokens > $1.totalTokens
+        }).first else { return nil }
+        let count = Set(entries.map(\.reason)).count
+        let prefix = weeklyText("未计价：", "未計價：", "未計算：", "미산정: ", "Unpriced: ")
+        return prefix + unpricedReason(first.reason) + (count > 1 ? " · +\(count - 1)" : "")
+    }
+
+    public static var pricingConfigurationWarning: String {
+        weeklyText("价格配置无效 · 已回退内置卡", "價格設定無效 · 已改用內建卡", "料金設定が無効 · 内蔵料金を使用", "요금 설정 오류 · 기본 요율 사용", "Invalid price configuration · using built-in rates")
+    }
+
     public static func unpricedUsageDetails(_ entries: [UnpricedUsage]?) -> String? {
         guard let entries, !entries.isEmpty else { return nil }
         return entries.map { entry in
-            let reason: String
-            switch entry.reason {
-            case "unknownModel": reason = weeklyText("未知模型", "未知模型", "不明なモデル", "알 수 없는 모델", "unknown model")
-            case "unknownServiceTier": reason = weeklyText("未知模式", "未知模式", "不明なモード", "알 수 없는 모드", "unknown mode")
-            case "unsupportedContext": reason = weeklyText("该上下文无价格", "該上下文無價格", "対象コンテキストの価格なし", "컨텍스트 요금 없음", "unpriced context")
-            case "incompleteTokenBreakdown": reason = incompleteTokenBreakdown
-            default: reason = weeklyText("等待价格重算", "等待價格重算", "再計算待ち", "요금 재계산 대기", "awaiting repricing")
-            }
-            let tier = entry.serviceTier.map { " · \($0)" } ?? ""
-            return "\(entry.kind) · \(entry.model)\(tier) · \(entry.totalTokens) tokens (\(String(format: "%.2f", entry.percent))%) · \(reason)"
+            let kind = entry.kind == "api" ? "Standard API" : entry.kind == "credits"
+                ? weeklyText("购买 credits 等值", "購買 credits 等值", "購入 credits 換算", "구매 credits 환산", "Purchased-credit equivalent") : entry.kind
+            let mode = entry.serviceTier ?? weeklyText("模式未记录", "模式未記錄", "モード記録なし", "모드 기록 없음", "mode not recorded")
+            return "\(kind) · \(entry.model) · \(mode) · \(entry.totalTokens) tokens (\(String(format: "%.2f", entry.percent))%) · \(unpricedReason(entry.reason))"
         }.joined(separator: "\n")
     }
 
@@ -1236,11 +1250,11 @@ extension AppText {
         let amount = CreditFormatter.string(estimate?.estimatedCredits)
         let value = amount + (estimate?.isPartial == true && estimate?.estimatedCredits != nil ? "+" : "")
         switch language {
-        case .simplifiedChinese: return "今日 credits 估算：\(value)"
-        case .traditionalChinese: return "今日 credits 估算：\(value)"
-        case .japanese: return "今日の推定 credits：\(value)"
-        case .korean: return "오늘 credits 추정: \(value)"
-        case .english: return "Estimated credits today: \(value)"
+        case .simplifiedChinese: return "今日购买 credits 等值：\(value)"
+        case .traditionalChinese: return "今日購買 credits 等值：\(value)"
+        case .japanese: return "今日の購入 credits 換算：\(value)"
+        case .korean: return "오늘 구매 credits 환산: \(value)"
+        case .english: return "Purchased-credit equivalent today: \(value)"
         }
     }
 
@@ -1276,11 +1290,11 @@ extension AppText {
         guard !models.isEmpty else { return nil }
         let names = models.joined(separator: ", ")
         switch language {
-        case .simplifiedChinese: return "未定价模型/模式：\(names)"
-        case .traditionalChinese: return "未定價模型/模式：\(names)"
-        case .japanese: return "価格不明のモデル/モード：\(names)"
-        case .korean: return "가격 미확인 모델/모드: \(names)"
-        case .english: return "Unpriced models/modes: \(names)"
+        case .simplifiedChinese: return "未计价用量：\(names)"
+        case .traditionalChinese: return "未計價用量：\(names)"
+        case .japanese: return "未計算の使用量：\(names)"
+        case .korean: return "미산정 사용량: \(names)"
+        case .english: return "Unpriced usage: \(names)"
         }
     }
 
@@ -1295,13 +1309,37 @@ extension AppText {
     }
 
     public static var creditsEstimateDetails: String {
-        switch language {
-        case .simplifiedChinese: return "按当前 token-based credits 费率估算。套餐内使用不等于扣除购买的 credits；云端、其他设备及工具费用不在本机统计内。缺少模式或单次上下文记录时按标准费率估算，旧版企业费率不适用。"
-        case .traditionalChinese: return "依目前 token-based credits 費率估算。方案內使用不等於扣除購買的 credits；雲端、其他裝置及工具費用不在本機統計內。缺少模式或單次上下文記錄時依標準費率估算，舊版企業費率不適用。"
-        case .japanese: return "現在のトークンベース credits 料金による概算です。プラン内利用は購入 credits の消費とは異なります。クラウド、他端末、ツール料金は含みません。モードやコンテキスト記録がない場合は標準料金を仮定します。旧企業料金は対象外です。"
-        case .korean: return "현재 토큰 기반 credits 요금으로 추정합니다. 플랜 내 사용은 구매 credits 차감과 다릅니다. 클라우드, 다른 기기 및 도구 요금은 제외됩니다. 모드나 컨텍스트 기록이 없으면 표준 요금을 가정합니다. 기존 기업 요금에는 적용되지 않습니다."
-        case .english: return "Estimated at current token-based credit rates. Included plan usage is not purchased-credit deduction. Cloud, other devices and tool fees are excluded. Missing mode or per-request context records use standard rates. Legacy Enterprise rates are not covered."
-        }
+        weeklyText(
+            "credits 按当前购买 credits 费率折算；套餐内使用不等于购买 credits 扣费。API-key、Enterprise USD 合约和旧 Enterprise 卡须使用各自费率。缺少模式或请求上下文时可能采用默认费率，见假设占比。",
+            "credits 依目前購買 credits 費率換算；方案內使用不等於購買 credits 扣費。API-key、Enterprise USD 合約及舊 Enterprise 卡須使用各自費率。缺少模式或請求上下文時可能採用預設費率，見假設占比。",
+            "credits は現在の購入 credits 料金で換算します。プラン内利用は購入 credits の請求を意味しません。API-key、Enterprise USD 契約、旧 Enterprise 料金は各自の料金が適用されます。モードやコンテキスト記録がない場合は既定料金を仮定することがあります。",
+            "credits는 현재 구매 credits 요금으로 환산합니다. 플랜 내 사용은 구매 credits 차감을 뜻하지 않습니다. API-key, Enterprise USD 계약, 기존 Enterprise 요금에는 각각의 요율이 적용됩니다. 모드나 컨텍스트 기록이 없으면 기본 요율을 가정할 수 있습니다.",
+            "Credits use current purchased-credit rates; included plan usage is not a purchased-credit deduction. API-key billing, Enterprise USD agreements and legacy Enterprise cards require their own rates. Missing mode or request context may use default rates; see the assumption shares.")
+    }
+
+    public static var apiEstimateDetails: String {
+        weeklyText(
+            "Standard API 等值按当前标准 API 单价计算，不含实际服务档位、地区或工具附加费；并非实际 API 账单。",
+            "Standard API 等值依目前標準 API 單價計算，不含實際服務檔位、地區或工具附加費；並非實際 API 帳單。",
+            "Standard API 換算は現在の標準 API 料金による概算です。実際の処理モード・地域・ツール追加料金は含まず、API 請求額ではありません。",
+            "Standard API 환산은 현재 표준 API 요금을 사용하며 실제 처리 모드, 지역 및 도구 추가 요금은 제외됩니다. 실제 API 청구액이 아닙니다.",
+            "Standard API equivalents use current Standard API rates, excluding actual service-tier, regional and tool adjustments. They are not actual API bills.")
+    }
+
+    public static var pricingBasisDetails: String {
+        let official = weeklyText(
+            "官方余额和套餐额度由 Codex 单独读取，本机估算不会扣减或反推它们。",
+            "官方餘額與方案額度由 Codex 獨立讀取，本機估算不會扣減或反推。",
+            "公式残高とプラン上限は Codex から別途取得します。ローカル推定から差し引いたり逆算したりしません。",
+            "공식 잔액과 플랜 한도는 Codex에서 별도로 읽으며 로컬 추정으로 차감하거나 역산하지 않습니다.",
+            "Official balances and plan limits are read separately from Codex; local estimates never deduct from or derive them.")
+        let scope = weeklyText(
+            "今日合计覆盖选定本机目录；周观察仅属于当前账户。云端、其他设备及 Work 用量只有进入所选日志才会计入，未采集部分不在覆盖范围内。API 与 credits 覆盖率使用同一 tokens 总量，不能相加；扫描完整不代表完整账单。",
+            "今日合計涵蓋所選本機目錄；週觀察僅屬於目前帳戶。雲端、其他裝置及 Work 用量僅在進入所選日誌時納入，未採集部分不在範圍內。API 與 credits 覆蓋率使用同一 tokens 總量，不可相加；掃描完整不代表完整帳單。",
+            "日次合計は選択したローカルログ、週間観測は現在のアカウントが対象です。クラウド・他端末・Work の使用量は選択ログに記録された分のみ対象です。API と credits のカバー率は同じ tokens 総数を使い、加算できません。スキャン完了は請求記録の完全性を意味しません。",
+            "일별 합계는 선택한 로컬 로그, 주간 관측은 현재 계정에 한정됩니다. 클라우드, 다른 기기 및 Work 사용량은 선택 로그에 수집된 부분만 포함됩니다. API와 credits 적용률은 같은 tokens 총량을 사용하므로 더할 수 없습니다. 스캔 완료가 전체 청구 내역을 뜻하지 않습니다.",
+            "Daily totals span selected local logs; weekly observations belong to the active account. Cloud, other-device and Work activity is included only when captured in those logs. API and credits coverage use the same token total and must not be added. A complete scan is not a complete billing record.")
+        return [apiEstimateDetails, creditsEstimateDetails, official, scope].joined(separator: "\n")
     }
 
     public static func creditAssumptions(_ estimate: UsageCreditEstimate?) -> String? {

@@ -12,19 +12,48 @@ import Foundation
     }
 
     @MainActor private static func verify() throws {
-        guard CommandLine.arguments.count == 3 else { throw RuntimeError("usage: VerifyMenu FIXTURES OUTPUT") }
+        guard CommandLine.arguments.count >= 3 else { throw RuntimeError("usage: VerifyMenu FIXTURES OUTPUT [-AppleLanguages (LANG)] [--localized]") }
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
         let fixtures = URL(fileURLWithPath: CommandLine.arguments[1])
         let output = URL(fileURLWithPath: CommandLine.arguments[2])
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var scenarios = 0
-        for name in ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending"] {
-            let payload = try JSONDecoder().decode(RateLimitPayload.self, from: Data(contentsOf: fixtures.appendingPathComponent("\(name).json")))
+        let pricingAmounts: [String: (api: Double, credits: Double)] = [
+            "gpt61-standard": (0.098, 2.45), "gpt61-fast": (0.098, 4.90),
+            "sol-fast": (0.106, 5.30), "astra-ultrafast": (0.53, 79.50)
+        ]
+        let localized = CommandLine.arguments.contains("--localized")
+        let names = localized ? ["pricing-reasons", "pricing-config-error", "credit-writes"]
+            : ["complete", "unknown", "missing-breakdown", "weekly-breakdown", "missing-percent", "invalid-numbers", "partial", "unavailable", "failure", "cache-pending", "partial-cache-pending", "unsupported-mode", "credit-writes", "credit-long-context", "pricing-reasons", "pricing-config-error"] + pricingAmounts.keys.sorted()
+        for name in names {
+            var data = try Data(contentsOf: fixtures.appendingPathComponent("\(name).json"))
+            if localized {
+                // Older snapshots can omit display strings; render fallbacks in
+                // the current process locale while keeping all raw counters.
+                var object = try withoutDisplayText(JSONSerialization.jsonObject(with: data)) as! [String: Any]
+                // Reset-coupon views consume server-normalized display labels.
+                // Re-localize this known fixture rather than dropping its count.
+                if var reset = object["resetCredits"] as? [String: Any] {
+                    try require(reset["availableCount"] as? Int == 3 && reset["detailsAvailable"] as? Bool == false,
+                                "Unexpected localized reset-coupon fixture")
+                    reset["display"] = ["summaryLabel": AppText.availableCount(3),
+                                        "detailLabels": [AppText.resetCreditDetailsUnavailable]]
+                    object["resetCredits"] = reset
+                }
+                data = try JSONSerialization.data(withJSONObject: object)
+            }
+            let payload = try JSONDecoder().decode(RateLimitPayload.self, from: data)
             guard let local = payload.localUsage, let freshness = payload.refresh else { throw RuntimeError("Missing shared snapshot: \(name)") }
             // Independent fixture expectations supplement GUI/CLI/MCP parity.
             if name == "complete" {
                 try require(local.totalTokens == 1000 && local.todayCost?.estimatedCostUSD == 0.004 && local.todayCredits?.estimatedCredits == 0.1, "Unexpected fixture amounts")
+            }
+            if let expected = pricingAmounts[name] {
+                try require(local.totalTokens == 105_000
+                            && abs((local.todayCost?.estimatedCostUSD ?? -1) - expected.api) < 1e-12
+                            && abs((local.todayCredits?.estimatedCredits ?? -1) - expected.credits) < 1e-12
+                            && local.unpricedUsage?.isEmpty == true, "Unexpected current-rate amounts: \(name)")
             }
             let rate = RateLimitsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 220))
             let reset = ResetCreditsMenuView(frame: NSRect(x: 0, y: 0, width: 440, height: 90))
@@ -34,15 +63,45 @@ import Foundation
             reset.update(payload.resetCredits, freshness: freshness.resetCredits)
             usage.update(local, freshness: freshness.localUsage)
             let localText = tooltips(usage)
+            try require(localText.contains(AppText.pricingBasisDetails), "GUI lost valuation basis/scope: \(name)")
+            if let summary = AppText.unpricedSummary(local.unpricedUsage) {
+                try require(localText.contains(summary), "GUI lost the unpriced summary")
+                let width = (summary as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5)]).width
+                try require(width <= 384, "Unpriced summary truncates: \(summary)")
+            }
             for label in [local.display?.estimatedCreditsLabel, local.display?.scanStatusLabel] {
                 if let label { try require(localText.contains(label), "GUI lost a shared local display label: \(name): \(label)") }
             }
             if name == "unknown" { try require(localText.contains("Raw-Private-Model"), "GUI lost the raw unknown model") }
+            if name == "pricing-reasons" || name == "pricing-config-error" {
+                try require(local.totalTokens == 1000 && local.todayCost?.coveragePercent == 90
+                            && local.todayCredits?.coveragePercent == 40, "GUI mixed independent valuation coverage")
+                try require(localText.contains("ultrafast") && localText.contains("300 tokens (30.00%)")
+                            && localText.contains(AppText.unpricedReason("unverifiedCacheWrite")), "GUI lost reason details")
+                if name == "pricing-config-error" {
+                    try require(localText.contains(AppText.pricingConfigurationWarning)
+                                && localText.contains(AppText.scanStatus(local.diagnostics)), "Configuration and read errors were conflated")
+                }
+            }
+            if name == "unsupported-mode" {
+                try require(local.todayCost?.coveragePercent == 100 && local.todayCredits?.coveragePercent == 0,
+                            "Unsupported credit mode changed API coverage")
+                try require(localText.contains("ultrafast") && localText.contains("gpt-6.1-sol"),
+                            "GUI lost the unsupported model/mode details")
+            }
             if name == "missing-breakdown" {
                 try require(local.todayCost?.estimatedCostUSD == nil && local.todayCredits?.estimatedCredits == nil,
                             "Incomplete token breakdown became free usage")
                 try require(localText.contains(AppText.unpricedUsageDetails(local.unpricedUsage) ?? "missing details"),
                             "GUI lost incomplete-breakdown details")
+            }
+            if name == "credit-writes" || name == "credit-long-context" {
+                try require(local.todayCost?.coveragePercent == 100 && local.todayCredits?.estimatedCredits == nil,
+                            "Unverified credits changed API coverage or became zero cost")
+                let reason = name == "credit-writes" ? "unverifiedCacheWrite" : "unsupportedContext"
+                try require(local.unpricedUsage?.first?.reason == reason
+                            && localText.contains(AppText.unpricedUsageDetails(local.unpricedUsage) ?? "missing details"),
+                            "GUI lost the unverified credit accounting reason")
             }
             if name == "weekly-breakdown" {
                 try require(local.weeklyQuotaCost?.valuation?.reason == "incompleteTokenBreakdown",
@@ -107,6 +166,13 @@ import Foundation
 
     @MainActor private static func tooltips(_ view: NSView) -> String {
         ([view.toolTip].compactMap { $0 } + view.subviews.map(tooltips)).joined(separator: "\n")
+    }
+    private static func withoutDisplayText(_ value: Any) -> Any {
+        if let object = value as? [String: Any] {
+            return object.filter { $0.key != "display" }.mapValues(withoutDisplayText)
+        }
+        if let array = value as? [Any] { return array.map(withoutDisplayText) }
+        return value
     }
     private static func require(_ condition: Bool, _ message: String) throws {
         if !condition { throw RuntimeError(message) }

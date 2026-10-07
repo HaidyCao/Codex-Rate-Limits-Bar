@@ -25,6 +25,13 @@ def main():
                              "pricing", "--export-builtin"], env=isolated_environment(root),
                             capture_output=True, text=True, timeout=15)
         assert json.loads(value.stdout) == expected
+        health = run_checked(["/usr/bin/sandbox-exec", "-p", policy, app / "Contents/MacOS/CodexRateLimitsBar",
+                              "pricing", "--health"], env=isolated_environment(root),
+                             capture_output=True, text=True, timeout=15)
+        report = json.loads(health.stdout)
+        assert report["active"]["api"]["version"] == expected["api"]["version"]
+        assert report["active"]["credits"]["version"] == expected["credits"]["version"]
+        assert not report["api"]["rateDifferences"] and not report["credits"]["rateDifferences"]
     print("Relocated bundle verification passed with build resources inaccessible.")
 
 

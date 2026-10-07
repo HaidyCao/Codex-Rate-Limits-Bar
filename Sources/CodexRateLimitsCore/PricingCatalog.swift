@@ -45,6 +45,9 @@ struct PricingRate: Codable, Sendable {
     var contextTier: ContextTier?
     var maximumInputTokens: Int64?
     var serviceTiers: [String: Double]?
+    // Absent in original v1 cards: preserve their explicit cache-write rate.
+    // Only credits may opt out when the published accounting is unresolved.
+    var cacheWriteInputUnverified: Bool? = nil
 
     var needsContext: Bool { contextTier != nil || maximumInputTokens != nil }
 
@@ -173,7 +176,7 @@ enum PricingCatalog {
             guard let models = card["models"] as? [String: Any] else { throw RuntimeError("\(kind).models must be an object") }
             for (model, value) in models {
                 let path = "\(kind).models.\(model)"
-                let rate = try fields(value, allowed: ["input", "cachedInput", "cacheWriteInput", "output", "datedSnapshots", "contextTier", "maximumInputTokens", "serviceTiers"], at: path)
+                let rate = try fields(value, allowed: ["input", "cachedInput", "cacheWriteInput", "output", "datedSnapshots", "contextTier", "maximumInputTokens", "serviceTiers", "cacheWriteInputUnverified"], at: path)
                 if let tier = rate["contextTier"], !(tier is NSNull) {
                     _ = try fields(tier, allowed: ["threshold", "inputMultiplier", "outputMultiplier"], at: path + ".contextTier")
                 }
@@ -209,7 +212,10 @@ enum PricingCatalog {
                     try require(tier.threshold > 0 && [tier.inputMultiplier, tier.outputMultiplier].allSatisfy { $0.isFinite && $0 > 0 && $0 <= 1000 }, "invalid context tier for \(name)")
                     try require(rate.maximumInputTokens.map { $0 > tier.threshold } ?? true, "context maximum must exceed tier threshold for \(name)")
                 }
-                if kind == "api" { try require(rate.serviceTiers == nil, "API equivalents use Standard rates; serviceTiers belongs to credits") }
+                if kind == "api" {
+                    try require(rate.serviceTiers == nil, "API equivalents use Standard rates; serviceTiers belongs to credits")
+                    try require(rate.cacheWriteInputUnverified == nil, "cacheWriteInputUnverified belongs to credits")
+                }
                 else {
                     try require(rate.serviceTiers?["standard"] == 1, "credits requires serviceTiers.standard = 1 for \(name)")
                     try require(rate.serviceTiers?.allSatisfy { validName($0.key) && $0.value.isFinite && $0.value > 0 && $0.value <= 1000 } == true, "invalid service tier for \(name)")

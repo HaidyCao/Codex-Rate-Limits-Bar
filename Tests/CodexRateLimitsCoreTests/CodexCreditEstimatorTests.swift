@@ -2,53 +2,84 @@ import XCTest
 @testable import CodexRateLimitsCore
 
 final class CodexCreditEstimatorTests: XCTestCase {
-    func testOfficialExampleAndAstraContextException() throws {
-        // Official example: 20K input + 80K cached + 5K output = 7.25 credits.
+    func testPurchasedCreditModesUseIndependentKnownAmounts() throws {
+        let usage = TokenUsage(inputTokens: 100_000, cachedInputTokens: 80_000,
+                               outputTokens: 5_000, totalTokens: 105_000)
+        // Hand-calculated from the published token rates, independent of the card.
+        let cases: [(String, Double, Double)] = [
+            ("gpt-6.1-sol", 2.45, 4.90), ("gpt-6-sol", 2.65, 5.30),
+            ("gpt-6-luna", 0.1325, 0.265), ("gpt-6-astra", 13.25, 26.50),
+            ("gpt-5.6-sol", 5.30, 10.60), ("gpt-5.6-terra", 2.90, 5.80),
+            ("gpt-5.6-luna", 0.29, 0.58), ("gpt-5.5", 7.25, 14.50),
+            ("gpt-5.4", 3.625, 7.25)
+        ]
+        for (model, standard, fast) in cases {
+            for (tier, expected) in [("standard", standard), ("default", standard), (" FAST ", fast), ("priority", fast)] {
+                XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
+                    usage: usage, model: model, requestInputTokens: 100_000, serviceTier: tier
+                )), expected, accuracy: 1e-12, "\(model) / \(tier)")
+            }
+        }
+    }
+
+    func testUltrafastIsExplicitlyPricedOnlyForAstraAndAPIStaysStandard() throws {
+        let usage = TokenUsage(inputTokens: 100_000, cachedInputTokens: 80_000,
+                               outputTokens: 5_000, totalTokens: 105_000)
+        var accumulator = TokenCostAccumulator()
+        accumulator.add(usage: usage, model: "gpt-6-astra", requestInputTokens: 100_000, serviceTier: "ultrafast")
+        XCTAssertEqual(try XCTUnwrap(accumulator.creditEstimate().estimatedCredits), 79.50, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(accumulator.estimate().estimatedCostUSD), 0.53, accuracy: 1e-12)
+        XCTAssertTrue(accumulator.unpricedUsage().isEmpty)
+        for model in ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"] {
+            XCTAssertNil(CodexCreditEstimator.estimate(usage: usage, model: model,
+                                                      requestInputTokens: 100_000, serviceTier: "ultrafast"))
+            XCTAssertEqual(CodexCreditEstimator.unpricedReason(usage: usage, model: model, requestInputTokens: 100_000,
+                                                              serviceTier: "ultrafast"), "unknownServiceTier")
+        }
+    }
+
+    func testGPT61SolLongContextCreditsRemainUnpricedForBothModes() {
+        let usage = TokenUsage(inputTokens: 272_001, cachedInputTokens: 80_000,
+                               outputTokens: 5_000, totalTokens: 277_001)
+        for tier in ["standard", "fast"] {
+            XCTAssertNil(CodexCreditEstimator.estimate(usage: usage, model: "gpt-6.1-sol",
+                requestInputTokens: 272_001, serviceTier: tier))
+        }
+    }
+
+    func testPublishedRatesAndAstraWriteUncertaintyStayIndependent() throws {
         let example = TokenUsage(inputTokens: 100_000, cachedInputTokens: 80_000,
                                  outputTokens: 5_000, totalTokens: 105_000)
         XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
             usage: example, model: "gpt-5.5", requestInputTokens: 100_000, serviceTier: "standard"
         )), 7.25, accuracy: 0.000_001)
-        let astra = TokenUsage(inputTokens: 1_000_000, cachedInputTokens: 400_000,
-                              cacheWriteInputTokens: 100_000, outputTokens: 100_000,
-                              reasoningOutputTokens: 80_000, totalTokens: 1_100_000)
+        let writes = TokenUsage(inputTokens: 100_000, cacheWriteInputTokens: 100_000, totalTokens: 100_000)
         for context in [272_000, 272_001, 1_000_000] {
-            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
-                usage: astra, model: "gpt-6-astra", requestInputTokens: Int64(context), serviceTier: "default"
-            )), 260, accuracy: 0.000_001)
+            XCTAssertNil(CodexCreditEstimator.estimate(usage: writes, model: "gpt-6-astra",
+                requestInputTokens: Int64(context), serviceTier: "default"))
         }
     }
 
-    func testFastAndLongContextAreAppliedPerRequest() throws {
+    func testFastPricingAndCoverageAreAppliedPerRequest() throws {
         let usage = TokenUsage(inputTokens: 100_000, outputTokens: 10_000, totalTokens: 110_000)
-        for (model, short, long) in [("gpt-5.6-sol", 15.0, 27.5), ("gpt-5.4", 10.0, 18.125)] {
-            let fast = model == "gpt-5.4" ? 2.0 : 2.5
-            for (context, standard) in [(272_000, short), (272_001, long)] {
-                XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
-                    usage: usage, model: model, requestInputTokens: Int64(context), serviceTier: "fast"
-                )), standard * fast, accuracy: 0.000_001)
-            }
+        for (model, short) in [("gpt-5.6-sol", 15.0), ("gpt-5.4", 10.0)] {
+            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
+                usage: usage, model: model, requestInputTokens: 272_000, serviceTier: "fast"
+            )), short * 2, accuracy: 0.000_001)
+            XCTAssertNil(CodexCreditEstimator.estimate(usage: usage, model: model,
+                requestInputTokens: 272_001, serviceTier: "fast"))
         }
     }
 
     func testGPT6SolAndLunaCreditRatesUseStandardTokensAndFastMultiplier() throws {
-        let usage = TokenUsage(
-            inputTokens: 1_000_000,
-            cachedInputTokens: 400_000,
-            cacheWriteInputTokens: 100_000,
-            outputTokens: 100_000,
-            reasoningOutputTokens: 80_000,
-            totalTokens: 1_100_000
-        )
-        let cases: [(String, Double)] = [("gpt-6-sol", 52), ("gpt-6-luna", 2.6)]
-
-        for (model, standard) in cases {
-            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
-                usage: usage, model: model, requestInputTokens: 300_001, serviceTier: "standard"
-            )), standard, accuracy: 0.000_001)
-            XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
-                usage: usage, model: model, requestInputTokens: 300_001, serviceTier: "fast"
-            )), standard * 2.5, accuracy: 0.000_001)
+        let usage = TokenUsage(inputTokens: 100_000, cachedInputTokens: 40_000,
+                               outputTokens: 10_000, totalTokens: 110_000)
+        for (model, standard) in [("gpt-6-sol", 5.7), ("gpt-6-luna", 0.285)] {
+            for (tier, multiplier) in [("standard", 1.0), ("fast", 2.0)] {
+                XCTAssertEqual(try XCTUnwrap(CodexCreditEstimator.estimate(
+                    usage: usage, model: model, requestInputTokens: 100_000, serviceTier: tier
+                )), standard * multiplier, accuracy: 0.000_001)
+            }
         }
     }
 

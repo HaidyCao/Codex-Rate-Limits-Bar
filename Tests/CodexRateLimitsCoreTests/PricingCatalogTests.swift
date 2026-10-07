@@ -17,8 +17,8 @@ final class PricingCatalogTests: XCTestCase {
         XCTAssertEqual(value.document.schemaVersion, 1)
         XCTAssertEqual(value.metadata.basis, "current-rates")
         XCTAssertEqual(value.metadata.source, "builtin")
-        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-09-23")
-        XCTAssertEqual(value.metadata.credits.verifiedAt, "2026-09-23")
+        XCTAssertEqual(value.metadata.api.verifiedAt, "2026-10-06")
+        XCTAssertEqual(value.metadata.credits.verifiedAt, "2026-10-06")
         XCTAssertTrue(value.metadata.credits.sources.contains { $0 == "https://learn.chatgpt.com/docs/pricing" })
         XCTAssertEqual(value.document.api.models["gpt-6-astra"]?.cacheWriteInput, 12.5)
         XCTAssertEqual(value.document.credits.models["gpt-6-astra"]?.cacheWriteInput, 0)
@@ -29,8 +29,8 @@ final class PricingCatalogTests: XCTestCase {
         XCTAssertEqual(value.document.credits.models["gpt-6-luna"]?.input, 2.5)
         XCTAssertNil(value.document.credits.models["gpt-6-sol"]?.contextTier)
         XCTAssertNil(value.document.credits.models["gpt-6-luna"]?.contextTier)
-        XCTAssertEqual(value.document.credits.models["gpt-6-sol"]?.serviceTiers?["fast"], 2.5)
-        XCTAssertEqual(value.document.credits.models["gpt-6-luna"]?.serviceTiers?["fast"], 2.5)
+        XCTAssertEqual(value.document.credits.models["gpt-6-sol"]?.serviceTiers?["fast"], 2)
+        XCTAssertEqual(value.document.credits.models["gpt-6-luna"]?.serviceTiers?["fast"], 2)
     }
 
     func testCustomCreditsModelDoesNotRequireAnAPIPrice() throws {

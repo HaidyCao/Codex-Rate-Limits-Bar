@@ -637,22 +637,22 @@ final class LocalUsageScannerTests: XCTestCase {
         ], to: file, modifiedAt: now)
         let first = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                    now: { now }, cacheFileURL: cache)
-        XCTAssertEqual(try first.snapshot().todayCredits?.estimatedCredits, 625)
+        XCTAssertEqual(try first.snapshot().todayCredits?.estimatedCredits, 500)
         try appendEvent(tokenCount(input: 2_000_000, total: 2_000_000, lastInput: 100_000,
                                    timestamp: "2026-09-11T00:02:00Z"), to: file, modifiedAt: now)
         let restarted = LocalUsageScanner(rootURLs: [temporaryDirectory], calendar: calendar,
                                                        now: { now }, cacheFileURL: cache)
-        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_250)
+        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_000)
         var missingTier = turnContext(model: "gpt-6-astra", timestamp: "2026-09-11T00:03:00Z")
         missingTier["payload"] = ["model": "gpt-6-astra"]
         try appendEvent(missingTier, to: file, modifiedAt: now)
         try appendEvent(tokenCount(input: 3_000_000, total: 3_000_000, lastInput: 100_000,
                                    timestamp: "2026-09-11T00:04:00Z"), to: file, modifiedAt: now)
         let standard = try restarted.snapshot()
-        XCTAssertEqual(standard.todayCredits?.estimatedCredits, 1_500)
+        XCTAssertEqual(standard.todayCredits?.estimatedCredits, 1_250)
         XCTAssertEqual(standard.todayCredits?.assumedStandardTokens, 1_000_000)
         XCTAssertEqual(standard.todayCost?.estimatedCostUSD, 30)
-        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_500)
+        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 1_250)
         try appendEvent(["timestamp": "2026-09-11T00:05:00Z", "type": "event_msg",
                          "payload": ["type": "thread_settings_applied", "settings": ["service_tier": "fast"]]],
                         to: file, modifiedAt: now)
@@ -661,7 +661,14 @@ final class LocalUsageScannerTests: XCTestCase {
                          "payload": ["type": "thread_settings_applied", "settings": ["service_tier": NSNull()]]],
                         to: file, modifiedAt: now)
         try appendEvent(tokenCount(total: 5_000_000, timestamp: "2026-09-11T00:08:00Z"), to: file, modifiedAt: now)
-        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 2_375)
+        XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, 2_000)
+        for (tier, total, credits) in [("ultrafast", Int64(6_000_000), 3_500.0), ("priority", 7_000_000, 4_000.0)] {
+            try appendEvent(["type": "event_msg", "payload": ["type": "thread_settings_applied", "settings": ["service_tier": tier]]],
+                            to: file, modifiedAt: now)
+            try appendEvent(tokenCount(input: total, total: total, lastInput: 100_000,
+                                       timestamp: "2026-09-11T00:09:00Z"), to: file, modifiedAt: now)
+            XCTAssertEqual(try restarted.snapshot().todayCredits?.estimatedCredits, credits)
+        }
     }
 
     func testLegacyMisidentifiedModelIsReplayedWithoutResettingWeeklyBaseline() throws {

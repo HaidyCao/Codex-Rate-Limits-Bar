@@ -15,7 +15,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
 - A second menu bar item shows today's local machine token usage:
   - Top line: consumed tokens, scaled to localized compact units.
   - Bottom line: cache hit rate, calculated as cached input tokens divided by input tokens.
-  - The expanded panel shows today's API-equivalent estimated cost in USD, a separate Codex credit estimate, price coverage, and unpriced models/modes.
+  - The expanded panel shows today's Standard API equivalent in USD, a separate purchased-credit equivalent, independent coverage, and an unpriced-reason summary. Hover over an amount, reason or rate card for its details.
   - Visible by default and can be hidden from the menu settings.
   - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories; `CODEX_SESSIONS_DIR` explicitly selects one directory.
   - Session files are read incrementally with a reusable 1 MB buffer. Per-file identities, content fingerprints, cursors, daily baselines, and compact model cost buckets are persisted for up to eight days. Unchanged files reuse the cache; changed prefixes and relevant session copies trigger replay.
@@ -99,7 +99,7 @@ Local usage exposes three separate measures in the menu, CLI and MCP:
   whose API or credit price used a default, and `apiPercent`/`creditPercent`.
   These percentages use deduplicated observed tokens as the denominator; missing
   both fields does not double-count a token. Only rules affected by the missing
-  field count toward assumed pricing (for example, Astra credits have no context tier).
+  field count toward assumed pricing (including a credit coverage limit).
 
 All bounded JSONL records are parsed as JSON, including whitespace, escaped keys
 and arbitrary field order. Reads use a reusable 1 MB buffer; a single record can
@@ -135,15 +135,24 @@ uncached input, cached input, cache writes, and output, and apply the published
 long-context tier only when a request reports more than 272K input tokens.
 Prices come from the [OpenAI API pricing page](https://developers.openai.com/api/docs/pricing).
 
+[GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
 [GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra),
 [GPT-6 Sol](https://developers.openai.com/api/docs/models/gpt-6-sol), and
 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) are supported,
-including dated snapshots. Standard API rates verified on 2026-09-23, per 1M tokens:
-Astra $10 input / $1 cached / $12.50 cache writes / $50 output; Sol $2 / $0.20 /
-$2.50 / $10; Luna $0.10 / $0.01 / $0.125 / $0.50. Above 272K request input
-tokens, Astra, Sol and Luna use 2x input/cache rates and 1.5x output rates.
-Estimates use Standard API rates; Fast, Batch, Flex, regional surcharges, and
-tool fees are not included.
+with dated snapshots only for explicitly enabled models. GPT-6.1 Sol resolves
+its exact published ID; unconfirmed dated snapshots and aliases stay unpriced.
+Standard API rates in card `2026-10-06.1`, per 1M tokens:
+
+| Model | Input | Cached input | Cache writes | Output |
+| --- | --- | --- | --- | --- |
+| GPT-6.1 Sol | $2 | $0.10 | $2.50 | $10 |
+| GPT-6 Astra | $10 | $1 | $12.50 | $50 |
+| GPT-6 Sol | $2 | $0.20 | $2.50 | $10 |
+| GPT-6 Luna | $0.10 | $0.01 | $0.125 | $0.50 |
+
+Above 272K request input tokens, these models use 2x input/cache rates and 1.5x
+output rates for the full request. Estimates use Standard API rates; Fast,
+Ultrafast, Batch, Flex, regional surcharges, and tool fees are not included.
 
 Daybreak Blue (`gpt-daybreak-blue-latest`) currently follows GPT-5.6 Sol pricing;
 Daybreak Red follows GPT-5.6 Cyber. Raw model names are retained in the output.
@@ -172,6 +181,12 @@ Changes take effect at the next local refresh. Invalid configuration is rejected
 with a visible error and built-in fallback. See [Price configuration](docs/pricing.md)
 for export, validation, manual prices, aliases and independent credits mode rules.
 
+`pricing --health` compares the active card with this app's built-in card;
+`pricing --health FILE` reviews a candidate without activating it. The read-only,
+offline report lists missing models/modes, aliases, intentional rate differences
+and policy review dates. Differences do not invalidate or overwrite valid custom
+prices. See the [maintenance checklist](docs/pricing.md#release-maintenance-checklist).
+
 `unpricedUsage` lists raw model/mode names, reasons, token counts and percentages,
 separately for API and credits. The weekly estimate has its own scoped list.
 Known amounts remain available when another request for the same model lacks a
@@ -184,31 +199,46 @@ rules, preserving account baselines and timestamped quota evidence.
 
 `local-usage` and `status.localUsage` include `todayCredits`, with `estimatedCredits`,
 `coveragePercent`, `pricedTokens`, `unpricedTokens`, `assumedStandardTokens` and
-per-model amounts. `display` includes credit and coverage labels. The menu and MCP
-use the same values. These are **local usage equivalents at the current purchased
+per-model amounts. `display` includes credit and coverage labels, optional
+`unpricedSummaryLabel` and `pricingBasisDetails`. These explain current-rate
+valuation, applicable contracts and collection limits without changing numeric
+fields. The menu, CLI and MCP use the same daily values; `status` additionally
+has the official weekly context. These are **local usage equivalents at the current purchased
 credit rate card**, not actual deductions, included plan limits, or a fixed value
 of the weekly allowance.
 
 The [official credit rate card](https://learn.chatgpt.com/docs/pricing) is
-independent of API pricing. Per 1M input / cached input / output tokens, GPT-6 Sol
-uses 50 / 5 / 250 credits and GPT-6 Luna 2.5 / 0.25 / 12.5 credits. The estimate
-excludes reported cache-write tokens from billable input and adds no cache-write
-charge. The published Codex credit table has no long-context multiplier for these
-models. [Fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed)
-uses 2.5x credits for GPT-6 Astra, Sol and Luna where available, as well as the
-documented GPT-5.6, GPT-5.5 and GPT-5.4 rates. Mode changes
+independent of API pricing. Per 1M input / cached input / output tokens, GPT-6.1 Sol
+uses 50 / 2.5 / 250 credits, GPT-6 Sol 50 / 5 / 250, and GPT-6 Luna
+2.5 / 0.25 / 12.5. The published table has no long-context multiplier for these
+models. Credits card `2026-10-06.3` leaves positive reported cache-write usage
+unpriced (`unverifiedCacheWrite`) because its input-billing treatment is unresolved.
+For GPT-6/6.1, GPT-5.6, GPT-5.5 and GPT-5.4, known requests above 272K also stay
+unpriced (`unsupportedContext`); this is an estimate coverage guard, not an
+official Codex threshold. Known API amounts and token totals remain available.
+See [accounting evidence and custom-card compatibility](docs/pricing.md#credit-accounting-coverage-todo-19).
+
+[Fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) uses **2x**
+purchased credits for supported GPT-6.1, GPT-6, GPT-5.6, GPT-5.5 and GPT-5.4 entries;
+the legacy `priority` name maps to Fast. Astra `ultrafast` uses **6x**. GPT-6.1 Sol
+Ultrafast remains unpriced. Included subscription limits use different multipliers
+(Fast 2.5x; Astra Ultrafast 8x), which are not applied to these credit equivalents.
+Mode changes
 are read from each turn/settings event and persisted with the scanner cursor.
 Missing mode or request-context records assume standard rates; missing mode token
 counts are reported. Unrecognized modes stay unpriced. API equivalents continue
 to use Standard API rates regardless of Codex mode.
 
-The built-in rates were verified on 2026-09-23. Historical usage is re-estimated at
+The built-in card was updated on 2026-10-06. Historical usage is re-estimated at
 these rates, including current Daybreak aliases and GPT-5.6 Sol's purchased-credit
-promotion; it is not a historical billing ledger. Tools, images, voice, regional
-surcharges, cloud/other-device activity, and legacy Enterprise credit pricing are
-not covered. Official balances come directly from `account/rateLimits/read` and
+promotion; it is not a historical billing ledger. Separate tool, image, voice
+and regional charges are excluded; API-key, Enterprise USD and legacy Enterprise
+billing require their own applicable rates. Uncollected cloud, other-device and
+Work activity is outside the coverage of selected local logs. Official balances come directly from `account/rateLimits/read` and
 are never inferred from local token counts or subtracted by this app. Personal
 plans generally use included allowances before deducting purchased credits.
+See the [policy review](docs/pricing.md#policy-review-2026-10-06) for sources,
+remaining assumptions, and the next maintenance tasks.
 
 ### Weekly quota valuation
 
@@ -366,6 +396,8 @@ CodexRateLimitsBar local-usage --rebuild
 CodexRateLimitsBar pricing
 CodexRateLimitsBar pricing --export-builtin
 CodexRateLimitsBar pricing --validate /path/to/pricing.json
+CodexRateLimitsBar pricing --health
+CodexRateLimitsBar pricing --health /path/to/pricing.json
 CodexRateLimitsBar reset-credits
 CodexRateLimitsBar usage
 CodexRateLimitsBar mcp

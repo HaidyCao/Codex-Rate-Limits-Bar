@@ -25,10 +25,15 @@ public enum CodexCommandLine {
                 case []: try writeJSON(PricingCatalog.load().metadata)
                 case ["--export-builtin"]: try writeJSON(PricingCatalog.builtin.document)
                 case ["--export"]: try writeJSON(PricingCatalog.load().document)
+                case ["--health"]: try writeJSON(PricingHealth.report(PricingCatalog.load()))
+                case let options where options.count == 2 && options[0] == "--health":
+                    let url = URL(fileURLWithPath: (options[1] as NSString).expandingTildeInPath)
+                    let snapshot = PricingCatalog.snapshot(try PricingCatalog.read(url), source: "custom", path: url.path, error: nil)
+                    try writeJSON(PricingHealth.report(snapshot))
                 case let options where options.count == 2 && options[0] == "--validate":
                     let url = URL(fileURLWithPath: (options[1] as NSString).expandingTildeInPath)
                     try writeJSON(PricingCatalog.snapshot(PricingCatalog.read(url), source: "custom", path: url.path, error: nil).metadata)
-                default: throw RuntimeError("Usage: pricing [--export | --export-builtin | --validate FILE]")
+                default: throw RuntimeError("Usage: pricing [--export | --export-builtin | --validate FILE | --health [FILE]]")
                 }
             case "status":
                 try writeJSON(CodexBackend.readStatus())

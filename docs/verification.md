@@ -1,6 +1,6 @@
 # 回归验证
 
-在仓库根目录执行 `make verify`，依次运行常规 Swift 测试、CLI/MCP 集成、AppKit 视图检查、独立应用资源和隔离插件安装检查。验证不需要 Codex 登录，也不安装应用、切换账户或修改用户日志。
+在仓库根目录执行 `make verify`，依次运行常规 Swift 测试、只读价目表检查、CLI/MCP 集成、AppKit 视图检查、独立应用资源和隔离插件安装检查。验证不需要 Codex 登录，也不安装应用、切换账户或修改用户日志。
 
 ## 命令
 
@@ -8,6 +8,7 @@
 | --- | --- |
 | `make verify` | 常规测试、CLI/MCP、AppKit、应用资源的统一入口 |
 | `make test` | 快速 Swift 回归；排除需要显式开启的大日志测试 |
+| `make verify-pricing` | 禁止联网、读取账户和写入样例目录，验证价目表健康诊断 |
 | `make verify-local-usage` | 打包应用，用假 app-server 和临时日志验证 CLI/MCP |
 | `make verify-ui` | 生成 CLI/MCP 样例，编译实际 AppKit 视图并检查、渲染 |
 | `make verify-bundle` | 将 `.app` 复制到临时位置，禁止访问 `.build` 后读取内置价格 |
@@ -16,7 +17,7 @@
 | `make benchmark BENCHMARK_MIB=1024` | 使用约 1 GiB 合成日志；允许范围为 16～4096 MiB |
 | `make verify-live` | **访问调用者的真实 Codex 账户**，用于主动选择的现场检查 |
 
-需要 macOS、Swift 6、Xcode 工具链及 Python 3，无第三方 Python 依赖。AppKit 离屏渲染仍需可用的 macOS 图形会话；没有图形会话的 CI 可以运行 `make test verify-local-usage verify-bundle` 和独立的性能任务。验证退出码非零即失败，子进程错误输出会保留。
+需要 macOS、Swift 6、Xcode 工具链及 Python 3，无第三方 Python 依赖。AppKit 离屏渲染仍需可用的 macOS 图形会话；没有图形会话的 CI 可以运行 `make test verify-pricing verify-local-usage verify-bundle` 和独立的性能任务。验证退出码非零即失败，子进程错误输出会保留。
 
 `make verify` 不再隐含真实账户检查；原来的现场读取已拆到 `make verify-live`。`CODEX_HOME`、`CODEX_BIN`、自定义价目表等调用者环境不会影响隔离样例。`verify-live` 则保留调用者环境；要与默认桌面应用的 `.codex` 来源一致，可执行 `env -u CODEX_HOME make verify-live`。
 
@@ -50,7 +51,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 累计分项修正、总量回退、后续计价恢复及周暂停原因 | `CumulativeUsageCorrectionTests`、`WeeklyQuotaEstimatorTests`、CLI/MCP/UI 样例 |
 | 官方比例缺失、越界整数、非法计数/余额/日期 | `InputValidationTests`、CLI/MCP/UI 样例 |
 
-`ScannerEquivalenceTests` 使用独立缓存：一侧持续增量读取并重启，另一侧每次完整重建。对比包含 tokens、事件计数、明细、API/credits 金额、诊断、价格信息和周观察；只排除随运行耗时变化的 `ageSeconds`。同时断言独立已知的 tokens 和金额，避免两个实现路径一起算错却通过比较。不能用删除日志或同大小覆写来“证明缓存复用”。
+`ScannerEquivalenceTests` 使用独立缓存：一侧持续增量读取并重启，另一侧每次完整重建。对比包含 tokens、事件计数、明细、API/credits 金额、诊断、价格信息和周观察；排除随运行耗时变化的 `ageSeconds`，按文件路径规范化相同 token 数的排名，并将聚合金额对齐到小数点后 12 位，容纳不同求和顺序的浮点末位差异。同时断言独立已知的 tokens 和金额，避免两个实现路径一起算错却通过比较。不能用删除日志或同大小覆写来“证明缓存复用”。新增价目表升级/回滚样例验证旧未知模型、旧 Fast 倍率和 Ultrafast 模式，核对周分钟桶及官方观察样本保留。
 
 `AppServerCallStateTests` 在包含中日韩文字、emoji 和组合字符的响应上遍历每个字节切分位置，并逐字节推进实际解析器；即时检查完成信号，不依赖睡眠或真实管道分块时机。CLI/MCP 再通过真实管道读取逐字节写入的 Unicode 响应和错误，检查超长行、截断 EOF、无末尾换行及子进程清理。缓冲边界与输出规则见[app-server 输出处理](refresh.md#app-server-输出处理)。
 
@@ -62,15 +63,21 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
 - `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
-- `menu/`：完整、未知模型、明细缺失、周估值因明细不完整暂停、比例缺失、非法数值、部分扫描、不可用、接口失败、保留的过期数据、清空账户、完整扫描但未保存、部分扫描且未保存，共 13 种场景的浅色/深色 PNG。
+- `menu/`：原有完整/异常/过期/账户清空等 13 种场景，以及 GPT-6.1 Sol Standard/Fast、GPT-6 Sol Fast、Astra Ultrafast、未支持模式、credits 缓存写入待核实和长上下文未计价，加上多种计价原因及配置/读取错误并存，共 22 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
 
-AppKit 检查收集 `Sources/CodexRateLimitsBar/` 中除 `main.swift` 外的全部实际实现文件，使用独立验证入口；`main.swift` 仅保留应用启动入口。验证入口不启动菜单栏、登录项或通知。自动检查共享快照的显示标签和状态是否传入视图，生成图像供排版检查；PNG 成功生成不等于已经自动判断所有像素的正确性。
+AppKit 检查收集 `Sources/CodexRateLimitsBar/` 中除 `main.swift` 外的全部实际实现文件，使用独立验证入口；`main.swift` 仅保留应用启动入口。Core 对象与模块只从 `swift build --show-bin-path` 返回的当前目录读取，兼容 Swift 6.4 Swift Build 的合并对象及旧 SwiftPM 的逐文件对象，不搜索其他可能过期的构建目录。验证入口不启动菜单栏、登录项或通知。自动检查共享快照的显示标签和状态是否传入视图，生成图像供排版检查；PNG 成功生成不等于已经自动判断所有像素的正确性。
 
 `UsageRefreshControllerTests` 用假客户端、可控工作队列和时钟直接运行实际刷新控制器；工作完成与主线程应用结果可以分开推进，验证账户切换、迟到响应、睡眠/唤醒和退出时的丢弃，以及失败恢复和重建请求合并。通知测试接入真实 `QuotaMonitor` 和可控接收回调，检查失败重试、取消、去重及确认落盘，不调用系统通知中心。队列屏障用于等待完成回调，测试不依赖休眠或真实时间推进。系统通知能否实际送达仍属于人工验收范围。
 
 大日志和副本测试对 tokens、API/credits 金额及全量/增量一致性作硬断言，缓存应小于 1 MiB、测试进程峰值 RSS 小于 256 MiB，以识别整文件驻留和逐事件历史落盘。副本对齐仅在重放期间持有累计样本，完全相同的轨迹只对齐一次；无变化时复用精简缓存。耗时只记录，不使用依赖机器速度的固定通过阈值。RSS 是整个测试进程的高水位，包含生成样例及测试框架开销。合成测试不能替代复杂真实会话的所有性能特征。
+
+credits 语义回归由 `CreditAccountingTests` 覆盖纯写入、混合输入、缺失写入字段、矛盾分项、上下文边界及原始 v1 自定义卡。`ScannerEquivalenceTests.testCreditAccountingMigrationPreservesAPIAndWeeklyEvidence` 比较旧卡/新卡、v3 计算签名、跨进程恢复、重建和回滚，检查 tokens、API 金额、credits 未计价量、周分钟桶及官方样本，并确认无变化读取不重复写缓存。CLI/MCP 与新增两种菜单场景共享独立计算的用量样例。
+
+`PricingPresentationTests` 验证原因摘要、API/credits 不重复合计、未记录模式、未来原因代码与旧显示快照兼容。CLI/MCP 对比全部日显示字段，周标签仅在有官方上下文的两个 status 入口比较；跨进程金额按 1e-12 消除求和顺序舍入差异，tokens、覆盖率和原因仍精确比较；新增四请求样例独立核对 1,000 tokens、90% API 覆盖和 40% credits 覆盖。UI 检查各悬停区域的详情、原因摘要宽度及配置/扫描错误的独立提示。语言通过子进程 `-AppleLanguages` 参数选择，不改动用户偏好；其他语言样例移除旧显示文字，检验从原始数据生成的兼容回退。
+
+`PricingHealthTests` 检查遗漏模型/模式、合法自定义覆盖、别名解析和复核日期边界；`PricingReleaseTests` 使用手算金额覆盖全部 21 个 API、13 个 credits 模型和明确支持的模式。`verify_pricing.py` 验证默认路径、环境选择、候选卡不激活、无效卡回退及恢复，逐次核对目录文件哈希；沙箱另行禁止读取隔离账户和写入样例目录。打包检查也执行 `pricing --health`，确认不依赖构建目录。日期提醒不改价格、模型或缓存签名。官方网页调研与离线验收分开，来源、证据缺口及发布步骤见[价目表维护清单](pricing.md#release-maintenance-checklist)。
 
 ## 人工验收
 

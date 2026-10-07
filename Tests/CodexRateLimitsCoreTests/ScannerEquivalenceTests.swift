@@ -61,12 +61,170 @@ final class ScannerEquivalenceTests: XCTestCase {
     }
     private func stableJSON(_ snapshot: LocalUsageSnapshot) throws -> String {
         var value = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
-        // Age uses the wall clock at serialization. All data/sample/attempt times,
-        // diagnostics, exact model names, prices and weekly evidence still compare.
+        // Age uses the wall clock at serialization. File ranking ties and the
+        // last floating-point bits of sums can depend on dictionary iteration.
         var freshness = value["freshness"] as? [String: Any]
         freshness?.removeValue(forKey: "ageSeconds")
         value["freshness"] = freshness
-        return String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
+        if let files = value["topFiles"] as? [[String: Any]] {
+            value["topFiles"] = files.sorted {
+                let a = $0["totalTokens"] as? Int64 ?? 0, b = $1["totalTokens"] as? Int64 ?? 0
+                return a == b ? ($0["file"] as? String ?? "") < ($1["file"] as? String ?? "") : a > b
+            }
+        }
+        func normalizeAmounts(_ value: Any, key: String = "") -> Any {
+            if let object = value as? [String: Any] {
+                return object.reduce(into: [String: Any]()) { result, entry in
+                    result[entry.key] = normalizeAmounts(entry.value, key: entry.key)
+                }
+            }
+            if let values = value as? [Any] { return values.map { normalizeAmounts($0) } }
+            if ["estimatedCostUSD", "estimatedCredits", "observedCostUSD"].contains(key), let amount = value as? Double {
+                return (amount * 1e12).rounded() / 1e12
+            }
+            return value
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: normalizeAmounts(value), options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    func testCreditAccountingMigrationPreservesAPIAndWeeklyEvidence() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        var oldDocument = PricingCatalog.builtin.document
+        oldDocument.credits.version = "2026-10-06.1"
+        for model in oldDocument.credits.models.keys {
+            oldDocument.credits.models[model]?.cacheWriteInputUnverified = nil
+            oldDocument.credits.models[model]?.maximumInputTokens = nil
+        }
+        oldDocument.credits.models["gpt-5.6-sol"]?.contextTier = .init(threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5)
+        let legacy = PricingCatalog.snapshot(oldDocument, source: "custom", path: nil, error: nil)
+        pricing = legacy
+        var subject = scanner("incremental")
+        let reference = scanner("reference")
+        try assertEquivalent(subject, reference, total: 0, stage: "baseline")
+        now.addTimeInterval(60)
+        func sample(_ input: Int, _ writes: Int = 0) -> [String: Any] {
+            let usage = ["input_tokens": input, "cache_write_input_tokens": writes, "total_tokens": input]
+            return ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now),
+                    "payload": ["type": "token_count", "info": ["total_token_usage": usage, "last_token_usage": usage]]]
+        }
+        try write([meta("writes"), model("gpt-6.1-sol"), sample(100_000, 100_000)], to: sessions.appendingPathComponent("writes.jsonl"))
+        try write([meta("long"), model("gpt-5.6-sol"), sample(272_001)], to: sessions.appendingPathComponent("long.jsonl"))
+        try write([meta("known"), model("gpt-6.1-sol"), sample(100_000)], to: sessions.appendingPathComponent("known.jsonl"))
+        try assertEquivalent(subject, reference, total: 472_001, stage: "legacy credits")
+        let before = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(before.todayCredits?.estimatedCredits), 59.4002, accuracy: 1e-12)
+        func document() throws -> LocalUsageCacheDocument {
+            try JSONDecoder().decode(LocalUsageCacheDocument.self, from: Data(contentsOf: root.appendingPathComponent("incremental.json")))
+        }
+        let previous = try document()
+        XCTAssertEqual(previous.cache.weeklyCostObservation?.history?.samples.count, 2)
+        // Model signatures and the global calculation revision must both upgrade.
+        let cacheURL = root.appendingPathComponent("incremental.json")
+        let cacheText = try String(contentsOf: cacheURL, encoding: .utf8)
+        try cacheText.replacingOccurrences(of: "pricing-v4|", with: "pricing-v3|").write(to: cacheURL, atomically: true, encoding: .utf8)
+        pricing = PricingCatalog.builtin
+        subject = scanner("incremental")
+        try assertEquivalent(subject, reference, total: 472_001, stage: "new policy after restart")
+        let after = try read(subject)
+        XCTAssertEqual(after.todayCredits?.estimatedCredits, 5)
+        XCTAssertEqual(after.todayCredits?.unpricedTokens, 372_001)
+        XCTAssertEqual(try XCTUnwrap(after.todayCost?.estimatedCostUSD), 2.626008, accuracy: 1e-12)
+        XCTAssertEqual(after.todayCost?.estimatedCostUSD, before.todayCost?.estimatedCostUSD)
+        XCTAssertEqual(Set(after.unpricedUsage?.map(\.reason) ?? []), ["unverifiedCacheWrite", "unsupportedContext"])
+        XCTAssertEqual(after.weeklyQuotaCost?.accountScopeKey, before.weeklyQuotaCost?.accountScopeKey)
+        XCTAssertEqual(after.weeklyQuotaCost?.baselineUsedPercent, before.weeklyQuotaCost?.baselineUsedPercent)
+        XCTAssertEqual(after.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
+        let updated = try document()
+        XCTAssertEqual(updated.version, 4)
+        XCTAssertEqual(updated.cache.weeklyCostObservation?.history?.samples, previous.cache.weeklyCostObservation?.history?.samples)
+        let minutes = updated.cache.files.values.flatMap { Array(($0.weeklyTimeline ?? [:]).values) }
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.uncertainCreditTokens }, 372_001)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.unpricedTokens }, 0)
+        XCTAssertEqual(minutes.reduce(0) { $0 + $1.costUSD }, 2.626008, accuracy: 1e-12)
+        let unchanged = try Data(contentsOf: cacheURL)
+        _ = try read(subject)
+        XCTAssertEqual(try Data(contentsOf: cacheURL), unchanged, "Uncertainty must not repeatedly replay/save unchanged logs")
+        pricing = legacy
+        try assertEquivalent(subject, reference, total: 472_001, stage: "legacy card rollback")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCredits?.estimatedCredits), 59.4002, accuracy: 1e-12)
+        pricing = PricingCatalog.builtin
+        try assertEquivalent(subject, reference, total: 472_001, stage: "upgrade again")
+        XCTAssertEqual(try read(subject).todayCredits?.estimatedCredits, 5)
+    }
+
+    func testGPT61AndSpeedRateMigrationPreservesWeeklyEvidenceAcrossRestartAndRollback() throws {
+        now = ISO8601DateFormatter().date(from: "2026-09-11T04:00:00Z")!
+        var oldDocument = PricingCatalog.builtin.document
+        oldDocument.api.models.removeValue(forKey: "gpt-6.1-sol")
+        oldDocument.credits.models.removeValue(forKey: "gpt-6.1-sol")
+        oldDocument.credits.models["gpt-6-astra"]?.serviceTiers?.removeValue(forKey: "ultrafast")
+        for model in ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"] {
+            oldDocument.credits.models[model]?.serviceTiers?["fast"] = 2.5
+            oldDocument.credits.models[model]?.serviceTiers?["priority"] = 2.5
+        }
+        oldDocument.api.version = "2026-09-23.1"
+        oldDocument.credits.version = "2026-09-23.1"
+        let oldPricing = PricingCatalog.snapshot(oldDocument, source: "custom", path: nil, error: nil)
+        pricing = oldPricing
+        var subject = scanner("incremental")
+        let reference = scanner("reference")
+        try assertEquivalent(subject, reference, total: 0, stage: "old card baseline")
+        now.addTimeInterval(60)
+        func sample(_ count: Int) -> [String: Any] {
+            ["type": "event_msg", "timestamp": ISO8601DateFormatter().string(from: now),
+             "payload": ["type": "token_count", "info": [
+                "total_token_usage": ["input_tokens": 100_000 * count, "cached_input_tokens": 80_000 * count,
+                                      "output_tokens": 5_000 * count, "total_tokens": 105_000 * count],
+                "last_token_usage": ["input_tokens": 100_000]]]]
+        }
+        for (model, tier) in [("gpt-6.1-sol", "standard"), ("gpt-6-sol", "fast"), ("gpt-6-astra", "ultrafast")] {
+            try write([meta(model), ["type": "turn_context", "payload": ["model": model, "service_tier": tier]], sample(1)],
+                      to: sessions.appendingPathComponent("\(model).jsonl"))
+        }
+        try assertEquivalent(subject, reference, total: 315_000, stage: "old card usage")
+        let before = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(before.todayCost?.estimatedCostUSD), 0.636, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(before.todayCredits?.estimatedCredits), 6.625, accuracy: 1e-12)
+        XCTAssertEqual(before.todayCost?.unpricedTokens, 105_000)
+        XCTAssertEqual(before.todayCredits?.unpricedTokens, 210_000)
+        func document() throws -> LocalUsageCacheDocument {
+            try JSONDecoder().decode(LocalUsageCacheDocument.self, from: Data(contentsOf: root.appendingPathComponent("incremental.json")))
+        }
+        let oldCache = try document()
+        XCTAssertEqual(oldCache.cache.weeklyCostObservation?.history?.samples.count, 2)
+
+        pricing = PricingCatalog.builtin
+        subject = scanner("incremental")
+        try assertEquivalent(subject, reference, total: 315_000, stage: "new card after restart")
+        let after = try read(subject)
+        XCTAssertEqual(try XCTUnwrap(after.todayCost?.estimatedCostUSD), 0.734, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(after.todayCredits?.estimatedCredits), 87.25, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(after.weeklyQuotaCost?.observedCostUSD), 0.734, accuracy: 1e-12)
+        XCTAssertTrue(after.unpricedUsage?.isEmpty == true)
+        XCTAssertEqual(after.weeklyQuotaCost?.accountScopeKey, before.weeklyQuotaCost?.accountScopeKey)
+        XCTAssertEqual(after.weeklyQuotaCost?.observationStartIso, before.weeklyQuotaCost?.observationStartIso)
+        XCTAssertEqual(after.weeklyQuotaCost?.baselineUsedPercent, before.weeklyQuotaCost?.baselineUsedPercent)
+        let newCache = try document()
+        XCTAssertEqual(newCache.version, 4)
+        XCTAssertEqual(newCache.cache.weeklyCostObservation?.history?.samples, oldCache.cache.weeklyCostObservation?.history?.samples)
+        let minutes = newCache.cache.files.values.flatMap { Array(($0.weeklyTimeline ?? [:]).values) }
+        XCTAssertEqual(minutes.reduce(0) { $0 + $1.costUSD }, 0.734, accuracy: 1e-12)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.uncertainCreditTokens }, 0)
+        XCTAssertEqual(minutes.reduce(Int64(0)) { $0 + $1.unpricedTokens }, 0)
+
+        // No new mode event: the persisted Ultrafast cursor must price the append.
+        now.addTimeInterval(60)
+        try write([sample(2)], to: sessions.appendingPathComponent("gpt-6-astra.jsonl"), append: true)
+        subject = scanner("incremental")
+        try assertEquivalent(subject, reference, total: 420_000, stage: "append after migration")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCredits?.estimatedCredits), 166.75, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCost?.estimatedCostUSD), 1.264, accuracy: 1e-12)
+        pricing = oldPricing
+        try assertEquivalent(subject, reference, total: 420_000, stage: "rollback")
+        XCTAssertEqual(try read(subject).todayCredits?.unpricedTokens, 315_000)
+        pricing = PricingCatalog.builtin
+        try assertEquivalent(subject, reference, total: 420_000, stage: "upgrade again")
+        XCTAssertEqual(try XCTUnwrap(read(subject).todayCredits?.estimatedCredits), 166.75, accuracy: 1e-12)
     }
 
     func testMidnightForkCopyArchiveAndRestartMatchFullReplay() throws {

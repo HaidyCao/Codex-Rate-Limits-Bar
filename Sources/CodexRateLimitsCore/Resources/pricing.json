@@ -1,20 +1,22 @@
 {
   "schemaVersion": 1,
   "api": {
-    "version": "2026-09-23.1",
-    "verifiedAt": "2026-09-23",
+    "version": "2026-10-06.1",
+    "verifiedAt": "2026-10-06",
     "sources": [
       "https://developers.openai.com/api/docs/pricing",
       "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
       "https://developers.openai.com/api/docs/models/gpt-6-sol",
       "https://developers.openai.com/api/docs/models/gpt-6-luna"
     ],
     "conditions": [
       "USD per 1M tokens; Standard API equivalents at current rates, including historical logs.",
-      "Fast, Batch, Flex, regional and tool fees are excluded.",
-      "GPT-6 Sol and Luna use 2x input/cache and 1.5x output above 272K request input tokens.",
+      "Fast, Ultrafast, Batch, Flex, regional and tool fees are excluded.",
+      "GPT-6 Astra, GPT-6.1 Sol, GPT-6 Sol and Luna use 2x input/cache and 1.5x output above 272K request input tokens.",
       "Cyber has no published long-context API tier; requests above 272K remain unpriced.",
-      "Dated snapshots use their explicit base or alias target, never arbitrary name prefixes."
+      "Dated snapshots use their explicit base or alias target, never arbitrary name prefixes.",
+      "GPT-6.1 Sol uses its exact published model ID; unconfirmed aliases and dated snapshots remain unpriced."
     ],
     "models": {
       "gpt-5.6-cyber": {
@@ -31,6 +33,18 @@
         "cacheWriteInput": 12.5,
         "output": 50.0,
         "datedSnapshots": true,
+        "contextTier": {
+          "threshold": 272000,
+          "inputMultiplier": 2,
+          "outputMultiplier": 1.5
+        }
+      },
+      "gpt-6.1-sol": {
+        "input": 2.0,
+        "cachedInput": 0.1,
+        "cacheWriteInput": 2.5,
+        "output": 10.0,
+        "datedSnapshots": false,
         "contextTier": {
           "threshold": 272000,
           "inputMultiplier": 2,
@@ -207,19 +221,20 @@
     }
   },
   "credits": {
-    "version": "2026-09-23.1",
-    "verifiedAt": "2026-09-23",
+    "version": "2026-10-06.3",
+    "verifiedAt": "2026-10-06",
     "sources": [
       "https://learn.chatgpt.com/docs/pricing",
       "https://learn.chatgpt.com/docs/agent-configuration/speed"
     ],
     "conditions": [
       "Purchased-credit equivalents per 1M tokens at current rates, not actual deductions or included quota.",
-      "Cache writes are excluded. Astra has no long-context surcharge in Codex.",
-      "GPT-6 Sol and Luna use published Standard token rates; no long-context credit multiplier is published.",
-      "Fast mode is 2.5x Standard for GPT-6 Astra, Sol and Luna where available.",
+      "Reported positive cache-write tokens leave the affected credits unpriced until their Codex input billing treatment is verified; missing write counters retain the zero-reported-write estimate.",
+      "Long-context credit rules are unverified for GPT-6, GPT-6.1, GPT-5.6, GPT-5.5 and GPT-5.4: requests above 272K are outside this estimate's coverage. This guard is not an official credit threshold or exemption.",
+      "Purchased credits use 2x Standard for supported Fast modes and 6x for GPT-6 Astra Ultrafast; included-limit multipliers of 2.5x and 8x do not apply.",
+      "The legacy priority mode name maps to Fast for explicitly configured models. GPT-6.1 Sol Ultrafast remains unpriced.",
       "GPT-5.6 Sol purchased-credit promotion is available at least through 2026-11-21; included limits are unchanged.",
-      "Legacy Enterprise, tools, images, voice, cloud and other-device activity are excluded."
+      "Purchased-credit equivalents do not represent API-key, Enterprise USD or legacy Enterprise billing. Separate tool, image and voice charges are excluded. Usage absent from selected local logs, including cloud, other-device and Work activity, is outside coverage."
     ],
     "models": {
       "gpt-6-astra": {
@@ -231,9 +246,27 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2,
+          "ultrafast": 6
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
+      },
+      "gpt-6.1-sol": {
+        "input": 50.0,
+        "cachedInput": 2.5,
+        "cacheWriteInput": 0,
+        "output": 250.0,
+        "datedSnapshots": false,
+        "serviceTiers": {
+          "standard": 1,
+          "default": 1,
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-6-sol": {
         "input": 50.0,
@@ -244,9 +277,11 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-6-luna": {
         "input": 2.5,
@@ -257,9 +292,11 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.6-sol": {
         "input": 100.0,
@@ -267,17 +304,14 @@
         "cacheWriteInput": 0,
         "output": 500.0,
         "datedSnapshots": true,
-        "contextTier": {
-          "threshold": 272000,
-          "inputMultiplier": 2,
-          "outputMultiplier": 1.5
-        },
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.6-terra": {
         "input": 50.0,
@@ -285,17 +319,14 @@
         "cacheWriteInput": 0,
         "output": 300.0,
         "datedSnapshots": true,
-        "contextTier": {
-          "threshold": 272000,
-          "inputMultiplier": 2,
-          "outputMultiplier": 1.5
-        },
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.6-luna": {
         "input": 5.0,
@@ -303,17 +334,14 @@
         "cacheWriteInput": 0,
         "output": 30.0,
         "datedSnapshots": true,
-        "contextTier": {
-          "threshold": 272000,
-          "inputMultiplier": 2,
-          "outputMultiplier": 1.5
-        },
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.6-cyber": {
         "input": 312.5,
@@ -324,7 +352,9 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1
-        }
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.5": {
         "input": 125.0,
@@ -332,17 +362,14 @@
         "cacheWriteInput": 0,
         "output": 750.0,
         "datedSnapshots": true,
-        "contextTier": {
-          "threshold": 272000,
-          "inputMultiplier": 2,
-          "outputMultiplier": 1.5
-        },
         "serviceTiers": {
           "standard": 1,
           "default": 1,
-          "fast": 2.5,
-          "priority": 2.5
-        }
+          "fast": 2,
+          "priority": 2
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.4": {
         "input": 62.5,
@@ -350,17 +377,14 @@
         "cacheWriteInput": 0,
         "output": 375.0,
         "datedSnapshots": true,
-        "contextTier": {
-          "threshold": 272000,
-          "inputMultiplier": 2,
-          "outputMultiplier": 1.5
-        },
         "serviceTiers": {
           "standard": 1,
           "default": 1,
           "fast": 2.0,
           "priority": 2.0
-        }
+        },
+        "cacheWriteInputUnverified": true,
+        "maximumInputTokens": 272000
       },
       "gpt-5.4-mini": {
         "input": 18.75,
@@ -371,7 +395,8 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1
-        }
+        },
+        "cacheWriteInputUnverified": true
       },
       "gpt-5.3-codex": {
         "input": 43.75,
@@ -382,7 +407,8 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1
-        }
+        },
+        "cacheWriteInputUnverified": true
       },
       "gpt-5.2": {
         "input": 43.75,
@@ -393,7 +419,8 @@
         "serviceTiers": {
           "standard": 1,
           "default": 1
-        }
+        },
+        "cacheWriteInputUnverified": true
       }
     },
     "aliases": {

@@ -119,6 +119,8 @@ public struct LocalUsageDisplay: Codable, Sendable {
     public var billingAssumptionsLabel: String? = nil
     public var pricingVersionLabel: String? = nil
     public var unpricedUsageDetails: String? = nil
+    public var unpricedSummaryLabel: String? = nil
+    public var pricingBasisDetails: String? = nil
 }
 
 public struct UsageModelCost: Codable, Sendable {

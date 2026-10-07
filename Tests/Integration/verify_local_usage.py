@@ -107,7 +107,8 @@ for line in sys.stdin:
         timestamp = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
 
         def run(*args, input=None):
-            return run_checked(offline_command([binary, *args]), input=input, env=env, text=True,
+            language = ["-AppleLanguages", "(en-US)"] if args[0] in ("local-usage", "status", "mcp") else []
+            return run_checked(offline_command([binary, *args, *language]), input=input, env=env, text=True,
                                capture_output=True, timeout=45).stdout
 
         builtin = json.loads(run("pricing", "--export-builtin"))
@@ -125,14 +126,14 @@ for line in sys.stdin:
             responses = [json.loads(line) for line in run("mcp", input="".join(json.dumps(m) + "\n" for m in messages)).splitlines()]
             return json.loads(next(r for r in responses if r.get("id") == 2)["result"]["content"][0]["text"])
 
-        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard", breakdown=True):
+        def write_usage(complete=True, model="gpt-5.6-sol", tier="standard", breakdown=True, usage=None):
             context = {"model": model}
-            info = {"total_token_usage": {"input_tokens": 1000, "total_tokens": 1000}}
+            info = {"total_token_usage": dict(usage) if usage is not None else {"input_tokens": 1000, "total_tokens": 1000}}
             if not breakdown:
                 del info["total_token_usage"]["input_tokens"]
             if complete:
                 context["service_tier"] = tier
-                info["last_token_usage"] = {"input_tokens": 1000}
+                info["last_token_usage"] = {"input_tokens": info["total_token_usage"].get("input_tokens", 1000)}
             events = [
                 {"payload": {"id": "fixture-session"}, "timestamp": timestamp, "type": "session_meta"},
                 {"payload": context, "timestamp": timestamp, "type": "turn_context"},
@@ -144,6 +145,18 @@ for line in sys.stdin:
             (sessions / "renamed-copy.jsonl").write_text(data)
 
         def check_shared_status(expected, artifact=None):
+            def comparable(value, key=""):
+                # Hash-map summation order can vary between CLI/MCP processes.
+                # Normalize only monetary roundoff; tokens, coverage and reasons
+                # still have to match exactly (as in ScannerEquivalenceTests).
+                if isinstance(value, dict):
+                    return {name: comparable(item, name) for name, item in value.items()}
+                if isinstance(value, list):
+                    return [comparable(item) for item in value]
+                if key in ("estimatedCostUSD", "estimatedCredits", "observedCostUSD") and isinstance(value, float):
+                    return round(value, 12)
+                return value
+
             direct = json.loads(run("local-usage", "--rebuild"))
             shared = mcp("get_codex_local_usage")
             status = json.loads(run("status"))
@@ -156,9 +169,17 @@ for line in sys.stdin:
                 assert bool(value["freshness"].get("lastSuccessAtIso")) == (phase == "success")
                 assert bool(value["freshness"].get("dataAtIso")) == (phase != "failed")
                 for key in ["diagnostics", "billingAssumptions", "todayCost", "todayCredits", "pricing", "unpricedUsage"]:
-                    assert value[key] == direct[key], key
-                assert value["display"]["scanStatusLabel"] == direct["display"]["scanStatusLabel"]
+                    assert comparable(value[key]) == comparable(direct[key]), (key, value[key], direct[key])
+                daily_display = lambda item: {key: text for key, text in item["display"].items() if key != "weeklyQuotaCostLabel"}
+                assert daily_display(value) == daily_display(direct)
+                assert value["pricing"]["basis"] == "current-rates"
+                basis = value["display"]["pricingBasisDetails"]
+                for term in ["Standard API", "purchased-credit", "API-key", "Enterprise USD", "legacy Enterprise",
+                             "Official balances", "selected local logs", "Work", "must not be added"]:
+                    assert term in basis, (term, basis)
+                assert "Standard API" in value["display"]["estimatedCostLabel"]
             for value in [status, combined]:
+                assert value["localUsage"]["display"].get("weeklyQuotaCostLabel") == status["localUsage"]["display"].get("weeklyQuotaCostLabel")
                 assert value["refresh"]["quota"]["status"] == "success"
                 assert value["refresh"]["credits"]["status"] == "success"
                 assert value["refresh"]["resetCredits"]["status"] == "partial"
@@ -183,6 +204,94 @@ for line in sys.stdin:
         assert complete["totalTokens"] == 1000
         assert complete["billingAssumptions"]["apiPercent"] == 0
         assert len(complete["topFiles"][0]["sourceFiles"]) == 2
+        assert "Purchased-credit equivalent" in complete["display"]["estimatedCreditsLabel"]
+        assert not complete["display"].get("unpricedSummaryLabel")
+
+        # Four requests with separate causes; API and credit coverage share a
+        # denominator but cannot be added. Missing mode remains an assumption.
+        write_usage(model="Raw-Private-Model", usage={"input_tokens": 100, "total_tokens": 100})
+        extras = []
+        for name, tokens, tier, writes in [("write", 200, "standard", 200),
+                                          ("mode", 300, "ultrafast", 0), ("assumed", 400, None, 0)]:
+            context = {"model": "gpt-6.1-sol"}
+            if tier is not None:
+                context["service_tier"] = tier
+            events = [
+                {"type": "session_meta", "payload": {"id": name}},
+                {"type": "turn_context", "payload": context},
+                {"type": "event_msg", "timestamp": timestamp, "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": tokens, "cache_write_input_tokens": writes, "total_tokens": tokens},
+                    "last_token_usage": {"input_tokens": tokens}}}},
+            ]
+            path = sessions / (name + ".jsonl")
+            path.write_text("".join(json.dumps(event) + "\n" for event in events))
+            extras.append(path)
+        reasons = check_shared_status("complete", "pricing-reasons")
+        assert reasons["totalTokens"] == 1000
+        assert abs(reasons["todayCost"]["estimatedCostUSD"] - 0.0019) < 1e-12
+        assert reasons["todayCredits"]["estimatedCredits"] == 0.02
+        assert reasons["todayCost"]["coveragePercent"] == 90
+        assert reasons["todayCredits"]["coveragePercent"] == 40
+        assert reasons["billingAssumptions"]["assumedCreditTokens"] == 400
+        assert reasons["display"]["unpricedSummaryLabel"] == "Unpriced: mode price missing · +2"
+        details = reasons["display"]["unpricedUsageDetails"]
+        assert "Raw-Private-Model" in details and "ultrafast" in details and "300 tokens (30.00%)" in details
+        assert "cache-write billing unverified" in details
+        pricing_file.write_text("{invalid configuration")
+        malformed = sessions / "unreadable-record.jsonl"
+        malformed.write_text("{broken record\n")
+        mixed_failure = check_shared_status("partial", "pricing-config-error")
+        assert mixed_failure["pricing"]["configurationError"]
+        assert mixed_failure["pricing"]["source"] == "builtin"
+        assert abs(mixed_failure["todayCost"]["estimatedCostUSD"] - 0.0019) < 1e-12
+        for key in ["coveragePercent", "pricedTokens", "unpricedTokens"]:
+            assert mixed_failure["todayCost"][key] == reasons["todayCost"][key]
+        assert mixed_failure["unpricedUsage"] == reasons["unpricedUsage"]
+        pricing_file.write_text(json.dumps(builtin))
+        for path in [*extras, malformed]:
+            path.unlink()
+
+        # Independently calculated amounts; CLI, MCP and AppKit share these fixtures.
+        pricing_usage = {"input_tokens": 100_000, "cached_input_tokens": 80_000,
+                         "output_tokens": 5_000, "total_tokens": 105_000}
+        for model, tier, api, credits, artifact in [
+            ("gpt-6.1-sol", "standard", 0.098, 2.45, "gpt61-standard"),
+            ("gpt-6.1-sol", "fast", 0.098, 4.90, "gpt61-fast"),
+            ("gpt-6-sol", "fast", 0.106, 5.30, "sol-fast"),
+            ("gpt-6-astra", "ultrafast", 0.53, 79.50, "astra-ultrafast"),
+        ]:
+            write_usage(model=model, tier=tier, usage=pricing_usage)
+            value = check_shared_status("complete", artifact)
+            assert value["totalTokens"] == 105_000
+            assert abs(value["todayCost"]["estimatedCostUSD"] - api) < 1e-12
+            assert abs(value["todayCredits"]["estimatedCredits"] - credits) < 1e-12
+            assert value["todayCost"]["coveragePercent"] == value["todayCredits"]["coveragePercent"] == 100
+            assert not value["unpricedUsage"]
+        write_usage(model="gpt-6.1-sol", tier="ultrafast", usage=pricing_usage)
+        unsupported = check_shared_status("complete", "unsupported-mode")
+        assert abs(unsupported["todayCost"]["estimatedCostUSD"] - 0.098) < 1e-12
+        assert unsupported["todayCredits"].get("estimatedCredits") is None
+        assert unsupported["todayCredits"]["unpricedTokens"] == 105_000
+        assert [(entry["kind"], entry["reason"], entry["serviceTier"]) for entry in unsupported["unpricedUsage"]] == [
+            ("credits", "unknownServiceTier", "ultrafast")]
+
+        # Unknown credit accounting must preserve independent API prices/tokens.
+        for usage, api, reason, artifact in [
+            ({"input_tokens": 100_000, "cache_write_input_tokens": 100_000, "total_tokens": 100_000},
+             0.25, "unverifiedCacheWrite", None),
+            ({"input_tokens": 100_000, "cached_input_tokens": 40_000, "cache_write_input_tokens": 20_000,
+              "output_tokens": 5_000, "total_tokens": 105_000}, 0.184, "unverifiedCacheWrite", "credit-writes"),
+            ({"input_tokens": 272_001, "total_tokens": 272_001},
+             1.088004, "unsupportedContext", "credit-long-context"),
+        ]:
+            write_usage(model="gpt-6.1-sol", tier="standard", usage=usage)
+            value = check_shared_status("complete", artifact)
+            assert value["totalTokens"] == usage["total_tokens"]
+            assert abs(value["todayCost"]["estimatedCostUSD"] - api) < 1e-12
+            assert value["todayCost"]["coveragePercent"] == 100
+            assert value["todayCredits"].get("estimatedCredits") is None
+            assert value["todayCredits"]["unpricedTokens"] == usage["total_tokens"]
+            assert [(entry["kind"], entry["reason"]) for entry in value["unpricedUsage"]] == [("credits", reason)]
 
         write_usage(breakdown=False)
         missing_breakdown = check_shared_status("complete", "missing-breakdown")

@@ -231,7 +231,8 @@ final class ScannerCompletenessTests: XCTestCase {
         try write(astra, to: root.appendingPathComponent("copy.jsonl"))
         let knownMode = try scanner().snapshot()
         XCTAssertEqual(knownMode.billingAssumptions?.assumedAPITokens, 100)
-        XCTAssertEqual(knownMode.billingAssumptions?.assumedCreditTokens, 0)
+        XCTAssertEqual(knownMode.billingAssumptions?.assumedCreditTokens, 100,
+                       "Known mode does not resolve the missing credit coverage context")
     }
 
     func testMissingInputFieldDoesNotBecomeAKnownZeroContext() throws {

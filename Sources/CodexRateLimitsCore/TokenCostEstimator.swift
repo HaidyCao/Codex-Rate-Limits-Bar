@@ -90,7 +90,7 @@ enum TokenCostEstimator {
         let snapshot = PricingCatalog.current
         let api = canonicalModel(model).flatMap { snapshot.apiSignatures[$0] } ?? "unpriced"
         let credits = snapshot.document.credits.canonical(model).flatMap { snapshot.creditSignatures[$0] } ?? "unpriced"
-        return "pricing-v3|\(api)|\(credits)"
+        return "pricing-v4|\(api)|\(credits)"
     }
     static func needsRequestContext(_ model: String?) -> Bool {
         PricingCatalog.current.document.api.rate(model)?.needsContext == true
@@ -182,7 +182,7 @@ struct TokenCostAccumulator: Codable {
             } else {
                 bucket.credits?.unpricedTokens += usage.totalTokens
                 missing("credits", !usage.hasCompleteBreakdown ? "incompleteTokenBreakdown"
-                    : CodexCreditEstimator.unpricedReason(model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
+                    : CodexCreditEstimator.unpricedReason(usage: usage, model: label, requestInputTokens: requestInputTokens, serviceTier: serviceTier))
             }
         } else {
             bucket.pricingSignature = nil

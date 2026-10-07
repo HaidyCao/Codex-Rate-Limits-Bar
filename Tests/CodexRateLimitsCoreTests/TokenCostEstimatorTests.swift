@@ -2,6 +2,47 @@ import XCTest
 @testable import CodexRateLimitsCore
 
 final class TokenCostEstimatorTests: XCTestCase {
+    func testGPT61SolAPIUsesItsOwnCachedRateAndRequestContextBoundary() throws {
+        for (input, expected) in [(Int64(100_000), 0.098), (272_000, 0.442), (272_001, 0.859004)] {
+            let usage = TokenUsage(inputTokens: input, cachedInputTokens: 80_000,
+                                   outputTokens: 5_000, reasoningOutputTokens: 4_000, totalTokens: input + 5_000)
+            XCTAssertEqual(try XCTUnwrap(TokenCostEstimator.estimateUSD(
+                usage: usage, model: "gpt-6.1-sol", requestInputTokens: input
+            )), expected, accuracy: 1e-12)
+        }
+    }
+
+    func testGPT61SolAPICacheWritesAreChargedOnceAndScaleWithContext() throws {
+        for input in [Int64(272_000), 272_001] {
+            let usage = TokenUsage(inputTokens: input, cacheWriteInputTokens: input, totalTokens: input)
+            let expected = input == 272_000 ? 0.68 : 1.360005
+            XCTAssertEqual(try XCTUnwrap(TokenCostEstimator.estimateUSD(
+                usage: usage, model: "gpt-6.1-sol", requestInputTokens: input
+            )), expected, accuracy: 1e-12)
+        }
+    }
+
+    func testGPT61SolOnlyResolvesPublishedModelName() {
+        for card in [PricingCatalog.builtin.document.api, PricingCatalog.builtin.document.credits] {
+            XCTAssertEqual(card.canonical(" GPT-6.1-SOL \n"), "gpt-6.1-sol")
+            for name in ["gpt-6.1", "gpt-6.1-sol-latest", "gpt-6.1-sol-pro", "gpt-6.1-sol-2026-09-29"] {
+                XCTAssertNil(card.canonical(name), name)
+            }
+        }
+    }
+
+    func testGPT61SolMissingContextAndModeRemainVisibleAssumptions() throws {
+        var accumulator = TokenCostAccumulator()
+        accumulator.add(usage: TokenUsage(inputTokens: 100_000, cachedInputTokens: 80_000,
+                                         outputTokens: 5_000, totalTokens: 105_000),
+                        model: "gpt-6.1-sol", requestInputTokens: nil)
+        XCTAssertEqual(try XCTUnwrap(accumulator.estimate().estimatedCostUSD), 0.098, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(accumulator.creditEstimate().estimatedCredits), 2.45, accuracy: 1e-12)
+        XCTAssertEqual(accumulator.creditEstimate().assumedStandardTokens, 105_000)
+        XCTAssertEqual(accumulator.billingAssumptions().assumedAPITokens, 105_000)
+        XCTAssertEqual(accumulator.billingAssumptions().assumedCreditTokens, 105_000)
+    }
+
     func testAstraPricingAtLongContextBoundary() throws {
         let usage = TokenUsage(
             inputTokens: 1_000_000,

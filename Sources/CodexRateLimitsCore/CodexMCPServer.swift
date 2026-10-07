@@ -130,7 +130,7 @@ enum CodexMCPServer {
         [
             [
                 "name": "get_codex_status",
-                "description": "Read Codex rate limits, local token usage, daily API-equivalent cost, estimated Codex credits, official credit balance when available, and the local weekly quota value estimate.",
+                "description": "Read official Codex balances and plan limits separately from local usage estimates: Standard API equivalents and purchased-credit equivalents at current rates, not actual bills or deductions. Daily totals cover selected local logs; weekly observations cover the active account. Includes separate pricing coverage, assumptions and unpriced reasons.",
                 "inputSchema": emptyInputSchema(),
             ],
             [
@@ -140,7 +140,7 @@ enum CodexMCPServer {
             ],
             [
                 "name": "get_codex_local_usage",
-                "description": "Read today's local Codex token usage, API-equivalent cost and token-based credit estimates with pricing coverage from desktop and CLI session logs. Credit estimates are not actual deductions.",
+                "description": "Read today's tokens from selected local session logs, Standard API equivalents and purchased-credit equivalents at current rates. Estimates are not actual API bills, credit deductions or included plan usage. API-key, Enterprise USD and legacy Enterprise billing require their own rates. Includes independent API/credits coverage and unpriced model/mode/reason details; uncollected cloud, other-device and Work activity is outside coverage.",
                 "inputSchema": emptyInputSchema(),
             ],
             [

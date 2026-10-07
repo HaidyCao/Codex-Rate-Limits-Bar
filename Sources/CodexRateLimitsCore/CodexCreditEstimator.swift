@@ -7,12 +7,15 @@ enum CodexCreditEstimator {
     static func estimate(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String?) -> Double? {
         guard let rate = PricingCatalog.current.document.credits.rate(model),
               let multiplier = rate.serviceTiers?[serviceTier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "standard"] else { return nil }
+        guard rate.cacheWriteInputUnverified != true || usage.cacheWriteInputTokens == 0 else { return nil }
         return rate.estimate(usage, requestInput: requestInputTokens, multiplier: multiplier)
     }
-    static func unpricedReason(model: String?, requestInputTokens: Int64?, serviceTier: String?) -> String {
+    static func unpricedReason(usage: TokenUsage, model: String?, requestInputTokens: Int64?, serviceTier: String?) -> String {
+        guard usage.hasCompleteBreakdown else { return "incompleteTokenBreakdown" }
         guard let rate = PricingCatalog.current.document.credits.rate(model) else { return "unknownModel" }
         let tier = serviceTier?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "standard"
         if rate.serviceTiers?[tier] == nil { return "unknownServiceTier" }
+        if rate.cacheWriteInputUnverified == true && usage.cacheWriteInputTokens > 0 { return "unverifiedCacheWrite" }
         return "unsupportedContext"
     }
 }
