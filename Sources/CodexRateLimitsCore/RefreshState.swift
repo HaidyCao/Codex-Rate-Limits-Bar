@@ -149,10 +149,18 @@ public struct RefreshCoordinator {
     private var sources: [RefreshSource: SourceState] = [:]
     private var lanes: [RefreshLane: LaneState] = [:]
     private var nextID = 0
+    private var localTimeout = RefreshLane.local.timeout
     public private(set) var accountIdentity: String
     public private(set) var networkAvailable: Bool?
 
-    public init(accountIdentity: String) { self.accountIdentity = accountIdentity }
+    public init(accountIdentity: String, localHomeCount: Int = 1) {
+        self.accountIdentity = accountIdentity
+        setLocalHomeCount(localHomeCount)
+    }
+
+    mutating func setLocalHomeCount(_ count: Int) {
+        localTimeout = min(600, TimeInterval(max(1, min(count, 4))) * RefreshLane.local.timeout)
+    }
 
     public mutating func changeAccount(to identity: String, now: Date) -> [RefreshTicket] {
         guard accountIdentity != identity else { return [] }
@@ -194,7 +202,7 @@ public struct RefreshCoordinator {
         guard canRunEarly || now >= state.due else { lanes[lane] = state; return nil }
         nextID += 1
         let ticket = RefreshTicket(id: nextID, lane: lane, accountIdentity: accountIdentity, generation: state.generation,
-                                  startedAt: now, deadline: now.addingTimeInterval(lane.timeout), rebuild: state.pendingRebuild)
+                                  startedAt: now, deadline: now.addingTimeInterval(lane == .local ? localTimeout : lane.timeout), rebuild: state.pendingRebuild)
         state.active = ticket
         state.invalidated = false
         state.pending = false; state.pendingForced = false; state.pendingRebuild = false

@@ -12,6 +12,28 @@ final class RefreshStateTests: XCTestCase {
     }
     private func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
 
+    func testMultipleHomesGetBoundedScanTimeWithoutChangingOfficialDeadlineOrCancellation() throws {
+        var state = RefreshCoordinator(accountIdentity: "a", localHomeCount: 3)
+        let official = try XCTUnwrap(state.request(.official, reason: .manual, now: now))
+        XCTAssertEqual(official.deadline, now.addingTimeInterval(45))
+        state.complete(official, outcomes: success(.official, at: now), now: now)
+        let scan = try XCTUnwrap(state.request(.local, reason: .manual, now: now))
+        XCTAssertEqual(scan.deadline, now.addingTimeInterval(540))
+        XCTAssertTrue(state.expire(now: now.addingTimeInterval(181)).isEmpty)
+        XCTAssertTrue(state.complete(scan, outcomes: success(.local, at: now.addingTimeInterval(300)), now: now.addingTimeInterval(300)))
+        state.setLocalHomeCount(1)
+        let single = try XCTUnwrap(state.request(.local, reason: .manual, now: now.addingTimeInterval(301)))
+        XCTAssertEqual(single.deadline, now.addingTimeInterval(481))
+        XCTAssertEqual(state.expire(now: now.addingTimeInterval(482)), [single])
+        for (count, expected) in [(0, 180.0), (-1, 180.0), (4, 600.0), (Int.max, 600.0)] {
+            var bounded = RefreshCoordinator(accountIdentity: "b", localHomeCount: count)
+            let ticket = try XCTUnwrap(bounded.request(.local, reason: .manual, now: now))
+            XCTAssertEqual(ticket.deadline, now.addingTimeInterval(expected))
+            XCTAssertEqual(bounded.invalidate(.local, now: now.addingTimeInterval(1)), ticket)
+            XCTAssertFalse(bounded.complete(ticket, outcomes: success(.local, at: now), now: now.addingTimeInterval(2)))
+        }
+    }
+
     func testFailuresKeepTheirOwnDataTimesAndSurviveOtherRefreshes() throws {
         var state = RefreshCoordinator(accountIdentity: "a")
         let initial = try XCTUnwrap(state.request(.official, reason: .manual, now: now))

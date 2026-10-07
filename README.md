@@ -17,7 +17,7 @@ Planned fixes and improvements: [Project TODO](TODO.md).
   - Bottom line: cache hit rate, calculated as cached input tokens divided by input tokens.
   - The expanded panel shows today's Standard API equivalent in USD, a separate purchased-credit equivalent, independent coverage, and an unpriced-reason summary. Hover over an amount, reason or rate card for its details.
   - Visible by default and can be hidden from the menu settings.
-  - Data source: `token_count` events in active and archived sessions under `~/.codex`, `~/.codex-cli`, and `CODEX_HOME` when configured. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories; `CODEX_SESSIONS_DIR` explicitly selects one directory.
+  - Data source: `token_count` events in active and archived sessions under the checked Codex folders. Session IDs and usage-event fingerprints deduplicate copies across filenames and directories. CLI/MCP retain their environment-based roots, including `CODEX_HOME` and the single-directory `CODEX_SESSIONS_DIR` override.
   - Session files are read incrementally with a reusable 1 MB buffer. Per-file identities, content fingerprints, cursors, daily baselines, and compact model cost buckets are persisted for up to eight days. Unchanged files reuse the cache; changed prefixes and relevant session copies trigger replay.
 - The Usage card learns a range for the weekly quota's local API-equivalent USD value from timestamped quota reads and this Mac's usage. It requires at least three independent intervals, each lasting 30 minutes with a change of five percentage points, and shows sample confidence, interval count and observation span.
 - The app, command-line data reader, and bundled MCP server are implemented in
@@ -27,13 +27,27 @@ Planned fixes and improvements: [Project TODO](TODO.md).
 
 ## Account Attribution
 
+Open **Choose Codex Folders…** from the menu to choose the official account
+folder and the folders included in local daily usage. The app discovers immediate
+children of your user home using Codex configuration, login-record and session
+markers; discovery does not read credentials. **Rescan** finds newly created
+folders, and **Add Folder…** includes profiles stored elsewhere.
+
+On first launch, the desktop account defaults to `~/.codex` and daily usage
+includes the discovered folders. The active account folder is always included.
+**Apply and Refresh** saves both choices across restarts, cancels old requests
+and clears the previous account's visible data. Missing saved folders remain
+visible so you can replace or exclude them. Desktop choices override inherited
+`CODEX_HOME` and `CODEX_SESSIONS_DIR`; CLI/MCP continue to honor those variables.
+
 The menu identifies the current account; its tooltip includes the Codex home,
-authentication source and quota bucket. Daily token and cost totals still cover
-all local homes. Quota, official credit balance, reset credits and weekly cost
+authentication source and quota bucket. Daily token and cost totals cover
+the checked local homes. Quota, official credit balance, reset credits and weekly cost
 observations refer to the selected account.
 
 Each official refresh reads `account/read` and `account/rateLimits/read` from
-one app-server pinned to the active `CODEX_HOME` (default `~/.codex`). Reset
+one app-server pinned to the selected desktop folder, or `CODEX_HOME` for CLI/MCP
+(default `~/.codex`). Reset
 credits use the returned `rateLimitResetCredits` when available; `availableCount`
 is authoritative even when details are absent or capped. For older responses,
 the private endpoint is used only with verified credentials from that same home.
@@ -167,9 +181,10 @@ Each model bucket stores its effective pricing signature. Changes to a price,
 alias or calculation rule replay the affected retained session files, including
 weekly files, without resetting the weekly observation baseline. Legacy v4 caches
 are upgraded in place; unreadable/missing logs remain unpriced until they can be
-replayed. Adding a session root also preserves the observation and existing file
-cursors. Non-default `CODEX_HOME` profiles use separate cache files so CLI and
-desktop accounts cannot replace each other's weekly observations. The compact
+replayed. Changing checked daily folders preserves a valid observation when its
+active weekly roots stay the same; explicitly excluded files leave the totals.
+Non-default active homes use separate cache files so profiles cannot replace
+each other's weekly observations. The compact
 per-model buckets do not retain every token event.
 
 Prices and aliases now live in the bundled [pricing.json](Sources/CodexRateLimitsCore/Resources/pricing.json),
@@ -262,8 +277,9 @@ and official API-cost views; these views are not implemented.
 ### Weekly quota valuation
 
 Weekly values are **this Mac's API-price equivalents**, not subscription charges,
-official credit deductions or an actual bill. Daily totals span local homes;
-weekly observations use only the active `CODEX_HOME` (or `~/.codex` by default)
+official credit deductions or an actual bill. Daily totals span checked local homes;
+weekly observations use only the selected desktop home, or the CLI/MCP
+`CODEX_HOME` (default `~/.codex`),
 that supplies the official quota. `weeklyQuotaCost.source` identifies that scope.
 Other devices and cloud tasks can consume the same quota without contributing
 to the local cost numerator; even high sample confidence cannot establish their

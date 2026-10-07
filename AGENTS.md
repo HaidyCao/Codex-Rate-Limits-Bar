@@ -45,4 +45,4 @@ Follow history: `feat:`, `fix:`, `refactor:`, `test:` with imperative summaries.
 
 ## Configuration & Data
 
-Verification wrappers isolate credentials and block networking. Launching/installing the app uses real state; back up application state before `make install-user`. `CODEX_HOME` selects the account; `env -u CODEX_HOME make verify-live` checks the default desktop profile. Never commit credentials, personal logs, or build artifacts.
+Verification wrappers isolate credentials and block networking. Launching/installing the app uses real state; back up application state before `make install-user`. Desktop folder choices persist in app preferences; CLI/MCP honor `CODEX_HOME`. `env -u CODEX_HOME make verify-live` checks `.codex`, independently of desktop choices. Never commit credentials, personal logs, or build artifacts.

@@ -2,6 +2,22 @@ import AppKit
 import CodexRateLimitsCore
 import Foundation
 
+struct CodexHomePreferences {
+    static let key = "codexHomeSelection"
+
+    static func load(defaults: UserDefaults = .standard,
+                     home: URL = FileManager.default.homeDirectoryForCurrentUser) -> CodexHomeSelection {
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode(CodexHomeSelection.self, from: data),
+           let selection = try? decoded.validated() { return selection }
+        return .initial(home: home)
+    }
+
+    static func save(_ selection: CodexHomeSelection, defaults: UserDefaults = .standard) throws {
+        defaults.set(try JSONEncoder().encode(selection.validated()), forKey: key)
+    }
+}
+
 struct AutoLaunchManager {
     static let label = "local.codex.rate-limits-bar.autostart"
     static let preferenceKey = "autoLaunchEnabled"

@@ -9,7 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let tokenStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let notificationCenter = UNUserNotificationCenter.current()
-    private let refreshController = UsageRefreshController()
+    private var homeSelection = CodexHomePreferences.load()
+    private lazy var refreshController = UsageRefreshController(selection: homeSelection)
+    private var homesWindow: CodexHomesWindow?
     private lazy var refreshEvents = RefreshEventMonitor(controller: refreshController)
     private let menu = NSMenu()
     private let accountItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
@@ -113,6 +115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(preferencesItem)
         menu.addItem(.separator())
 
+        let homesItem = NSMenuItem(title: AppText.switchCodexHome, action: #selector(showCodexHomes), keyEquivalent: ",")
+        homesItem.target = self
+        menu.addItem(homesItem)
+
         let refreshItem = NSMenuItem(title: AppText.refreshNow, action: #selector(refreshFromMenu), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
@@ -127,6 +133,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func refreshFromMenu() { refreshController.refresh() }
+
+    @objc private func showCodexHomes() {
+        if let homesWindow, homesWindow.window?.isVisible == true {
+            homesWindow.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        homesWindow = CodexHomesWindow(selection: homeSelection) { [weak self] selection in
+            guard let self else { return }
+            try CodexHomePreferences.save(selection)
+            guard selection != homeSelection else { return }
+            homeSelection = selection
+            refreshController.selectHomes(selection)
+        }
+        homesWindow?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     @objc private func rebuildLocalUsage() { refreshController.refreshLocal(reason: .rebuild) }
 

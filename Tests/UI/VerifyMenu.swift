@@ -200,7 +200,80 @@ import Foundation
                 scenarios += 2
             }
         }
+        try verifyCodexHomes(output: output)
+        scenarios += 2
         print("AppKit verification passed: \(scenarios) shared-data/state scenarios, light and dark renders in \(output.path)")
+    }
+
+    @MainActor private static func verifyCodexHomes(output: URL) throws {
+        let manager = FileManager.default
+        let home = manager.temporaryDirectory.appendingPathComponent("codex-homes-ui-\(UUID())")
+        let suite = "codex-homes-ui-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { try? manager.removeItem(at: home); defaults.removePersistentDomain(forName: suite) }
+        for name in [".codex", ".codex-cli", ".codex-3"] {
+            let directory = home.appendingPathComponent(name)
+            try manager.createDirectory(at: directory.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+            try Data("fixture".utf8).write(to: directory.appendingPathComponent("config.toml"))
+            try Data("credentials are not inspected".utf8).write(to: directory.appendingPathComponent("auth.json"))
+        }
+        let initial = CodexHomePreferences.load(defaults: defaults, home: home)
+        try require(URL(fileURLWithPath: initial.activeHome).lastPathComponent == ".codex", "Desktop inherited the CLI profile")
+        let view = CodexHomesView(selection: initial, home: home)
+        view.layoutSubtreeIfNeeded()
+        try require(view.candidateCount == 3 && view.checkedPaths.count == 3, "Discovered profiles missing from settings")
+        try render(view, name: "codex-folders", output: output)
+        let cliIndex = view.accountPopup.itemArray.firstIndex { $0.title == "~/.codex-cli" }!
+        view.accountPopup.selectItem(at: cliIndex)
+        try require(NSApp.sendAction(view.accountPopup.action!, to: view.accountPopup.target, from: view.accountPopup), "Account selection action failed")
+        try require(URL(fileURLWithPath: view.selection.activeHome).lastPathComponent == ".codex-cli", "Account folder did not switch")
+        func checkbox(_ name: String, in root: NSView) -> NSButton? {
+            if let button = root as? NSButton, !(button is NSPopUpButton), button.title == name { return button }
+            for child in root.subviews { if let found = checkbox(name, in: child) { return found } }
+            return nil
+        }
+        guard let active = checkbox("~/.codex-cli", in: view), let extra = checkbox("~/.codex-3", in: view) else {
+            throw RuntimeError("Missing local folder checkboxes")
+        }
+        try require(!active.isEnabled && active.state == .on, "Active account could be excluded from local stats")
+        extra.performClick(nil)
+        try require(view.checkedPaths.count == 2, "Excluding a daily folder failed")
+        var applied: CodexHomeSelection?
+        view.onApply = { selection in try CodexHomePreferences.save(selection, defaults: defaults); applied = selection }
+        view.applySelection()
+        try require(applied == view.selection && CodexHomePreferences.load(defaults: defaults, home: home) == view.selection,
+                    "Folder choices were not persisted for restart")
+        let saved = view.selection
+        let newFolder = home.appendingPathComponent(".codex-new/sessions")
+        try manager.createDirectory(at: newFolder, withIntermediateDirectories: true)
+        view.reloadCandidates()
+        try require(view.candidateCount == 4 && view.selection == saved, "Rescan changed the saved daily scope")
+        view.onApply = { _ in throw RuntimeError("fixture preference failure") }
+        view.applySelection()
+        try require(view.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue == AppText.folderApplyError },
+                    "Folder save error was hidden")
+        defaults.set(Data(#"{"activeHome":"relative","localHomes":[]}"#.utf8), forKey: CodexHomePreferences.key)
+        try require(CodexHomePreferences.load(defaults: defaults, home: home) == .initial(home: home), "Invalid folder preference did not recover")
+        let removed = home.appendingPathComponent("removed-profile")
+        let missing = CodexHomesView(selection: CodexHomeSelection(activeHome: removed, localHomes: [removed]), home: home)
+        var acceptedMissing = false
+        missing.onApply = { _ in acceptedMissing = true }
+        missing.applySelection()
+        try require(!acceptedMissing, "An unavailable account was applied")
+        missing.layoutSubtreeIfNeeded()
+        try render(missing, name: "codex-folders-missing", output: output)
+        let firstRow = checkbox("~/.codex", in: missing)!
+        try require(firstRow.superview!.visibleRect.contains(firstRow.frame), "Folder list initially clipped its first row")
+        missing.accountPopup.selectItem(at: missing.accountPopup.itemArray.firstIndex { $0.title == "~/.codex" }!)
+        _ = NSApp.sendAction(missing.accountPopup.action!, to: missing.accountPopup.target, from: missing.accountPopup)
+        checkbox("~/removed-profile", in: missing)?.performClick(nil)
+        missing.applySelection()
+        try require(acceptedMissing && missing.selection.localHomes.count == 1, "Missing selected folder could not be replaced and excluded")
+        let cancelView = CodexHomesView(selection: initial, home: home)
+        var cancelled = false
+        cancelView.onCancel = { cancelled = true }
+        checkbox(AppText.cancelFolderSelection, in: cancelView)?.performClick(nil)
+        try require(cancelled, "Cancelling folder selection failed")
     }
 
     @MainActor private static func tooltips(_ view: NSView) -> String {
@@ -226,6 +299,7 @@ import Foundation
             var rendered: Data?
             appearance.performAsCurrentDrawingAppearance {
                 root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+                root.layoutSubtreeIfNeeded()
                 root.displayIfNeeded()
                 if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
                     root.cacheDisplay(in: root.bounds, to: bitmap)

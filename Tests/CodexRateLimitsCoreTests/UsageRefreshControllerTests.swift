@@ -4,6 +4,49 @@ import XCTest
 
 @MainActor
 final class UsageRefreshControllerTests: XCTestCase {
+    func testDesktopHomeBudgetAllowsLongScanAndUpdatesAfterSelectionChanges() async throws {
+        let h = Harness(localHomeCount: 3)
+        h.controller.setNetworkAvailable(false)
+        h.controller.refreshLocal()
+        h.stub.change { $0.now.addTimeInterval(300) }
+        try await h.complete(.local)
+        XCTAssertEqual(h.controller.state.localUsage?.totalTokens, 100)
+        XCTAssertEqual(h.controller.freshness.localUsage.status, .success)
+        let stub = h.stub
+        h.controller.replaceServices(UsageRefreshServices(identity: { stub.settings.account },
+            official: { try stub.official($0) }, local: { try stub.local($0, cancellation: $1) },
+            history: { stub.history($0, enabled: $1, context: $2) }, localHomeCount: 1))
+        h.stub.change { $0.now.addTimeInterval(181) }
+        try await h.complete(.local)
+        XCTAssertNil(h.controller.state.localUsage)
+        XCTAssertEqual(h.controller.freshness.localUsage.status, .failed)
+        XCTAssertTrue(h.controller.freshness.localUsage.error?.contains("timed out") == true)
+    }
+
+    func testReplacingHomeServicesClearsStateAndRejectsQueuedOldAccountResults() async throws {
+        let h = Harness()
+        h.controller.refreshOfficial()
+        try await h.complete(.official)
+        try await h.complete(.local)
+        XCTAssertEqual(h.controller.state.weeklyRemaining, 75)
+        h.controller.refreshOfficial()
+        XCTAssertTrue(h.executor.run(.official)) // Old completion is already queued.
+        let replacement = StubServices()
+        replacement.change { $0.account = "b"; $0.remaining = 20; $0.tokens = 600 }
+        h.controller.replaceServices(UsageRefreshServices(identity: { replacement.settings.account },
+            official: { try replacement.official($0) }, local: { try replacement.local($0, cancellation: $1) },
+            history: { replacement.history($0, enabled: $1, context: $2) }))
+        XCTAssertNil(h.controller.state.weeklyWindow)
+        XCTAssertNil(h.controller.state.localUsage)
+        await h.flushCompletions()
+        XCTAssertNil(h.controller.state.weeklyWindow, "Old home must not publish after selection changes")
+        try await h.complete(.official)
+        while h.executor.count(.local) > 0 { try await h.complete(.local) }
+        XCTAssertEqual(h.controller.state.weeklyRemaining, 20)
+        XCTAssertEqual(h.controller.state.localUsage?.totalTokens, 600)
+        XCTAssertEqual(h.controller.state.accountContext?.accountKey, "b")
+    }
+
     func testSleepBeforeCompletionLeavesUndeliveredAlertRetryable() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -443,7 +486,7 @@ private final class Harness {
     private let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     var historyURL: URL { directory.appendingPathComponent("history.json") }
 
-    init(monitor: QuotaMonitor? = nil, realHistory: Bool = false) {
+    init(monitor: QuotaMonitor? = nil, realHistory: Bool = false, localHomeCount: Int = 1) {
         let stub = stub
         let monitor = monitor ?? (realHistory ? QuotaMonitor(fileURL: directory.appendingPathComponent("history.json")) : nil)
         controller = UsageRefreshController(services: UsageRefreshServices(
@@ -454,7 +497,7 @@ private final class Harness {
             }, acknowledgeAlert: {
                 stub.recordAcknowledgement($0)
                 return monitor?.acknowledge($0)
-            }),
+            }, localHomeCount: localHomeCount),
             executor: executor, now: { stub.settings.now })
         let alerts = alerts
         controller.onQuotaAlert = { alerts.receive($0, completion: $1) }

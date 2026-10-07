@@ -23,7 +23,7 @@
 
 `make verify-pricing-archive` 单独运行只需 Python 3，可用于没有图形会话、构建产物或 Git 历史的环境。另运行 `python3 Tests/Integration/verify_pricing_archive.py --git-root .` 可核对已关联提交的原始卡与证据文档；缺历史会明确失败，不自动联网。v2 内容快照没有提交归属，以原始字节及复核文档副本的指纹校验，两类来源在输出中分别计数。归档校验不代表重新核实网页政策。字段、来源范围和维护步骤见[归档说明](pricing-archive/README.md)。
 
-`make verify` 不再隐含真实账户检查；原来的现场读取已拆到 `make verify-live`。`CODEX_HOME`、`CODEX_BIN`、自定义价目表等调用者环境不会影响隔离样例。`verify-live` 则保留调用者环境；要与默认桌面应用的 `.codex` 来源一致，可执行 `env -u CODEX_HOME make verify-live`。
+`make verify` 不再隐含真实账户检查；原来的现场读取已拆到 `make verify-live`。`CODEX_HOME`、`CODEX_BIN`、自定义价目表等调用者环境不会影响隔离样例。`verify-live` 则保留调用者环境且不读取桌面选择；默认 `.codex` 可执行 `env -u CODEX_HOME make verify-live`，其他目录使用 `CODEX_HOME=/absolute/profile make verify-live`。
 
 ## 隔离范围
 
@@ -38,6 +38,8 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 | 场景 | 主要测试 |
 | --- | --- |
 | 账户切换、额度类型、提醒去重、认证来源 | `AccountContextTests`、`QuotaForecastTests`、CLI/MCP 持久化样例 |
+| 主目录发现、符号链接去重、显式账户/日范围、独立缓存、移除日目录保留周基线 | `CodexHomeSelectionTests`、`UsageRefreshControllerTests` |
+| 目录窗口选择/取消、偏好重启、无效偏好恢复、缺失目录替换及五语言双主题 | `VerifyMenu.swift` 的隔离 Codex home 样例 |
 | 提醒取消、开关、接收失败、迟到确认、重试、重启及旧历史兼容 | `UsageRefreshControllerTests`、`QuotaAlertDeliveryTests` |
 | 缓存保存失败、无变化重试、并发写入、取消及旧快照兼容 | `CachePersistenceTests`、CLI/MCP/UI 样例 |
 | UTF-8 跨块、CRLF、响应边界、超长输出、EOF 及终态保护 | `AppServerCallStateTests`、CLI/MCP 假 app-server 样例 |
@@ -70,7 +72,7 @@ CLI/MCP 测试既包含无持久化缓存的隔离扫描，也包含启用缓存
 
 - `fixtures/`：假数据的 CLI/MCP JSON 快照。
 - `plugin-install.json`：7 个隔离安装样例的命令顺序及通过状态。
-- `menu/`：原有 22 种场景，以及真实日志投影、合成模式切换、Pro 无五小时窗口、仅周窗口、仅余额、API-key 空额度/错误、未知套餐、按 codex ID 选窗口和 Cyber 长上下文，共 32 种场景的英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各增加三种关键场景的双主题渲染，检查现有五种语言。
+- `menu/`：32 种共享数据场景及正常/缺失目录两种设置场景，共 34 种英文浅色/深色 PNG。`menu/{zh-Hans,zh-Hant,ja,ko}/` 各有五种关键场景的双主题渲染，检查现有五种语言。
 - `benchmark.json`：输入大小、冷扫描、无变化增量、追加、重启和重建耗时，以及进程峰值 RSS、缓存字节数和结果对比。
 - `benchmark-copies.json`：2 万个累计样本分布在 8 个副本中的相同指标；包含缺失中间记录和完全相同的副本。
 

@@ -1,6 +1,6 @@
 # 模块边界
 
-项目仍使用一个 Core library 和一个 AppKit executable target。数据访问实现默认 internal；`CodexBackend` 保留 GUI、CLI、MCP 共用的公开读取入口。刷新控制器及只读状态供 AppKit 使用，不依赖 AppKit、Network 或 UserNotifications。
+项目仍使用一个 Core library 和一个 AppKit executable target。数据访问实现默认 internal；`CodexBackend` 保留 CLI、MCP 共用的公开读取入口，桌面通过 `SelectedCodexSession` 固定所选配置目录并复用同一官方客户端和扫描器。刷新控制器及只读状态供 AppKit 使用，不依赖 AppKit、Network 或 UserNotifications。
 
 ```mermaid
 flowchart TD
@@ -9,11 +9,14 @@ flowchart TD
     App --> Views[各菜单卡片视图]
     Controller --> Policy[RefreshCoordinator：合并、退避、代次和时效]
     Controller --> Services[UsageRefreshServices：可替换依赖]
-    Services --> Backend[CodexBackend：读取入口]
+    Services --> Selected[SelectedCodexSession：桌面目录范围]
+    Services --> Backend[CodexBackend：环境读取入口]
     Services --> History[QuotaMonitor：账户历史与提醒]
     CLI[CodexCommandLine / CodexMCPServer] --> Backend
     Backend --> Official[OfficialUsageClient]
     Backend --> Scanner[LocalUsageScanner]
+    Selected --> Official
+    Selected --> Scanner
     Official --> Account[CodexAccountContext：认证来源]
     Official --> Transport[OfficialUsageTransport：App Server / HTTP]
     Transport --> Framing[AppServerCallState：字节分行与请求完成状态]
@@ -36,12 +39,13 @@ flowchart TD
 | 日志解析、文件身份、全量和增量统计 | `LocalUsageScanner`、`LocalUsageLog`、`UsageFileIdentity` |
 | 副本历史对齐、日/周来源范围及贡献归属 | `UsageCopyLedger` |
 | 缓存文档、文件锁、磁盘读写 | `LocalUsageCache`、`LocalUsageCacheStore` |
-| 目录选择及账户来源范围 | `LocalUsagePaths`、`CodexPaths` |
+| 目录发现、显式选择及账户来源范围 | `CodexHomeDiscovery`、`CodexHomeSelection`、`LocalUsagePaths`、`CodexPaths` |
 | 请求合并、退避、过期状态、结果接受规则 | `RefreshCoordinator`（`RefreshState.swift`） |
 | 后台任务、取消、保留数据、账户切换及结果应用 | `UsageRefreshController`、`UsageRefreshState` |
 | 数据客户端、历史处理、队列替换 | `UsageRefreshServices`、`RefreshExecuting` |
 | 系统睡眠、网络变化及菜单跟踪期间的定时事件 | `RefreshEventMonitor` |
 | 菜单项、状态栏、通知权限、用户偏好 | `AppDelegate`、`AppPreferences` |
+| 目录切换窗口与选择持久化 | `CodexHomesWindow`、`CodexHomesView`、`CodexHomePreferences` |
 | 卡片布局和绘制 | `RateLimitsMenuView`、`ResetCreditsMenuView`、`LocalUsageMenuView`、`PreferencesMenuView` |
 | CLI 命令、MCP 协议、插件安装 | `CodexCommandLine`、`CodexMCPServer`、`CodexPluginInstaller` |
 | 插件安装暂存、备份与回滚；插件命令超时和输出 | `PluginInstallTransaction`、`CodexPluginCommand` |
@@ -49,6 +53,8 @@ flowchart TD
 ## 并发与兼容约束
 
 控制器在 MainActor 上持有唯一的数据状态。生产执行器提供官方和本机各一条串行队列；跨队列传递 `OfficialUsageUpdate`、本机快照和请求参数等 Sendable 值。完成回调回到主队列后重新核对账户与请求代次，只有接受的结果才更新状态和发出提醒。文件身份没有变化、服务器返回的账户上下文却变化时，也会使本机旧任务失效。
+
+桌面首次默认 `.codex`，扫描用户主目录的直接子目录，仅检查 Codex 标记是否存在。`CodexHomePreferences` 保存官方账户目录及勾选的日统计目录；`SelectedCodexSession` 固定认证环境、扫描根与按 active home 区分的缓存。选择身份包含日统计范围；控制器切换服务时取消任务和提醒并清空显示，保留请求编号序列以拒绝迟到结果。CLI/MCP 不读取桌面偏好。移除日统计目录时删除对应缓存贡献；有效周范围不变时保留观察基线和历史，副本范围变化仍重新对齐。
 
 `QuotaMonitor` 保存待发送状态及已确认类型；控制器在提交前检查开关、账户和窗口，并通过 `QuotaAlertRequest` 的独立编号追踪每次通知请求。AppKit 将通知中心的接收结果交回控制器，确认历史通过官方串行队列落盘。取消和迟到回调不会提前消耗提醒，发送失败与历史写入失败分别显示。兼容与重试边界见[提醒发送与确认](refresh.md#提醒发送与确认)。
 

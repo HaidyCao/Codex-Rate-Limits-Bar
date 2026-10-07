@@ -18,7 +18,7 @@ public final class UsageRefreshController {
         }
     }
 
-    private let services: UsageRefreshServices
+    private var services: UsageRefreshServices
     private let executor: any RefreshExecuting
     private let now: @Sendable () -> Date
     private var coordinator: RefreshCoordinator
@@ -31,12 +31,33 @@ public final class UsageRefreshController {
         self.init(services: .live(), executor: DispatchRefreshExecutor())
     }
 
+    public convenience init(selection: CodexHomeSelection) {
+        self.init(services: .live(selection: selection), executor: DispatchRefreshExecutor())
+    }
+
+    public func selectHomes(_ selection: CodexHomeSelection) {
+        replaceServices(.live(selection: selection))
+    }
+
+    func replaceServices(_ replacement: UsageRefreshServices) {
+        guard !stopped else { return }
+        invalidateWork()
+        services = replacement
+        coordinator.setLocalHomeCount(replacement.localHomeCount)
+        for ticket in coordinator.changeAccount(to: replacement.identity(), now: now()) {
+            operations[ticket.id]?.cancel()
+        }
+        state = UsageRefreshState()
+        onChange?()
+        refresh()
+    }
+
     init(services: UsageRefreshServices, executor: any RefreshExecuting,
          now: @escaping @Sendable () -> Date = Date.init) {
         self.services = services
         self.executor = executor
         self.now = now
-        coordinator = RefreshCoordinator(accountIdentity: services.identity())
+        coordinator = RefreshCoordinator(accountIdentity: services.identity(), localHomeCount: services.localHomeCount)
     }
 
     deinit { for operation in operations.values { operation.cancel() } }

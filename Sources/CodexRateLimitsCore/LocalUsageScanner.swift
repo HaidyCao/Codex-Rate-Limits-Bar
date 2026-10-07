@@ -109,9 +109,15 @@ final class LocalUsageScanner: @unchecked Sendable {
 
         let previousRoots = cache.map { CodexPaths.canonicalPaths($0.rootPaths ?? $0.source.split(separator: ",").map(String.init)) } ?? []
         let currentRoots = Set(rootURLs.map(\.path))
-        // Adding a Codex home must not erase an established observation.
+        let currentWeeklyRoots = Set(weeklyRoots)
+        let preservesWeeklyScope = cache?.weeklyCostObservation?.rootPaths.map {
+            CodexPaths.canonicalPaths($0) == currentWeeklyRoots
+                && !currentWeeklyRoots.isEmpty && currentWeeklyRoots.isSubset(of: currentRoots)
+        } ?? false
+        // Daily folder choices can change without resetting the active account's observation.
         let canReuseBaseline = cache?.timeZone == timeZone
-            && (cache?.source == source || (!previousRoots.isEmpty && previousRoots.isSubset(of: currentRoots)))
+            && (cache?.source == source || (!previousRoots.isEmpty && previousRoots.isSubset(of: currentRoots))
+                || preservesWeeklyScope)
         let isColdScan: Bool
         var cacheChanged = false
         if !canReuseBaseline {
@@ -145,6 +151,17 @@ final class LocalUsageScanner: @unchecked Sendable {
 
         guard var cache else {
             throw RuntimeError("local usage cache unavailable")
+        }
+        let removedRoots = previousRoots.subtracting(currentRoots)
+        if canReuseBaseline, !removedRoots.isEmpty {
+            // Explicitly excluded roots differ from missing files in a selected root.
+            for path in Array(cache.files.keys) {
+                if removedRoots.contains(where: { path.hasPrefix($0 + "/") }),
+                   !currentRoots.contains(where: { path.hasPrefix($0 + "/") }) {
+                    cache.files.removeValue(forKey: path)
+                    cacheChanged = true
+                }
+            }
         }
         var pricing = PricingCatalog.current.metadata
         if let previous = cache.pricing {

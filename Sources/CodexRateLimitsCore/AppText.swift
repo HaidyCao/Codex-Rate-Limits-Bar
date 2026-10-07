@@ -1,6 +1,37 @@
 import Foundation
 
 public enum AppText {
+    private static func homeText(_ en: String, _ zh: String, _ hant: String, _ ja: String, _ ko: String) -> String {
+        switch language {
+        case .english: return en
+        case .simplifiedChinese: return zh
+        case .traditionalChinese: return hant
+        case .japanese: return ja
+        case .korean: return ko
+        }
+    }
+
+    public static var codexHomes: String { homeText("Codex Folders", "Codex 配置目录", "Codex 設定目錄", "Codex フォルダ", "Codex 폴더") }
+    public static var switchCodexHome: String { homeText("Choose Codex Folders…", "切换 Codex 配置目录…", "切換 Codex 設定目錄…", "Codex フォルダを選択…", "Codex 폴더 선택…") }
+    public static var officialAccountFolder: String { homeText("Official account", "官方账户目录", "官方帳戶目錄", "公式アカウント", "공식 계정") }
+    public static var localUsageFolders: String { homeText("Folders included in local daily usage", "计入本机日统计的目录", "計入本機日統計的目錄", "本日のローカル統計に含めるフォルダ", "로컬 일일 통계에 포함할 폴더") }
+    public static var codexHomeScope: String { homeText("Official limits and weekly observations follow the selected account. Daily usage combines the checked folders.", "官方额度与周观察跟随所选账户目录；本机日统计汇总勾选的目录。", "官方額度與週觀察跟隨所選帳戶目錄；本機日統計彙總勾選的目錄。", "公式上限と週間観測は選択したアカウントに従います。本日の統計はチェックしたフォルダを合計します。", "공식 한도와 주간 관측은 선택한 계정을 따릅니다. 일일 통계는 체크한 폴더를 합산합니다.") }
+    public static var rescanFolders: String { homeText("Rescan", "重新扫描", "重新掃描", "再スキャン", "다시 검색") }
+    public static var addCodexFolder: String { homeText("Add Folder…", "添加目录…", "新增目錄…", "フォルダを追加…", "폴더 추가…") }
+    public static var applyCodexFolders: String { homeText("Apply and Refresh", "应用并刷新", "套用並重新整理", "適用して更新", "적용 후 새로 고침") }
+    public static var cancelFolderSelection: String { homeText("Cancel", "取消", "取消", "キャンセル", "취소") }
+    public static var folderUnavailable: String { homeText("Folder unavailable", "目录不可用", "目錄無法使用", "フォルダが利用できません", "폴더를 사용할 수 없음") }
+    public static var folderSelectionError: String { homeText("Choose an available Codex folder.", "请选择一个可用的 Codex 配置目录。", "請選擇可用的 Codex 設定目錄。", "利用可能な Codex フォルダを選択してください。", "사용 가능한 Codex 폴더를 선택하세요.") }
+    public static var folderApplyError: String { homeText("Could not save folder choices.", "无法保存目录选择。", "無法儲存目錄選擇。", "フォルダの選択を保存できませんでした。", "폴더 선택을 저장할 수 없습니다.") }
+    public static func codexFolderEvidence(_ candidate: CodexHomeCandidate) -> String {
+        guard candidate.isAvailable else { return folderUnavailable }
+        var values: [String] = []
+        if candidate.hasAuthentication { values.append(homeText("login record", "登录记录", "登入紀錄", "ログイン記録", "로그인 기록")) }
+        if candidate.hasConfiguration { values.append(homeText("configuration", "配置", "設定", "設定", "설정")) }
+        if candidate.hasSessions { values.append(homeText("sessions", "会话", "工作階段", "セッション", "세션")) }
+        return values.isEmpty ? homeText("Empty folder", "空目录", "空目錄", "空のフォルダ", "빈 폴더") : values.joined(separator: " · ")
+    }
+
     public static func scanStatus(_ diagnostics: UsageScanDiagnostics?) -> String {
         guard let diagnostics else { return localUsageStatusTooltip }
         switch language {
